@@ -1,0 +1,42 @@
+[project]
+name = "satlab-backend"
+version = "0.1.0"
+description = "Satellite Mission Control Simulator — simulation engine and API"
+readme = "../README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.20.0",
+    "fastapi>=0.143.0",
+    "httpx>=0.28.1",
+    "numpy>=2.0",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.15.0",
+    "sgp4>=2.27",
+    "skyfield>=1.55",
+    "sqlalchemy>=2.0",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.17.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

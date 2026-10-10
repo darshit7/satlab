@@ -1,0 +1,115 @@
+/* Design system: "Warm Notebook" — see /design-system.md. Tokens live here and nowhere else. */
+
+@import '@fontsource-variable/nunito/wght.css';
+@import '@fontsource-variable/nunito/wght-italic.css';
+@import '@fontsource-variable/jetbrains-mono/wght.css';
+@import '@fontsource-variable/jetbrains-mono/wght-italic.css';
+@import '@fontsource/playpen-sans/latin-800.css';
+@import 'tailwindcss';
+
+/* Theme switching is class-based (`.dark` on <html>), driven by src/lib/theme.ts. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme static {
+  /* Only the sanctioned colors exist: one accent, one grey family, two display-only gradient
+     ends and one functional error color. Values are the Tailwind v3 hexes the design system was
+     specified (and contrast-checked) against; v4's oklch palette is slightly different. */
+  --color-*: initial;
+  --color-white: #ffffff;
+  --color-black: #000000;
+  --color-dark: #1f1f1f;
+
+  --color-primary-50: #ecfdf5;
+  --color-primary-100: #d1fae5;
+  --color-primary-200: #a7f3d0;
+  --color-primary-300: #6ee7b7;
+  --color-primary-400: #34d399;
+  --color-primary-500: #10b981;
+  --color-primary-600: #059669;
+  --color-primary-700: #047857;
+  --color-primary-800: #065f46;
+  --color-primary-900: #064e3b;
+  --color-primary-950: #022c22;
+
+  --color-gray-50: #f9fafb;
+  --color-gray-100: #f3f4f6;
+  --color-gray-200: #e5e7eb;
+  --color-gray-300: #d1d5db;
+  --color-gray-400: #9ca3af;
+  --color-gray-500: #6b7280;
+  --color-gray-600: #4b5563;
+  --color-gray-700: #374151;
+  --color-gray-800: #1f2937;
+  --color-gray-900: #111827;
+  --color-gray-950: #030712;
+
+  /* greeting gradient far ends — display only, never UI */
+  --color-amber-600: #d97706;
+  --color-lime-500: #84cc16;
+
+  /* functional: errors and server notices */
+  --color-red-400: #f87171;
+  --color-red-700: #b91c1c;
+
+  --font-sans: 'Nunito Variable', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+  --font-greeting: 'Playpen Sans', 'Nunito Variable', system-ui, sans-serif;
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-white font-sans text-gray-900 antialiased dark:bg-dark dark:text-gray-100;
+  }
+}
+
+/* Growing underline — the signature interaction: a wash fills in under the text on hover. */
+@utility growing-underline {
+  background-image: linear-gradient(
+    to right,
+    var(--color-primary-100),
+    var(--color-primary-200)
+  );
+  background-repeat: no-repeat;
+  background-position: 0 100%;
+  background-size: 0px 50%;
+  transition: background-size 300ms;
+
+  &:hover,
+  :hover > & {
+    background-size: 100% 50%;
+  }
+
+  &:where(.dark, .dark *) {
+    background-image: linear-gradient(
+      to right,
+      var(--color-primary-800),
+      var(--color-primary-900)
+    );
+  }
+}
+
+/* MapLibre chrome, brought onto the system's surfaces and radii. */
+.maplibregl-ctrl-group {
+  @apply overflow-hidden rounded-lg! shadow-none! ring-1 ring-gray-900/10 dark:bg-dark! dark:ring-white/10;
+}
+.maplibregl-ctrl-group button + button {
+  @apply border-gray-200! dark:border-gray-700!;
+}
+.dark .maplibregl-ctrl-icon {
+  filter: invert(1);
+}
+.maplibregl-ctrl-attrib {
+  @apply rounded-lg! font-sans text-xs! dark:bg-dark/75! dark:text-gray-400!;
+}
+.dark .maplibregl-ctrl-attrib a {
+  @apply text-gray-300!;
+}
+.dark .maplibregl-ctrl-attrib-button {
+  filter: invert(1);
+}

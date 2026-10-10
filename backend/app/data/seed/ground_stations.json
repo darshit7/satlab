@@ -1,0 +1,8 @@
+{
+  "_comment": "Seed ground stations. Coordinates are approximate public locations of each facility (WGS84). Seeded by name; editing an existing entry here does not update rows already in the DB.",
+  "ground_stations": [
+    { "name": "ISRO ISTRAC, Bengaluru", "lat_deg": 13.0347, "lon_deg": 77.5124, "alt_m": 920 },
+    { "name": "KSAT SvalSat, Svalbard", "lat_deg": 78.2297, "lon_deg": 15.4078, "alt_m": 500 },
+    { "name": "NASA Wallops, Virginia", "lat_deg": 37.9402, "lon_deg": -75.4664, "alt_m": 10 }
+  ]
+}
