@@ -17,10 +17,13 @@ const muted = 'text-xs text-gray-500 dark:text-gray-400'
 const elevationTone = (sat: SatelliteState) =>
   sat.above_mask ? 'text-primary-700 dark:text-primary-400' : 'text-gray-500 dark:text-gray-400'
 
-/** Label over value: keeps the whole readout on one row. */
+/** A metric tile, label over value: keeps the whole readout on one row. */
 function Metric({ label, value, title, className }: { label: string; value: string; title?: string; className?: string }) {
   return (
-    <div className="flex flex-col leading-tight" title={title}>
+    <div
+      className="flex flex-col rounded-lg bg-gray-50 px-2 py-1 leading-tight ring-1 ring-gray-900/5 dark:bg-white/5 dark:ring-white/10"
+      title={title}
+    >
       <dt className={muted}>{label}</dt>
       <dd className={cn('font-mono text-sm tabular-nums', className)}>{value}</dd>
     </div>
@@ -46,8 +49,10 @@ function PassCountdown({ noradId }: { noradId: number }) {
 function SelectedSatellite({ sat, simMs, mask }: { sat: SatelliteState; simMs: number; mask: number }) {
   return (
     <>
-      <div className="flex shrink-0 flex-col leading-tight">
-        <h2 className="font-semibold">{sat.name}</h2>
+      <div className="flex max-w-44 shrink-0 flex-col leading-tight">
+        <h2 className="truncate font-semibold" title={sat.name}>
+          {sat.name}
+        </h2>
         <span className={muted}>
           <span className="font-mono">#{sat.norad_id}</span> · {TYPE_LABELS[sat.type]}
         </span>
@@ -60,10 +65,10 @@ function SelectedSatellite({ sat, simMs, mask }: { sat: SatelliteState; simMs: n
         )}
         <PassCountdown noradId={sat.norad_id} />
       </div>
-      <dl className="flex shrink-0 gap-x-4">
+      <dl className="flex shrink-0 gap-x-1">
         <Metric label="Az" value={`${deg(sat.azimuth_deg)}°`} />
         <Metric label="El" value={`${deg(sat.elevation_deg)}°`} className={elevationTone(sat)} />
-        <Metric label="Range" value={`${km(sat.range_m)} km`} />
+        <Metric label="Range km" value={km(sat.range_m)} />
         <Metric
           label="Rate"
           value={`${sat.range_rate_m_s >= 0 ? '+' : ''}${kmPerS(sat.range_rate_m_s)} km/s`}
@@ -71,7 +76,7 @@ function SelectedSatellite({ sat, simMs, mask }: { sat: SatelliteState; simMs: n
         />
         <Metric label="Lat" value={`${deg(sat.lat_deg, 2)}°`} />
         <Metric label="Lon" value={`${deg(sat.lon_deg, 2)}°`} />
-        <Metric label="Alt" value={`${km(sat.alt_m)} km`} />
+        <Metric label="Alt km" value={km(sat.alt_m)} />
         <Metric label="TLE" value={formatAge(simMs - Date.parse(sat.tle_epoch))} title="TLE age at sim time" />
       </dl>
     </>
@@ -89,7 +94,7 @@ export function Readout() {
 
   return (
     <Card as="div" dense>
-      <div className="relative -mx-4 -my-3 flex min-h-14 items-center gap-x-5 overflow-x-auto rounded-2xl px-4 py-2 whitespace-nowrap">
+      <div className="relative -mx-4 -my-3 flex min-h-14 items-center gap-x-3 overflow-x-auto rounded-2xl px-4 py-2 whitespace-nowrap">
         {selected ? (
           <SelectedSatellite sat={selected} simMs={simMs} mask={mask} />
         ) : (
