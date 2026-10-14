@@ -1,15 +1,15 @@
 import type {
   CatalogStatus,
   GroundStation,
-  GroundStationCreate,
   MissionSession,
   MissionSessionCreate,
   PassPrediction,
   SatelliteSearchResult,
 } from '../types/api'
+import { appUrl } from '../lib/basePath'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
+  const response = await fetch(appUrl(path), {
     ...init,
     headers: { 'Content-Type': 'application/json', ...init?.headers },
   })
@@ -28,8 +28,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   listStations: () => request<GroundStation[]>('/api/stations'),
-  createStation: (body: GroundStationCreate) =>
-    request<GroundStation>('/api/stations', { method: 'POST', body: JSON.stringify(body) }),
   searchSatellites: (q: string, remote = false, signal?: AbortSignal) =>
     request<SatelliteSearchResult>(
       `/api/satellites?${new URLSearchParams({ q, limit: '25', remote: String(remote) })}`,

@@ -20,9 +20,9 @@ export default function App() {
     booted = true
     const { loadStations } = useMission.getState()
     void loadStations().then(() => {
-      // Resume at the last-used station, if it still exists.
-      const { stations, stationId, startSession } = useMission.getState()
-      if (stationId !== null && stations.some((s) => s.id === stationId)) void startSession(stationId)
+      // Resume where the last session observed from: a custom location, or a preset that still exists.
+      const { stations, site, startSession } = useMission.getState()
+      if (site && ('location' in site || stations.some((s) => s.id === site.station_id))) void startSession(site)
     })
   }, [])
 
@@ -32,6 +32,7 @@ export default function App() {
       <ClockBar />
       <div className="flex min-h-0 flex-1 flex-col gap-4 lg:grid lg:grid-cols-[22.5rem_minmax(0,1fr)]">
         <main className="order-first flex min-h-0 min-w-0 flex-col gap-4 lg:order-last lg:overflow-y-auto">
+          <Readout />
           {/* map + sky rail: side by side on xl, sky views paired under the map below that */}
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(17rem,22rem)]">
             <div className="grid h-[55vh] min-h-[22rem] xl:h-auto">
@@ -42,15 +43,12 @@ export default function App() {
               <AllSky />
             </div>
           </div>
-          <div className="grid gap-4 2xl:grid-cols-2 2xl:items-start">
-            <Readout />
-            <PassSchedule />
-          </div>
+          <PassSchedule />
         </main>
         <aside className="flex min-h-0 flex-col gap-4 lg:overflow-y-auto">
+          <CatalogSearch />
           <LocationPanel />
           <VisibleList />
-          <CatalogSearch />
         </aside>
       </div>
       <footer className="text-sm text-gray-600 dark:text-gray-400">

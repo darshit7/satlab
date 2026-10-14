@@ -14,7 +14,7 @@ const td = 'px-2 py-1.5 font-mono tabular-nums'
 const REFETCH_MARGIN_MS = 60 * 60_000
 const JUMP_LEAD_MS = 60_000
 
-/** The next 24 h of passes of the selected satellite over the station (server-predicted). */
+/** The next 24 h of passes of the selected satellite over the session's location (server-predicted). */
 export function PassSchedule() {
   const selectedId = useMission((s) => s.selectedId)
   const session = useMission((s) => s.session)
@@ -43,7 +43,7 @@ export function PassSchedule() {
   if (selectedId === null) {
     return (
       <Card as="div" title={title}>
-        <p className={muted}>Select a satellite to see its passes over your station in the next 24 hours.</p>
+        <p className={muted}>Select a satellite to see its passes over your location in the next 24 hours.</p>
       </Card>
     )
   }
@@ -53,7 +53,6 @@ export function PassSchedule() {
       as="div"
       title={title}
       aside={<span className={cn(muted, 'truncate')}>{data?.name ?? name ?? `#${selectedId}`}</span>}
-      className="lg:overflow-auto"
     >
       {current?.error && <p className="text-sm text-red-700 dark:text-red-400">{current.error}</p>}
       {!data && !current?.error && <p className={muted}>Predicting passes…</p>}

@@ -202,13 +202,12 @@ export function GroundTrackMap() {
 
     const renderStation = () => {
       const { session, draft } = useMission.getState()
-      const station = session?.station
       void source('station')?.setData(
-        station
+        session
           ? {
               type: 'Feature',
-              properties: { name: station.name },
-              geometry: { type: 'Point', coordinates: [station.lon_deg, station.lat_deg] },
+              properties: { name: session.location_name },
+              geometry: { type: 'Point', coordinates: [session.lon_deg, session.lat_deg] },
             }
           : emptyFC(),
       )
@@ -283,7 +282,7 @@ export function GroundTrackMap() {
       const m = new MapLibreMap({
         container,
         style: loaded.style,
-        center: [useMission.getState().session?.station.lon_deg ?? 0, 15],
+        center: [useMission.getState().session?.lon_deg ?? 0, 15],
         zoom: 1.3,
         renderWorldCopies: true,
         attributionControl: { compact: true },
@@ -308,10 +307,11 @@ export function GroundTrackMap() {
             renderTracks()
           }
           if (s.session !== prev.session || s.draft !== prev.draft) renderStation()
-          const station = s.session?.station
-          if (station && station.id !== prev.session?.station.id) {
-            // the visible set clusters around the station: bring it into view
-            m.easeTo({ center: [station.lon_deg, Math.max(-60, Math.min(60, station.lat_deg))], duration: 600 })
+          const here = s.session
+          const before = prev.session
+          if (here && (here.lat_deg !== before?.lat_deg || here.lon_deg !== before?.lon_deg)) {
+            // the visible set clusters around the observer: bring it into view
+            m.easeTo({ center: [here.lon_deg, Math.max(-60, Math.min(60, here.lat_deg))], duration: 600 })
           }
         }),
         onThemeChange(() => void switchTheme()),

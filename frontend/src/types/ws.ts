@@ -14,7 +14,8 @@ export interface ClockState {
 }
 
 export interface ObserverState {
-  station_id: number
+  /** Null for a custom (session-only) location. */
+  station_id: number | null
   name: string
   lat_deg: number
   lon_deg: number

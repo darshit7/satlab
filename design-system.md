@@ -10,7 +10,7 @@ This document describes the mission console in `frontend/`. The look and feel ar
 
 ## 1. Direction
 
-- **Default theme:** `system`, with an explicit light/dark/system switcher in the header.
+- **Default theme:** `dark`, with an explicit light/dark/system switcher in the header. A stored choice (including `system`) wins.
 - **Personality:** Warm, personal, unpretentious. A field notebook for watching satellites rather than a control-room wall of blue. It greets you with the handwritten wordmark, then gets out of the way and lets the data run.
 - **One accent rule:** hierarchy comes from type weight, spacing, and the single emerald accent. The only sanctioned second colors are the far ends of the greeting gradient: `amber-600` on light, `lime-500` on dark. Both are display-only (they paint the wordmark) and never appear in UI.
 - **Voice:** first person where there is copy to write, emoji-punctuated sparingly. The empty states are where the voice shows (`Nothing tracked yet 🛰️ — …`). Labels, units and readouts stay plain and exact.
@@ -35,7 +35,7 @@ Scale in use:
 | Element                               | Size                                        |
 | ------------------------------------- | ------------------------------------------- |
 | Wordmark                              | `text-2xl` extrabold, greeting gradient     |
-| Card heading (`Card` title)           | `text-xl` semibold                          |
+| Card heading (`Card` title)           | `text-xl` semibold (`dense` cards: `text-lg`) |
 | Selected-satellite name               | `text-xl` semibold                          |
 | Body, list primary lines              | `text-base`                                 |
 | Readout values, sim clock             | `text-base` mono, tabular                   |
@@ -118,9 +118,9 @@ The highlighted-line tint `#fbf0ea` is deliberately warm, so it sits on the warm
 
 ## 4. Shape, depth and texture
 
-- **Radii.** `rounded-2xl` for cards (sidebar panels, the readout), the map frame and the sticky header (`md:` and up). `rounded-lg` for buttons, inputs, selects, metric tiles, notices and the map's zoom control. `rounded-md` for the theme menu. Plain `rounded` for small icon buttons (theme toggle, untrack ×, dismiss ×). `rounded-full` for pills, status text and status dots. Rounded everywhere: nothing in this system has a square corner.
+- **Radii.** `rounded-2xl` for cards (sidebar panels, the readout), the map frame and the sticky header (`md:` and up). `rounded-lg` for buttons, inputs, selects, metric tiles, notices and the map's zoom control. `rounded-md` for the theme menu and select lists. Plain `rounded` for small icon buttons (theme toggle, untrack ×, dismiss ×). `rounded-full` for pills, status text and status dots. Rounded everywhere: nothing in this system has a square corner.
 - **Borders over shadows.** Most separation is a hairline (`border-gray-200 dark:border-gray-700`, cards `dark:border-gray-800`) or a 1px ring, not a drop shadow. The header separates itself without a border at all: `backdrop-blur` over a 75%-opaque ground, plus the smallest shadow.
-- **Shadow names moved in Tailwind v4; the shadows didn't.** v3 `shadow-sm` is v4 `shadow-xs`, and v3 `shadow` is v4 `shadow-sm`. In v3 terms the house steps are: `shadow-sm` on the header (v4 `shadow-xs`), `shadow` on the primary button and notices (v4 `shadow-sm`), and `shadow-lg` at low opacity (`shadow-black/5`) on the theme menu. The two bespoke profile-card shadows (`shadow-card`, `shadow-card-stack`) belong to the site's profile card; the console has no profile card and defines no custom shadows.
+- **Shadow names moved in Tailwind v4; the shadows didn't.** v3 `shadow-sm` is v4 `shadow-xs`, and v3 `shadow` is v4 `shadow-sm`. In v3 terms the house steps are: `shadow-sm` on the header (v4 `shadow-xs`), `shadow` on the primary button and notices (v4 `shadow-sm`), and `shadow-lg` at low opacity (`shadow-black/5`) on the theme menu and select lists. The two bespoke profile-card shadows (`shadow-card`, `shadow-card-stack`) belong to the site's profile card; the console has no profile card and defines no custom shadows.
 - **Tilted grid.** `components/ui/TiltedGridBackground.tsx` renders an SVG grid skewed `-18deg` at a few percent opacity (5% light, 3% dark) under a `linear-gradient(white, transparent)` mask. It sits behind the top `50vh` of the page and inside each card. It is texture, not decoration: at full opacity it would be a pattern; at a few percent it keeps large empty areas from reading as blank. The SVG is promoted to its own layer (`will-change-transform`, `contain: paint`) so the 2 Hz readout updates don't repaint it.
 - **Gradient border.** `components/ui/GradientBorder.tsx` draws two 1px accent hairlines (top and left) that fade out at both ends, inset from the corner by `--offset` (default `1rem`). Every `Card` carries one, to imply a frame without drawing one.
 - **One pill.** `components/ui/Pill.tsx` is the single rounded-label shape: `rounded-full`, `ring-1`, `bg-gray-100`/`dark:bg-white/5`, at `base` (`px-3 py-1 text-sm`) or `sm` (`px-2.5 py-0.5 text-xs`). Consumers: the phase label, the catalog count, the "in view" count, a satellite's type, and "below horizon" / "below the mask". **Pills are always neutral.** They carry metadata, and a row of emerald labels would spend the entire accent budget on things nobody clicks.
@@ -132,7 +132,8 @@ Restrained and mostly hover-driven. Nothing animates on scroll, and no page or s
 
 - **Growing underline**, the signature interaction (`growing-underline` utility in `index.css`). A background gradient grows from `0px 50%` to `100% 50%` over 300ms on hover, so a link underlines itself by filling in rather than appearing. On a link that wraps, it goes on an inline span with `box-decoration-clone` so each line fills separately. Applied to text links (e.g. "Search all of Celestrak").
 - **Color transitions** at 150ms on buttons and table rows.
-- **The one exception:** the theme menu (100ms in / 75ms out, fade plus scale from the top-right). It's tied to something the visitor opened rather than to the page arriving.
+- **The one exception:** the theme menu and select lists (100ms in / 75ms out, fade plus scale from the edge they open from). They're tied to something the visitor opened rather than to the page arriving.
+- **Selects are `components/ui/Select.tsx`, never a native `<select>`.** The browser draws a native option list itself and ignores the theme (white-on-white in dark mode). `Select` has an input-style trigger with a chevron and a listbox on the theme menu's surface, with the selected option in the accent plus a check. The list is portalled and fixed-positioned, so the sidebar's scroll container can't clip it, and it flips upward when there's no room below.
 - **Live data is content, not animation.** Satellite markers move along their tracks and the clock ticks because the simulation is running. That motion is exempt from the rules above, and it is never eased, bounced or decorated: markers move at the speed the physics says.
 - Everything else is static.
 
@@ -141,18 +142,19 @@ Restrained and mostly hover-driven. Nothing animates on scroll, and no page or s
 - **Gutters.** `px-4 sm:px-6 xl:px-12`, the same padding scale as the site's container.
 - **The console is full-bleed.** The site's `max-w-6xl` container is for reading pages; a ground-track map needs the width. If the app ever grows a reading page (about, help, a pass report), it uses `max-w-6xl`.
 - **Header.** Sticky (`top-2 lg:top-3`), rounded at `md:` and up, translucent with `backdrop-blur`. Left to right: wordmark plus phase pill, sim clock (UTC in mono, local time muted beneath), clock controls, then the connection status and theme switcher pushed right. It wraps on narrow screens rather than collapsing; there is no navigation to put in a dialog yet.
-- **Desktop (`lg:`).** The page is exactly one viewport tall; the `22.5rem` sidebar (ground station, Overhead, catalog) and the main column each scroll on their own. The main column opens with the map and the **sky rail** — the polar sky plot and the all-sky view, two square canvas cards — then the readout and the pass schedule (side by side from `2xl:`).
+- **Desktop (`lg:`).** The page is exactly one viewport tall; the `22.5rem` sidebar (catalog, ground station, Overhead) and the main column each scroll on their own. The main column opens with the one-row **readout strip**, then the map and the **sky rail** — the polar sky plot and the all-sky view, two square canvas cards — then the pass schedule across the column's full width.
+- **Dense cards.** Sidebar panels and the readout strip use `Card dense` (`px-4 py-3`, `text-lg` heading) so the sidebar needs as little scrolling as possible; the map, sky views and pass schedule keep the default `p-5`.
 - **The sky rail.** From `xl:` it sits beside the map (`17–22rem` wide, the two sky views stacked); between `sm:` and `xl:` the two sky views pair up under the map. All three views are visible together on a desktop screen, because they are linked: selecting in one highlights in all.
-- **Overhead (sidebar).** Filter toggles and selects, then "Up now" (sorted by elevation, LOS countdown) and "Rising within N min" (soonest first), each list capped at 100 rows in its own scroll container with a "narrow the filters" hint.
-- **Below `lg`.** Everything stacks in task order: map (`55vh`), sky plot, all-sky, readout, pass schedule, ground station, Overhead, catalog, footer.
-- **Readout.** The selected satellite's name, NORAD ID, status and TLE age sit on one line. Under them is a row of seven metric tiles (`rounded-lg`, `bg-gray-50`/`white/5`, auto-fit at `7.5rem`), then a hairline-divided table of every tracked satellite. The table scrolls horizontally inside its card at narrow widths; the page never does.
+- **Overhead (sidebar).** Filter toggles (`text-xs`) and selects, then "Up now" (sorted by elevation, LOS countdown) and "Rising within N min" (soonest first), each list capped at 100 rows in its own scroll container with a "narrow the filters" hint.
+- **Below `lg`.** Everything stacks: readout strip, map (`55vh`), sky plot, all-sky, pass schedule, catalog, ground station, Overhead, footer.
+- **Readout strip.** One row above the map: the selected satellite (name over `#NORAD · type`), its status over the AOS/LOS countdown, then az, el, range, rate, lat, lon, alt and TLE age, each a muted label over a mono value. It fits the main column from `xl:` and scrolls horizontally inside its card below that; the page never does. Tracked satellites are chips under the catalog search (click selects, × untracks).
 - **Footer.** One line of honesty copy in muted `text-sm`.
 
 ## 7. Quality floor (non-negotiable)
 
 - Body text and accent-on-ground meet **WCAG AA in both themes**; re-verify after any token edit. The current floor: `primary-700` on white = 5.48:1, `primary-400` on `#1f1f1f` = 8.57:1, `gray-600` on white = 7.56:1, `gray-400` on `#1f1f1f` = 6.49:1, and both greeting gradient stops clear 3:1 at display size. **Known gap, inherited from the site:** white button labels on the dark-mode `primary-600` ground are 3.77:1. That passes 3:1 for UI components but not 4.5:1 for small text. On light (`primary-700`) they are 5.48:1.
 - Every view works at 400px wide with no horizontal page scroll. Wide content (the tracked-satellite table) scrolls inside its own container, and absolutely positioned helpers like `sr-only` labels must be inside a positioned scroll container, or they leak out of it.
-- Keyboard focus is visible. `focusRing` in `components/ui/Button.tsx` defines the house style: `focus-visible:ring-2 ring-primary-500` with an offset that flips to the dark ground in dark mode. `Button` uses it, and so do inputs and selects (`components/ui/Field.ts`), theme-menu items and text-link buttons. Anything new that is focusable should use `Button` or `focusRing` rather than suppress the default.
+- Keyboard focus is visible. `focusRing` in `components/ui/Button.tsx` defines the house style: `focus-visible:ring-2 ring-primary-500` with an offset that flips to the dark ground in dark mode. `Button` uses it, and so do inputs (`components/ui/Field.ts`), select triggers (`components/ui/Select.tsx`), theme-menu items and text-link buttons. Anything new that is focusable should use `Button` or `focusRing` rather than suppress the default.
 - The console is a client-rendered SPA, so there is no SSR hydration hazard. Values that depend on the visitor's clock or timezone (local sim time) are formatted in the browser with `toLocaleString`, never hard-coded to a zone.
 - **Map exception.** MapLibre draws labels from its basemap's glyph server, so satellite labels on the map use the basemap's font (Noto Sans), not Nunito. Everything else about the map (colors, selection, grounds) comes from the tokens.
 

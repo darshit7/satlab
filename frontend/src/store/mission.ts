@@ -3,7 +3,14 @@ import { createJSONStorage, persist } from 'zustand/middleware'
 import { api } from '../api/client'
 import { DEFAULT_FILTERS, sanitizeFilters } from '../lib/filters'
 import type { ClockSample } from '../lib/time'
-import type { GroundStation, GroundStationCreate, MissionSession, PassPrediction, SatelliteSummary } from '../types/api'
+import type {
+  GroundStation,
+  LocationInput,
+  MissionSession,
+  PassPrediction,
+  SatelliteSummary,
+  SessionSite,
+} from '../types/api'
 import type {
   GroundTrackMessage,
   PassArcMessage,
@@ -15,11 +22,8 @@ import type {
 } from '../types/ws'
 import { SessionSocket, type ConnectionStatus } from '../ws/sessionSocket'
 
-export interface DraftLocation {
-  lat_deg: number
-  lon_deg: number
-  alt_m: number
-}
+/** A custom location being edited (map click, geolocation, typed) before a session starts there. */
+export type DraftLocation = LocationInput
 
 export interface Notice {
   id: number
@@ -34,8 +38,10 @@ export interface PassSchedule {
 }
 
 interface MissionState {
+  /** Preset stations; custom locations are never saved as stations. */
   stations: GroundStation[]
-  stationId: number | null
+  /** Where the current (or last) session observes from: resumed on reload. */
+  site: SessionSite | null
   session: MissionSession | null
   connection: ConnectionStatus
   snapshot: Snapshot | null
@@ -52,8 +58,7 @@ interface MissionState {
   notices: Notice[]
 
   loadStations: () => Promise<void>
-  startSession: (stationId: number) => Promise<void>
-  createStationAndStart: (body: GroundStationCreate) => Promise<void>
+  startSession: (site: SessionSite) => Promise<void>
   track: (sat: SatelliteSummary) => void
   untrack: (noradId: number) => void
   select: (noradId: number | null) => void
@@ -66,7 +71,7 @@ interface MissionState {
 }
 
 interface Persisted {
-  stationId: number | null
+  site: SessionSite | null
   tracked: SatelliteSummary[]
   filters: VisibilityFilter
 }
@@ -82,6 +87,28 @@ let passesRequest: AbortController | null = null
 // Arcs arrive in bursts just ahead of the snapshot that uses them: merge them in one update.
 let pendingArcs: PassArcMessage[] = []
 
+const inRange = (v: unknown, min: number, max: number): v is number =>
+  typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max
+
+function sanitizeSite(raw: unknown, legacyStationId: unknown): SessionSite | null {
+  if (typeof raw === 'object' && raw !== null) {
+    const r = raw as Record<string, unknown>
+    if (Number.isInteger(r.station_id)) return { station_id: r.station_id as number }
+    const loc = r.location as Record<string, unknown> | null | undefined
+    if (
+      typeof loc === 'object' &&
+      loc !== null &&
+      inRange(loc.lat_deg, -90, 90) &&
+      inRange(loc.lon_deg, -180, 180) &&
+      inRange(loc.alt_m, -500, 9000)
+    ) {
+      return { location: { lat_deg: loc.lat_deg, lon_deg: loc.lon_deg, alt_m: loc.alt_m } }
+    }
+  }
+  // Before sessions carried their own location, only a station id was remembered.
+  return Number.isInteger(legacyStationId) ? { station_id: legacyStationId as number } : null
+}
+
 /** Persisted state is untrusted (it's localStorage): keep only well-formed values. */
 function sanitizePersisted(raw: unknown): Partial<Persisted> {
   if (typeof raw !== 'object' || raw === null) return {}
@@ -96,7 +123,7 @@ function sanitizePersisted(raw: unknown): Partial<Persisted> {
       )
     : []
   return {
-    stationId: Number.isInteger(r.stationId) ? (r.stationId as number) : null,
+    site: sanitizeSite(r.site, r.stationId),
     tracked,
     filters: sanitizeFilters(r.filters),
   }
@@ -148,7 +175,7 @@ export const useMission = create<MissionState>()(
 
       return {
         stations: [],
-        stationId: null,
+        site: null,
         session: null,
         connection: 'idle',
         snapshot: null,
@@ -171,18 +198,18 @@ export const useMission = create<MissionState>()(
           }
         },
 
-        startSession: async (stationId) => {
+        startSession: async (site) => {
           const generation = ++sessionGeneration
           const previous = get().session
           socket?.close()
           socket = null
           pendingArcs = []
           if (previous && !previous.ended_at) void api.endSession(previous.id).catch(() => {})
-          set({ stationId, session: null, snapshot: null, clockSample: null, tracks: {}, arcs: {}, upcoming: null, passes: null })
+          set({ site, session: null, snapshot: null, clockSample: null, tracks: {}, arcs: {}, upcoming: null, passes: null })
 
           let session: MissionSession
           try {
-            session = await api.createSession({ station_id: stationId })
+            session = await api.createSession(site)
           } catch (err) {
             if (generation !== sessionGeneration) return
             set({ connection: 'closed' })
@@ -193,7 +220,8 @@ export const useMission = create<MissionState>()(
             void api.endSession(session.id).catch(() => {}) // superseded by a newer call
             return
           }
-          set({ session })
+          // A custom location has been applied: it is no longer a draft.
+          set((s) => ({ session, draft: 'location' in site ? null : s.draft }))
           const current = new SessionSocket(session.id, {
             onMessage,
             onStatus: (connection) => set({ connection }),
@@ -203,22 +231,12 @@ export const useMission = create<MissionState>()(
               sendSelected()
             },
             onSessionUnavailable: () => {
-              // e.g. the server ended the session; start a fresh one at the same station
-              if (socket === current) setTimeout(() => void get().startSession(stationId), 1000)
+              // e.g. the server ended the session; start a fresh one at the same place
+              if (socket === current) setTimeout(() => void get().startSession(site), 1000)
             },
           })
           socket = current
           current.connect()
-        },
-
-        createStationAndStart: async (body) => {
-          try {
-            const station = await api.createStation(body)
-            set((s) => ({ stations: [...s.stations, station], draft: null }))
-            await get().startSession(station.id)
-          } catch (err) {
-            get().notify(`Could not save ground station: ${String(err)}`)
-          }
         },
 
         track: (sat) => {
@@ -285,7 +303,7 @@ export const useMission = create<MissionState>()(
     {
       name: 'satlab.mission',
       storage: createJSONStorage(() => localStorage),
-      partialize: (s): Persisted => ({ stationId: s.stationId, tracked: s.tracked, filters: s.filters }),
+      partialize: (s): Persisted => ({ site: s.site, tracked: s.tracked, filters: s.filters }),
       merge: (persisted, current) => ({ ...current, ...sanitizePersisted(persisted) }),
     },
   ),

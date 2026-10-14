@@ -60,15 +60,14 @@ class SessionManager:
         # Resume where the session's clock would be had it run uninterrupted at its initial rate.
         elapsed_s = (datetime.now(UTC) - row.started_at).total_seconds()
         sim_now = row.sim_start_time + timedelta(seconds=max(elapsed_s, 0.0) * row.time_scale)
-        station = row.station
         return SessionRuntime(
             session_id=row.id,
             observer=ObserverState(
-                station_id=station.id,
-                name=station.name,
-                lat_deg=station.lat_deg,
-                lon_deg=station.lon_deg,
-                alt_m=station.alt_m,
+                station_id=row.station_id,
+                name=row.location_name,
+                lat_deg=row.lat_deg,
+                lon_deg=row.lon_deg,
+                alt_m=row.alt_m,
                 horizon_mask_deg=self.settings.horizon_mask_deg,
             ),
             clock=SimClock(sim_anchor=sim_now, time_scale=row.time_scale),

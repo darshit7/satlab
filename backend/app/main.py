@@ -22,7 +22,6 @@ from app.db.base import get_db, get_sessionmaker
 from app.db.models import GroundStation, MissionSession, Satellite
 from app.models.api import (
     CatalogStatus,
-    GroundStationCreate,
     GroundStationOut,
     MissionSessionCreate,
     MissionSessionOut,
@@ -40,6 +39,7 @@ log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(levelname)-9s %(name)s: %(message)s")
 
 WS_CLOSE_SESSION_UNAVAILABLE = 4404
+CUSTOM_LOCATION_NAME = "Custom location"
 
 
 def run_migrations() -> None:
@@ -118,14 +118,6 @@ def list_stations(db: Db) -> list[GroundStation]:
     return list(db.scalars(select(GroundStation).order_by(GroundStation.id)))
 
 
-@app.post("/api/stations", response_model=GroundStationOut, status_code=201)
-def create_station(body: GroundStationCreate, db: Db) -> GroundStation:
-    station = GroundStation(**body.model_dump())
-    db.add(station)
-    db.commit()
-    return station
-
-
 # ---------- satellite catalog ----------
 
 
@@ -168,11 +160,28 @@ async def catalog_status(catalog: Catalog) -> CatalogStatus:
 
 @app.post("/api/sessions", response_model=MissionSessionOut, status_code=201)
 def create_session(body: MissionSessionCreate, db: Db) -> MissionSession:
-    if db.get(GroundStation, body.station_id) is None:
-        raise HTTPException(404, f"ground station {body.station_id} not found")
+    """Start a session at a preset station or at a custom location (kept on the session only)."""
+    if body.station_id is not None:
+        station = db.get(GroundStation, body.station_id)
+        if station is None:
+            raise HTTPException(404, "ground station not found")
+        site = {
+            "station_id": station.id,
+            "location_name": station.name,
+            "lat_deg": station.lat_deg,
+            "lon_deg": station.lon_deg,
+            "alt_m": station.alt_m,
+        }
+    else:
+        assert body.location is not None  # the schema requires exactly one
+        site = {
+            "station_id": None,
+            "location_name": CUSTOM_LOCATION_NAME,
+            **body.location.model_dump(),
+        }
     time_scale = min(body.time_scale, get_settings().max_time_scale)
     session = MissionSession(
-        station_id=body.station_id,
+        **site,
         name=body.name,
         sim_start_time=body.sim_start_time or datetime.now(UTC),
         time_scale=time_scale,
@@ -204,7 +213,7 @@ async def predict_passes(
     hours: Annotated[float, Query(ge=1, le=72)] = 24,
     start: Annotated[AwareDatetime | None, Query()] = None,
 ) -> PassPrediction:
-    """Upcoming passes of one satellite over the session's station (default: from sim time)."""
+    """Upcoming passes of one satellite over the session's location (default: from sim time)."""
     try:
         return await passes.predict(session_id, norad_id, start, hours)
     except NotFound as exc:
