@@ -8,6 +8,7 @@ import { Pill } from '../../components/ui/Pill'
 import { formatAge } from '../../lib/time'
 import { useMission } from '../../store/mission'
 import type { CatalogStatus, SatelliteSummary } from '../../types/api'
+import { TrackedChips } from './TrackedChips'
 
 const DEBOUNCE_MS = 250
 
@@ -108,10 +109,11 @@ export function CatalogSearch() {
 
   return (
     <Card
+      dense
       title="Satellite catalog"
       aside={status && status.satellite_count > 0 && <Pill size="sm">{status.satellite_count.toLocaleString()}</Pill>}
     >
-      <p className="mb-3 text-sm text-gray-600 dark:text-gray-400">{statusText}</p>
+      <p className="mb-2 text-xs text-gray-500 dark:text-gray-400">{statusText}</p>
       <div className="relative">
         <Search size={16} strokeWidth={1.5} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-gray-500 dark:text-gray-400" aria-hidden />
         <input
@@ -123,17 +125,18 @@ export function CatalogSearch() {
           aria-label="Search satellites"
         />
       </div>
+      <TrackedChips />
       {error && <p className="mt-2 text-sm text-red-700 dark:text-red-400">{error}</p>}
       {results.length > 0 && (
-        <ul className="mt-2 divide-y divide-gray-200 dark:divide-gray-700">
+        <ul className="mt-1 max-h-72 divide-y divide-gray-200 overflow-y-auto dark:divide-gray-700">
           {results.map((sat) => {
             const isTracked = trackedIds.has(sat.norad_id)
             const age = sat.tle_epoch ? formatAge(now - Date.parse(sat.tle_epoch)) : null
             return (
-              <li key={sat.norad_id} className="flex items-center justify-between gap-3 py-2.5">
+              <li key={sat.norad_id} className="flex items-center justify-between gap-3 py-2">
                 <div className="min-w-0">
-                  <div className="truncate font-semibold">{sat.name}</div>
-                  <div className="text-sm text-gray-600 tabular-nums dark:text-gray-400">
+                  <div className="truncate text-sm font-semibold">{sat.name}</div>
+                  <div className="text-xs text-gray-600 tabular-nums dark:text-gray-400">
                     <span className="font-mono">#{sat.norad_id}</span>
                     {age && ` · TLE ${age} old`}
                   </div>
@@ -151,7 +154,7 @@ export function CatalogSearch() {
         </ul>
       )}
       {q && !loading && (
-        <p className="mt-3 text-sm text-gray-600 dark:text-gray-400">
+        <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
           {results.length === 0 && (remoteDone ? 'No match in the Celestrak catalog. ' : 'No local match. ')}
           {!remoteDone && canSearchRemote && (
             <button
@@ -166,7 +169,7 @@ export function CatalogSearch() {
           )}
         </p>
       )}
-      {loading && <p className="mt-3 text-sm text-gray-600 dark:text-gray-400">Searching…</p>}
+      {loading && <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">Searching…</p>}
     </Card>
   )
 }

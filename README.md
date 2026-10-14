@@ -4,8 +4,8 @@ A real-time satellite mission control simulator. Positions and geometry come fro
 with **SGP4** for **your real location**. Nothing is faked. See [AGENTS.md](AGENTS.md) for the architecture,
 conventions, database design, and phase plan.
 
-**Status: Phase 2 (visibility & passes).** Pick a ground station (saved, your geolocation, a map click,
-or typed lat/lon) and every satellite above the horizon mask appears at once, with no search needed: on
+**Status: Phase 2 (visibility & passes).** Pick a ground station (a preset, your geolocation, a map click,
+or typed lat/lon; a custom location is used for that session only, never saved) and every satellite above the horizon mask appears at once, with no search needed: on
 the 2D map, a polar sky plot and an all-sky (looking-up) view, all linked by selection. Filter by type,
 minimum elevation, SAR capability and "rising within N minutes" (computed across the whole catalog). Any
 satellite gets a 24-hour pass schedule (AOS / LOS / max elevation / azimuths) with a jump-to-AOS button.
@@ -22,16 +22,23 @@ cd backend
 uv sync
 uv run uvicorn app.main:app --reload
 
-# terminal 2 — frontend (http://localhost:5173)
+# terminal 2 — frontend (http://localhost:5173/satlab/)
 cd frontend
 pnpm install
 pnpm dev
 ```
 
 On first start the backend creates `backend/var/satlab.db`, seeds a few ground stations, and downloads
-the Celestrak "active" catalog (~16k objects) in the background. Open http://localhost:5173.
+the Celestrak "active" catalog (~16k objects) in the background. Open http://localhost:5173/satlab/.
 
 Optional settings: copy [.env.example](.env.example) to `.env`.
+
+### Deploying under `/satlab/`
+
+The frontend is built for `https://<domain>/satlab/` (Vite `base`). Serve `frontend/dist/` at `/satlab/`, and
+reverse-proxy `/satlab/api` and `/satlab/ws` (WebSocket upgrade) to the backend **with the `/satlab` prefix
+stripped**. The backend's own routes are `/api` and `/ws`. Set `NEXT_UMAMI_ID` (your Umami Cloud website ID) when running
+`pnpm build` to include the analytics tracker; without it, no tracker is added.
 
 ## Checks
 

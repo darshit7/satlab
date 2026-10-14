@@ -1,22 +1,30 @@
 """REST request/response schemas. Mirrored in frontend/src/types/api.ts."""
 
 from datetime import datetime
+from typing import Self
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
-
-
-class GroundStationCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=120)
-    lat_deg: float = Field(ge=-90, le=90)
-    lon_deg: float = Field(ge=-180, le=180)
-    alt_m: float = Field(default=0.0, ge=-500, le=9000)
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 
-class GroundStationOut(GroundStationCreate):
+class GroundStationOut(BaseModel):
+    """A preset station (seed data). Custom locations are per session, never stations."""
+
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    name: str
+    lat_deg: float
+    lon_deg: float
+    alt_m: float
     created_at: datetime
+
+
+class LocationIn(BaseModel):
+    """A custom observer location, used for one session only."""
+
+    lat_deg: float = Field(ge=-90, le=90)
+    lon_deg: float = Field(ge=-180, le=180)
+    alt_m: float = Field(default=0.0, ge=-500, le=9000)
 
 
 class SatelliteOut(BaseModel):
@@ -45,23 +53,35 @@ class CatalogStatus(BaseModel):
 
 
 class MissionSessionCreate(BaseModel):
-    station_id: int
-    name: str | None = None
+    """Observe from a preset station (``station_id``) or a custom ``location``: exactly one."""
+
+    station_id: int | None = None
+    location: LocationIn | None = None
+    name: str | None = Field(default=None, max_length=120)
     sim_start_time: AwareDatetime | None = None  # defaults to "now"
     time_scale: float = Field(default=1.0, gt=0)
+
+    @model_validator(mode="after")
+    def _one_site(self) -> Self:
+        if (self.station_id is None) == (self.location is None):
+            raise ValueError("give exactly one of station_id or location")
+        return self
 
 
 class MissionSessionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    station_id: int
+    station_id: int | None  # the preset the location came from, if any
+    location_name: str
+    lat_deg: float
+    lon_deg: float
+    alt_m: float
     name: str | None
     started_at: datetime
     ended_at: datetime | None
     sim_start_time: datetime
     time_scale: float
-    station: GroundStationOut
 
 
 class PassWindowOut(BaseModel):
@@ -76,7 +96,7 @@ class PassWindowOut(BaseModel):
 
 class PassPrediction(BaseModel):
     session_id: int
-    station_id: int
+    station_id: int | None
     norad_id: int
     name: str
     tle_epoch: datetime

@@ -1,4 +1,5 @@
 import { WS_CLOSE_SESSION_UNAVAILABLE, type ClientMessage, type ServerMessage } from '../types/ws'
+import { appUrl } from '../lib/basePath'
 
 export type ConnectionStatus = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed'
 
@@ -50,7 +51,7 @@ export class SessionSocket {
   private open(status: ConnectionStatus): void {
     this.handlers.onStatus(status)
     const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const ws = new WebSocket(`${scheme}://${window.location.host}/ws/sessions/${this.sessionId}`)
+    const ws = new WebSocket(`${scheme}://${window.location.host}${appUrl(`/ws/sessions/${this.sessionId}`)}`)
     this.ws = ws
 
     ws.onopen = () => {

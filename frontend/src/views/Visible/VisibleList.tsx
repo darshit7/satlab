@@ -14,6 +14,7 @@ import { Filters } from './Filters'
 
 const MAX_ROWS = 100
 const muted = 'text-sm text-gray-600 dark:text-gray-400'
+const heading = 'mt-3 mb-0.5 flex items-baseline justify-between gap-2 text-sm font-semibold'
 
 function Row({
   noradId,
@@ -37,13 +38,13 @@ function Row({
         aria-pressed={selected}
         onClick={() => select(noradId)}
         className={cn(
-          'flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left transition-colors duration-150 hover:bg-gray-50 dark:hover:bg-white/5',
+          'flex w-full items-center gap-3 rounded-lg px-2 py-1 text-left transition-colors duration-150 hover:bg-gray-50 dark:hover:bg-white/5',
           selected && 'bg-gray-50 dark:bg-white/5',
           focusRing,
         )}
       >
         <span className="min-w-0 flex-1">
-          <span className={cn('flex items-center gap-1.5 truncate font-semibold', selected && 'text-primary-700 dark:text-primary-400')}>
+          <span className={cn('flex items-center gap-1.5 truncate text-sm font-semibold', selected && 'text-primary-700 dark:text-primary-400')}>
             {pinned && <Crosshair size={14} strokeWidth={1.5} className="shrink-0" aria-label="tracked" />}
             <span className="truncate">{name}</span>
           </span>
@@ -62,7 +63,7 @@ function UpNow({ sats, simMs }: { sats: SatelliteState[]; simMs: number }) {
   const tracked = useMission((s) => s.tracked)
   const trackedIds = new Set(tracked.map((t) => t.norad_id))
   return (
-    <ul className="max-h-80 overflow-y-auto">
+    <ul className="-mx-2 max-h-60 overflow-y-auto">
       {sats.slice(0, MAX_ROWS).map((sat) => {
         const arc = arcs[sat.norad_id]
         const los = arc?.los_time
@@ -95,7 +96,7 @@ function UpNow({ sats, simMs }: { sats: SatelliteState[]; simMs: number }) {
 
 function RisingSoon({ passes, simMs }: { passes: UpcomingPass[]; simMs: number }) {
   return (
-    <ul className="max-h-72 overflow-y-auto">
+    <ul className="-mx-2 max-h-48 overflow-y-auto">
       {passes.map((p) => (
         <Row
           key={p.norad_id}
@@ -130,13 +131,13 @@ export function VisibleList() {
   const rising = simMs === null ? [] : (upcoming?.passes ?? []).filter((p) => Date.parse(p.aos_time) > simMs)
 
   return (
-    <Card title="Overhead" aside={snapshot && <Pill size="sm">{snapshot.visible_count.toLocaleString()} in view</Pill>}>
+    <Card dense title="Overhead" aside={snapshot && <Pill size="sm">{snapshot.visible_count.toLocaleString()} in view</Pill>}>
       <Filters />
       {!snapshot || simMs === null ? (
-        <p className={cn(muted, 'mt-4')}>Set a ground station to see what's above it.</p>
+        <p className={cn(muted, 'mt-3')}>Set a ground station to see what's above it.</p>
       ) : (
         <>
-          <h3 className="mt-5 mb-1 flex items-baseline justify-between gap-2 font-semibold">
+          <h3 className={heading}>
             Up now
             <span className={muted}>
               {up.length > MAX_ROWS ? `${MAX_ROWS} of ${up.length.toLocaleString()} shown` : `${up.length} shown`}
@@ -154,7 +155,7 @@ export function VisibleList() {
 
           {risingWithin > 0 && (
             <>
-              <h3 className="mt-5 mb-1 flex items-baseline justify-between gap-2 font-semibold">
+              <h3 className={heading}>
                 Rising within {risingWithin} min
                 {upcoming?.status === 'ready' && (
                   <span className={muted}>

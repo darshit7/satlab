@@ -144,7 +144,7 @@ Runtime data (SQLite DB, Celestrak TLE cache) lives in `backend/var/` (gitignore
 ```bash
 cd frontend
 pnpm install
-pnpm dev                                   # Vite dev server (http://localhost:5173); proxies /api + /ws to :8000
+pnpm dev                                   # Vite dev server (http://localhost:5173/satlab/); proxies /satlab/api + /satlab/ws to :8000
 pnpm build                                 # tsc -b && vite build
 pnpm test                                  # vitest
 pnpm lint                                  # oxlint + tsc typecheck
@@ -258,7 +258,11 @@ CREATE TABLE link_profile (
 -- ========== OPERATIONAL / SESSION ==========
 CREATE TABLE mission_session (
     id             INTEGER PRIMARY KEY,
-    station_id     INTEGER NOT NULL REFERENCES ground_station(id),
+    station_id     INTEGER REFERENCES ground_station(id),  -- preset it came from; NULL = custom
+    location_name  TEXT NOT NULL,         -- observer location, owned by the session
+    lat_deg        REAL NOT NULL,
+    lon_deg        REAL NOT NULL,
+    alt_m          REAL NOT NULL DEFAULT 0,
     name           TEXT,
     started_at     TEXT NOT NULL,         -- wall clock, UTC
     ended_at       TEXT,
@@ -309,7 +313,7 @@ CREATE TABLE pass_window (
     id              INTEGER PRIMARY KEY,
     session_id      INTEGER REFERENCES mission_session(id),
     norad_id        INTEGER NOT NULL REFERENCES satellite(norad_id),
-    station_id      INTEGER NOT NULL REFERENCES ground_station(id),
+    station_id      INTEGER REFERENCES ground_station(id),  -- NULL for a custom location
     aos_time        TEXT NOT NULL,
     los_time        TEXT NOT NULL,
     max_elev_deg    REAL NOT NULL,
@@ -489,14 +493,14 @@ Write code as if the Phase 9 deploy already exists.
 - **Treat server messages as untrusted input too.** Only render fields that the `src/types/` contract defines; don't spread unknown fields into props or DOM attributes.
 - **External links** use `rel="noopener noreferrer"` with `target="_blank"`, and only `https:` URLs. Never build an `href` from data without checking the scheme (no `javascript:` URLs).
 - **`localStorage` holds preferences only** (theme, last station, tracked list): nothing secret, nothing the server must trust. Every read is wrapped in `try/catch` and validated, as `src/lib/theme.ts` does.
-- **CSP-ready:** no new inline scripts or inline event-handler attributes. The single inline pre-paint theme script in `index.html` is the documented exception; it gets a CSP hash when a Content-Security-Policy is added (Phase 9).
+- **CSP-ready:** no new inline scripts or inline event-handler attributes. The single inline pre-paint theme script in `index.html` is the documented exception; it gets a CSP hash when a Content-Security-Policy is added (Phase 9), alongside `https://cloud.umami.is` in `script-src`/`connect-src` for analytics (§12.8).
 
 ### 12.8 Dependencies (no extra tooling, just habits)
 - **Lockfiles are the source of truth and are committed** (`backend/uv.lock`, `frontend/pnpm-lock.yaml`). Install with `uv sync` / `pnpm install`; never `pip install` into the venv by hand.
 - **Add a dependency only when it earns its place.** Prefer the standard library or something already in the stack. Choose packages that are actively maintained and widely used, and check the exact name before installing (typosquats look like real names).
 - **pnpm 10 doesn't run dependency install scripts by default.** Allow one (`onlyBuiltDependencies`) only deliberately, for a known package that needs it.
 - **Upgrade deliberately:** bump versions in a dedicated change and rerun the full test suite. Don't leave the code pinned to versions with known security fixes available.
-- **No CDN `<script>` tags.** Everything the frontend runs is bundled from the lockfile.
+- **No CDN `<script>` tags.** Everything the frontend runs is bundled from the lockfile. The one documented exception is the Umami Cloud tracker (`https://cloud.umami.is/script.js`, `defer`): a fixed host in `vite.config.ts`, injected only into production builds and only when `NEXT_UMAMI_ID` is set (validated as a UUID). Don't add others.
 
 ### 12.9 Deploy-time (Phase 9, recorded now so it isn't forgotten)
 - Authentication before binding to a public interface; TLS everywhere (`wss://`, `https://`).
@@ -532,6 +536,7 @@ When you close a gap, delete its line here.
 - **Client tweening**: map markers interpolate along the server-sampled `ground_track` at the estimated sim time (last `sim_time` + elapsed × `time_scale`); readouts show raw snapshot values. No orbital math in the frontend.
 - **Timestamps**: `UTCDateTime` column type (`app/db/base.py`) stores ISO-8601 TEXT on SQLite and switches to `TIMESTAMPTZ` on Postgres — the Phase 7 swap needs no model changes for time columns.
 - **Catalog**: Celestrak `GROUP=active` bulk-loaded into `satellite` (cached in `backend/var/cache/` and refreshed when > 12 h old); "full catalog" search hits Celestrak by `NAME`/`CATNR` only on explicit request. The sim loop reads only an in-memory elements registry — never the DB or network.
+- **Session-scoped observer location** (2026-10-15). `ground_station` holds only seeded presets; there is no API to create one. A session observes from its own `location_name` / `lat_deg` / `lon_deg` / `alt_m`, copied from a preset (`station_id` set) or given as a custom `location` (geolocation, map click, typed lat/lon; `station_id` NULL, name "Custom location"). `POST /api/sessions` takes exactly one of `station_id` or `location`; `MissionSessionOut` drops the nested `station` for those flat fields; `ObserverState.station_id` and `PassPrediction.station_id` are nullable. The client remembers the last site (preset id or custom location) in `localStorage` and starts a new session there on reload.
 - **Session clock** is in-memory; after a backend restart a session resumes at `sim_start_time + elapsed × initial time_scale` (approximate until the Phase 6 event log makes it exact). Sessions end after 60 s with no subscribers.
 - **Phase 1 — UI design system**: the frontend follows `design-system.md` ("Warm Notebook", from the author's site). Tailwind v4 with tokens pinned to the system's v3 hexes and all other palettes removed; light/dark/system theme; the map reads its colors from the same tokens and swaps basemaps per theme.
 - **Cesium globe + visibility "V" cone → Phase 4** (2026-10-10; resolves design doc open question #5). Until then the visible set is shown on the 2D map, polar sky plot and all-sky view (Phase 2).
@@ -541,3 +546,4 @@ When you close a gap, delete its line here.
 - **Horizon mask**: one global setting `SATLAB_HORIZON_MASK_DEG` (default 5°) for every station; the UI's min-elevation filter raises it per view. A per-station mask is a later schema change if needed.
 - **Satellite types**: `station | weather | comms | navigation | sar | other`, from ordered name-pattern rules in `app/data/seed/satellite_types.json` (debris/rocket bodies first; traps such as SENTINEL-2 ≠ SAR, SARAL ≠ SAR, GSAT0xxx = Galileo vs GSAT-xx = ISRO comms are tested). Applied on every upsert and re-applied to the whole catalog at startup, so editing the rules reclassifies existing rows.
 - **Sky views are Canvas 2D without D3**: the projection is a few lines (`frontend/src/lib/sky.ts`); D3 joins when a view earns it.
+- **Base path `/satlab/` + Umami analytics** (2026-10-14). The app is published at `https://<domain>/satlab/` next to the author's site and reports to the same Umami website, so pageviews land as `/satlab` and `/satlab/<page>`. Vite `base` is `/satlab/`; every same-origin URL (REST, WebSocket) goes through `appUrl()` (`frontend/src/lib/basePath.ts`); the dev proxy (and the production reverse proxy) strip the prefix, so the backend routes stay at `/api` and `/ws`. The Umami website ID comes from `NEXT_UMAMI_ID` (read only in `vite.config.ts`; `envPrefix` stays `VITE_`), is public by design, and the tracker is injected at build time only, so `pnpm dev` isn't counted. Future client-side routes are tracked automatically (Umami follows `history.pushState`).

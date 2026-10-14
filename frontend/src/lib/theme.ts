@@ -5,6 +5,7 @@ export type ResolvedTheme = 'light' | 'dark'
 
 // Keep in sync with the pre-paint script in index.html.
 const STORAGE_KEY = 'satlab.theme'
+const DEFAULT_PREFERENCE: ThemePreference = 'dark'
 const media = () => window.matchMedia('(prefers-color-scheme: dark)')
 const listeners = new Set<() => void>()
 
@@ -15,7 +16,7 @@ function readPreference(): ThemePreference {
   } catch {
     // storage unavailable (private mode): fall back to the default
   }
-  return 'system'
+  return DEFAULT_PREFERENCE
 }
 
 let preference: ThemePreference = readPreference()

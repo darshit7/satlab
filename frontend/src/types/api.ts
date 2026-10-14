@@ -3,15 +3,17 @@
 
 import type { SatelliteType } from './ws'
 
-export interface GroundStationCreate {
-  name: string
+/** An observer location. A custom one is used for a single session, never saved as a station. */
+export interface LocationInput {
   lat_deg: number
   lon_deg: number
   alt_m: number
 }
 
-export interface GroundStation extends GroundStationCreate {
+/** A preset station (seed data). */
+export interface GroundStation extends LocationInput {
   id: number
+  name: string
   created_at: string
 }
 
@@ -38,22 +40,25 @@ export interface CatalogStatus {
   last_error: string | null
 }
 
-export interface MissionSessionCreate {
-  station_id: number
+/** Where a session observes from: a preset station or a custom location (exactly one). */
+export type SessionSite = { station_id: number; location?: never } | { location: LocationInput; station_id?: never }
+
+export type MissionSessionCreate = SessionSite & {
   name?: string | null
   sim_start_time?: string | null
   time_scale?: number
 }
 
-export interface MissionSession {
+export interface MissionSession extends LocationInput {
   id: number
-  station_id: number
+  /** The preset the location came from; null for a custom location. */
+  station_id: number | null
+  location_name: string
   name: string | null
   started_at: string
   ended_at: string | null
   sim_start_time: string
   time_scale: number
-  station: GroundStation
 }
 
 export interface PassWindow {
@@ -68,7 +73,7 @@ export interface PassWindow {
 
 export interface PassPrediction {
   session_id: number
-  station_id: number
+  station_id: number | null
   norad_id: number
   name: string
   tle_epoch: string

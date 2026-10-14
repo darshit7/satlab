@@ -18,12 +18,12 @@ def session_id(client: TestClient) -> int:
     with get_sessionmaker()() as db:
         upsert_tle_records(db, [ISS_RECORD], datetime.now(UTC))
     client.portal.call(client.app.state.catalog.rebuild_fleet)
-    station = client.post(
-        "/api/stations", json={"name": "Bluffton", "lat_deg": BLUFFTON[0], "lon_deg": BLUFFTON[1]}
-    ).json()
     session = client.post(
         "/api/sessions",
-        json={"station_id": station["id"], "sim_start_time": REFERENCE_TIME.isoformat()},
+        json={
+            "location": {"lat_deg": BLUFFTON[0], "lon_deg": BLUFFTON[1]},
+            "sim_start_time": REFERENCE_TIME.isoformat(),
+        },
     ).json()
     return session["id"]
 
@@ -65,7 +65,8 @@ def test_visible_satellite_streams_without_tracking(client: TestClient, session_
     with client.websocket_connect(f"/ws/sessions/{session_id}") as ws:
         ws = Stream(ws)
         first = ws.until("snapshot")
-        assert first["observer"]["name"] == "Bluffton"
+        assert first["observer"]["name"] == "Custom location"
+        assert first["observer"]["station_id"] is None
         assert first["observer"]["horizon_mask_deg"] == 5.0
         ws.pause_at_reference()
 

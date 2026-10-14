@@ -8,10 +8,12 @@
     <script>
       // Apply the theme before first paint (no flash). Keep in sync with src/lib/theme.ts.
       try {
-        var p = localStorage.getItem('satlab.theme') || 'system'
+        var p = localStorage.getItem('satlab.theme') || 'dark'
         var dark = p === 'dark' || (p === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
         if (dark) document.documentElement.classList.add('dark')
-      } catch (e) {}
+      } catch (e) {
+        document.documentElement.classList.add('dark') // storage blocked: the default is dark
+      }
     </script>
   </head>
   <body>

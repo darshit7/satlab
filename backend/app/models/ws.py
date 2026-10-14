@@ -35,7 +35,7 @@ class ClockState(BaseModel):
 
 
 class ObserverState(BaseModel):
-    station_id: int
+    station_id: int | None  # null for a custom (session-only) location
     name: str
     lat_deg: float
     lon_deg: float

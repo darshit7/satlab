@@ -1,4 +1,4 @@
-"""Pass schedule for one satellite over a session's station, persisted to ``pass_window``."""
+"""Pass schedule for one satellite over a session's location, persisted to ``pass_window``."""
 
 import asyncio
 from datetime import UTC, datetime, timedelta
@@ -50,8 +50,7 @@ class PassService:
         end = start + timedelta(hours=hours)
         # Search past both ends so passes in progress at either end get their true AOS / LOS.
         pad = timedelta(seconds=min(max(elements.period_s, 3600.0), 12 * 3600.0))
-        station = session.station
-        observer = Observer(station.lat_deg, station.lon_deg, station.alt_m)
+        observer = Observer(session.lat_deg, session.lon_deg, session.alt_m)
         mask = self.settings.horizon_mask_deg
         [spans] = await asyncio.to_thread(
             find_spans,
@@ -79,7 +78,7 @@ class PassService:
                     PassWindow(
                         session_id=session_id,
                         norad_id=norad_id,
-                        station_id=station.id,
+                        station_id=session.station_id,
                         aos_time=p.aos,
                         los_time=p.los,
                         max_elev_deg=p.max_elev_deg,
@@ -93,7 +92,7 @@ class PassService:
         await asyncio.to_thread(persist)
         return PassPrediction(
             session_id=session_id,
-            station_id=station.id,
+            station_id=session.station_id,
             norad_id=norad_id,
             name=elements.name,
             tle_epoch=elements.epoch,

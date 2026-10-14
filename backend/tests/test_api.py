@@ -29,20 +29,14 @@ def test_health(client: TestClient) -> None:
     assert client.get("/api/health").json() == {"status": "ok"}
 
 
-def test_stations_seeded_and_create(client: TestClient) -> None:
+def test_stations_are_seeded_presets_only(client: TestClient) -> None:
     seeded = client.get("/api/stations").json()
     assert any("Bengaluru" in s["name"] for s in seeded)
+    assert seeded[0]["created_at"].endswith("Z") or "+00:00" in seeded[0]["created_at"]
 
-    created = client.post(
-        "/api/stations", json={"name": "Home", "lat_deg": 12.97, "lon_deg": 77.59, "alt_m": 900}
-    )
-    assert created.status_code == 201
-    body = created.json()
-    assert body["name"] == "Home"
-    assert body["created_at"].endswith("Z") or "+00:00" in body["created_at"]
-
-    bad = client.post("/api/stations", json={"name": "X", "lat_deg": 91, "lon_deg": 0})
-    assert bad.status_code == 422
+    # Custom locations belong to a session; they can't be saved as stations.
+    home = {"name": "Home", "lat_deg": 12.97, "lon_deg": 77.59, "alt_m": 900}
+    assert client.post("/api/stations", json=home).status_code == 405
 
 
 def test_satellite_search(catalog: TestClient) -> None:
@@ -76,13 +70,35 @@ def test_session_lifecycle(client: TestClient) -> None:
     created = client.post("/api/sessions", json={"station_id": station_id, "time_scale": 10})
     assert created.status_code == 201
     session = created.json()
-    assert session["station"]["id"] == station_id
+    station = client.get("/api/stations").json()[0]
+    assert session["station_id"] == station_id
+    assert session["location_name"] == station["name"]
+    assert (session["lat_deg"], session["lon_deg"]) == (station["lat_deg"], station["lon_deg"])
     assert session["ended_at"] is None
 
     assert client.post(f"/api/sessions/{session['id']}/end").status_code == 204
     assert client.get(f"/api/sessions/{session['id']}").json()["ended_at"] is not None
 
     assert client.post("/api/sessions", json={"station_id": 9999}).status_code == 404
+
+
+def test_session_at_custom_location_saves_no_station(client: TestClient) -> None:
+    stations_before = client.get("/api/stations").json()
+    location = {"lat_deg": 12.97, "lon_deg": 77.59, "alt_m": 900}
+    created = client.post("/api/sessions", json={"location": location})
+    assert created.status_code == 201
+    session = created.json()
+    assert session["station_id"] is None
+    assert session["location_name"] == "Custom location"
+    assert (session["lat_deg"], session["lon_deg"], session["alt_m"]) == (12.97, 77.59, 900)
+    assert client.get("/api/stations").json() == stations_before
+
+    station_id = stations_before[0]["id"]
+    both = {"station_id": station_id, "location": location}
+    assert client.post("/api/sessions", json=both).status_code == 422
+    assert client.post("/api/sessions", json={}).status_code == 422
+    off_earth = {"location": {"lat_deg": 91, "lon_deg": 0}}
+    assert client.post("/api/sessions", json=off_earth).status_code == 422
 
 
 @pytest.fixture
@@ -96,12 +112,12 @@ def bluffton_session(catalog: TestClient) -> int:
             transport=httpx.MockTransport(lambda r: httpx.Response(200, text="No GP data found"))
         ),
     )
-    station = catalog.post(
-        "/api/stations", json={"name": "Bluffton", "lat_deg": BLUFFTON[0], "lon_deg": BLUFFTON[1]}
-    ).json()
     session = catalog.post(
         "/api/sessions",
-        json={"station_id": station["id"], "sim_start_time": REFERENCE_TIME.isoformat()},
+        json={
+            "location": {"lat_deg": BLUFFTON[0], "lon_deg": BLUFFTON[1]},
+            "sim_start_time": REFERENCE_TIME.isoformat(),
+        },
     ).json()
     return session["id"]
 
