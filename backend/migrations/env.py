@@ -10,7 +10,11 @@ from app.config import get_settings
 from app.db.base import Base
 
 config = context.config
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+settings = get_settings()
+# The schema owner's URL when configured (Neon direct host), else the app's. configparser treats
+# `%` as interpolation, and URL-encoded passwords contain it.
+url = settings.migration_database_url or settings.database_url
+config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name, disable_existing_loggers=False)

@@ -1,13 +1,54 @@
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy import create_engine, make_url
+from sqlalchemy.pool import NullPool
+from sqlalchemy.schema import CreateSchema, DropSchema
 
-from app.config import get_settings
+from app.config import BACKEND_DIR, get_settings, normalize_database_url
 from app.data.celestrak import TleRecord
 from app.db.base import get_engine, get_sessionmaker
+
+
+class _TestDatabase(BaseSettings):
+    """The Postgres the suite runs on: the Neon *test* branch's direct URL (the pooler rejects the
+    search_path option). From the shell or a gitignored `.env.test`, never `.env`, so dev
+    credentials can't drive the tests. Unset: throwaway SQLite."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="SATLAB_TEST_",
+        env_file=(BACKEND_DIR.parent / ".env.test", BACKEND_DIR / ".env.test"),
+        extra="ignore",
+    )
+
+    postgres_url: str | None = None
+
+
+TEST_POSTGRES_URL = _TestDatabase().postgres_url or None
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    # Neon's pooler (PgBouncer) rejects the search_path startup option every test relies on.
+    host = make_url(normalize_database_url(TEST_POSTGRES_URL)).host if TEST_POSTGRES_URL else None
+    if host and "-pooler." in host:
+        raise pytest.UsageError(
+            f"SATLAB_TEST_POSTGRES_URL uses Neon's pooled host ({host}). The tests need the "
+            "direct host: remove '-pooler' from the hostname (see deploy/neon.md)."
+        )
+
+
+def pytest_report_header() -> str:
+    if TEST_POSTGRES_URL:
+        url = make_url(normalize_database_url(TEST_POSTGRES_URL))
+        return f"database: Postgres at {url.host} (one throwaway schema per test)"
+    return "database: SQLite (throwaway file per test)"
+
 
 # ISS element set and reference observation from the skyfield documentation
 # (https://rhodesmill.org/skyfield/earth-satellites.html).
@@ -25,17 +66,52 @@ def _clear_caches() -> None:
     get_sessionmaker.cache_clear()
 
 
+@contextmanager
+def _postgres_schema(base_url: str) -> Iterator[str]:
+    """A throwaway schema on the test Postgres; the yielded URL sees only it (search_path)."""
+    url = make_url(normalize_database_url(base_url))
+    schema = f"satlab_test_{uuid4().hex[:12]}"
+    admin = create_engine(url, poolclass=NullPool)
+    with admin.begin() as conn:
+        conn.execute(CreateSchema(schema))
+    try:
+        scoped = url.update_query_dict({"options": f"-csearch_path={schema}"})
+        yield scoped.render_as_string(hide_password=False)
+    finally:
+        with admin.begin() as conn:
+            conn.execute(DropSchema(schema, cascade=True))
+        admin.dispose()
+
+
+@contextmanager
+def _test_database(tmp_path: Path) -> Iterator[str]:
+    if TEST_POSTGRES_URL:
+        with _postgres_schema(TEST_POSTGRES_URL) as url:
+            yield url
+    else:
+        yield f"sqlite:///{tmp_path / 'test.db'}"
+
+
 @pytest.fixture
 def app_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
-    """Point the app at a throwaway SQLite DB and disable network catalog loading."""
-    monkeypatch.setenv("SATLAB_DATABASE_URL", f"sqlite:///{tmp_path / 'test.db'}")
-    monkeypatch.setenv("SATLAB_CACHE_DIR", str(tmp_path / "cache"))
-    monkeypatch.setenv("SATLAB_CATALOG_AUTOLOAD", "false")
-    monkeypatch.setenv("SATLAB_TICK_HZ", "20")
-    _clear_caches()
-    yield tmp_path
-    get_engine().dispose()
-    _clear_caches()
+    """Point the app at a throwaway DB and disable network catalog loading.
+
+    SQLite in ``tmp_path`` by default; a fresh Postgres schema when SATLAB_TEST_POSTGRES_URL is
+    set. Every DB setting is overridden here, so a developer's ``.env`` never reaches a real DB.
+    """
+    with _test_database(tmp_path) as database_url:
+        monkeypatch.setenv("SATLAB_DATABASE_URL", database_url)
+        monkeypatch.setenv("SATLAB_MIGRATION_DATABASE_URL", database_url)
+        monkeypatch.setenv("SATLAB_AUTO_MIGRATE", "true")
+        monkeypatch.setenv("SATLAB_CACHE_DIR", str(tmp_path / "cache"))
+        monkeypatch.setenv("SATLAB_CATALOG_AUTOLOAD", "false")
+        monkeypatch.setenv("SATLAB_TICK_HZ", "20")
+        _clear_caches()
+        try:
+            yield tmp_path
+        finally:
+            get_engine().dispose()
+            _clear_caches()
 
 
 @pytest.fixture

@@ -3,11 +3,21 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 VAR_DIR = BACKEND_DIR / "var"
+
+_POSTGRES_SCHEMES = ("postgres://", "postgresql://")
+
+
+def normalize_database_url(url: str) -> str:
+    """Route bare Postgres URLs (as Neon hands them out) to the installed psycopg 3 driver."""
+    for scheme in _POSTGRES_SCHEMES:
+        if url.startswith(scheme):
+            return "postgresql+psycopg://" + url.removeprefix(scheme)
+    return url
 
 
 class Settings(BaseSettings):
@@ -17,7 +27,10 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # SQLite by default (zero setup); Postgres (Neon) for persistent / production use.
     database_url: str = f"sqlite:///{VAR_DIR / 'satlab.db'}"
+    # Alembic only: the schema owner, on Neon's direct (non-pooled) host. Defaults to database_url.
+    migration_database_url: str | None = None
     auto_migrate: bool = True
     cache_dir: Path = VAR_DIR / "cache"
 
@@ -50,6 +63,11 @@ class Settings(BaseSettings):
     upcoming_chunk_size: int = Field(default=500, ge=1)
     upcoming_max_time_scale: float = 60.0  # above this the sweep can't keep up: list is paused
     upcoming_limit: int = Field(default=100, ge=1, le=500)
+
+    @field_validator("database_url", "migration_database_url")
+    @classmethod
+    def _normalize_database_url(cls, url: str | None) -> str | None:
+        return normalize_database_url(url) if url is not None else None
 
 
 @lru_cache
