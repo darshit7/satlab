@@ -63,6 +63,14 @@ server {
         include /etc/nginx/snippets/security-headers.conf;
         add_header Cache-Control "public, max-age=31536000, immutable" always;
         try_files $uri =404;
+
+        # nginx's mime.types doesn't know .mjs (MapLibre's module worker). Served as
+        # octet-stream with nosniff, the browser refuses to start the worker and the map breaks.
+        location ~ \.mjs$ {
+            types { }
+            default_type text/javascript;
+            try_files $uri =404;
+        }
     }
 
     location /satlab/api/ {

@@ -187,10 +187,13 @@ scripts/smoke.sh http://localhost:8080 http://localhost:8000 http://localhost:80
 - Rollback: `az containerapp update -n <app> -g rg-portfolio --image ghcr.io/darshit7/<image>:<older sha>`
   (both apps). Migrations are not rolled back automatically, which is why they must be expand/contract.
 - GitHub `production` environment (deploys from `main` only): secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
-  `AZURE_SUBSCRIPTION_ID` (OIDC, federated subject `repo:darshit7/satlab:environment:production`, role
-  scoped to the two satlab apps), `SATLAB_MIGRATION_DATABASE_URL` (prod owner, direct host); variables
-  `AZURE_RESOURCE_GROUP`, `AZURE_API_APP`, `AZURE_WEB_APP`, `NEXT_UMAMI_ID`, `PUBLIC_URL`. Repo secret
-  `SATLAB_TEST_POSTGRES_URL` (Neon `test`, direct host) feeds `backend-postgres`.
+  `AZURE_SUBSCRIPTION_ID` (OIDC, role scoped to the two satlab apps; GitHub presents the subject with
+  immutable IDs, `repo:darshit7@9577827/satlab@1413263673:environment:production`, so the Entra app
+  has a federated credential for that as well as for the plain `repo:darshit7/satlab:…` form),
+  `SATLAB_MIGRATION_DATABASE_URL` (prod owner, direct host); variables `AZURE_RESOURCE_GROUP`,
+  `AZURE_API_APP`, `AZURE_WEB_APP`, `PUBLIC_URL`. Repository level: secret `SATLAB_TEST_POSTGRES_URL`
+  (Neon `test`, direct host) for `backend-postgres`, and variable `NEXT_UMAMI_ID`. The `publish` job runs
+  outside the environment, so it only sees repository variables.
 - Azure: environment `cae-portfolio` (rg `rg-portfolio`), apps `ca-satlab-api` (internal ingress :8000,
   exactly 1 replica) and `ca-satlab-web` (external :8080, `satlab.darshitp.dev`, managed cert). The API's
   settings live on the app (`SATLAB_DATABASE_URL` as a secret ref, `SATLAB_AUTO_MIGRATE=false`,

@@ -46,6 +46,15 @@ asset=$(curl -s --max-time 10 "$web/satlab/" | grep -o '/satlab/assets/[^"]*\.js
 if [[ -n $asset ]]; then
   curl -s -D - -o /dev/null --max-time 10 "$web$asset" | grep -qi 'cache-control: .*immutable' \
     && pass "hashed assets are immutable" || fail "asset cache headers"
+  # Module workers (MapLibre) need a JavaScript MIME type: with nosniff, anything else breaks the map.
+  worker=$(curl -s --max-time 10 "$web$asset" | grep -o 'assets/[A-Za-z0-9_.-]*worker[A-Za-z0-9_.-]*\.mjs' | head -1)
+  if [[ -n $worker ]]; then
+    type=$(curl -s -o /dev/null -w '%{content_type}' --max-time 10 "$web/satlab/$worker")
+    [[ $type == text/javascript* || $type == application/javascript* ]] \
+      && pass "worker served as JavaScript ($type)" || fail "worker $worker served as '$type'"
+  else
+    fail "no .mjs worker referenced by $asset"
+  fi
 else
   fail "no JS asset referenced by index.html"
 fi
