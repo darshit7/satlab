@@ -1,12 +1,16 @@
 import type {
   CatalogStatus,
   GroundStation,
-  MissionSession,
   MissionSessionCreate,
+  MissionSessionCreated,
   PassPrediction,
   SatelliteSearchResult,
 } from '../types/api'
 import { appUrl } from '../lib/basePath'
+
+/** The session's capability token, sent on every session-scoped request. */
+type SessionRef = Pick<MissionSessionCreated, 'id' | 'token'>
+const owner = (session: SessionRef) => ({ 'X-Session-Token': session.token })
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(appUrl(path), {
@@ -35,11 +39,12 @@ export const api = {
     ),
   catalogStatus: () => request<CatalogStatus>('/api/catalog/status'),
   createSession: (body: MissionSessionCreate) =>
-    request<MissionSession>('/api/sessions', { method: 'POST', body: JSON.stringify(body) }),
-  endSession: (id: number) => request<void>(`/api/sessions/${id}/end`, { method: 'POST' }),
-  passes: (sessionId: number, noradId: number, start: string, hours = 24, signal?: AbortSignal) =>
+    request<MissionSessionCreated>('/api/sessions', { method: 'POST', body: JSON.stringify(body) }),
+  endSession: (session: SessionRef) =>
+    request<void>(`/api/sessions/${session.id}/end`, { method: 'POST', headers: owner(session) }),
+  passes: (session: SessionRef, noradId: number, start: string, hours = 24, signal?: AbortSignal) =>
     request<PassPrediction>(
-      `/api/sessions/${sessionId}/passes?${new URLSearchParams({ norad_id: String(noradId), start, hours: String(hours) })}`,
-      { signal },
+      `/api/sessions/${session.id}/passes?${new URLSearchParams({ norad_id: String(noradId), start, hours: String(hours) })}`,
+      { signal, headers: owner(session) },
     ),
 }

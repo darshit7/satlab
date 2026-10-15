@@ -137,5 +137,16 @@ export interface SetClock {
 
 export type ClientMessage = SetTracked | SetSelected | SetFilter | SetClock
 
-/** WebSocket close code: session not found or already ended (backend/app/main.py). */
+/** First message on every connection: the session's token (MissionSessionCreated.token). */
+export interface AuthMessage {
+  type: 'auth'
+  token: string
+}
+
+// WebSocket close codes (backend/app/main.py).
+/** No valid `auth` message in time. */
+export const WS_CLOSE_AUTH_REQUIRED = 4401
+/** Session not found, already ended, or not this token's session. */
 export const WS_CLOSE_SESSION_UNAVAILABLE = 4404
+/** The server is running its maximum number of sessions; retry later. */
+export const WS_CLOSE_SERVER_BUSY = 4503

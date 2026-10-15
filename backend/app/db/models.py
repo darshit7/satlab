@@ -70,6 +70,8 @@ class MissionSession(Base):
     time_scale: Mapped[float] = mapped_column(
         Float, nullable=False, default=1.0, server_default="1.0"
     )
+    # SHA-256 (hex) of the session's capability token; the token itself is never stored.
+    token_hash: Mapped[str | None] = mapped_column(String(64))
 
 
 class PassWindow(Base):

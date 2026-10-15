@@ -2,7 +2,8 @@
 
 Server → client: ``snapshot`` (every tick), ``ground_track`` and ``pass_arc`` (when (re)computed),
 ``upcoming`` (when the rising-soon list changes), ``error``.
-Client → server: ``set_tracked``, ``set_selected``, ``set_filter``, ``set_clock``.
+Client → server: ``auth`` (first message on every connection), then ``set_tracked``,
+``set_selected``, ``set_filter``, ``set_clock``.
 """
 
 from datetime import datetime
@@ -137,6 +138,19 @@ ServerMessage = Annotated[
 ]
 
 # ---------- client → server ----------
+
+MAX_SESSION_TOKEN_LENGTH = 128
+
+
+class Auth(BaseModel):
+    """First message on every connection: the token ``POST /api/sessions`` returned. Sent as a
+    message rather than in the URL so it never lands in proxy access logs."""
+
+    type: Literal["auth"] = "auth"
+    token: str = Field(min_length=1, max_length=MAX_SESSION_TOKEN_LENGTH)
+
+
+auth_message_adapter: TypeAdapter[Auth] = TypeAdapter(Auth)
 
 
 class SetTracked(BaseModel):

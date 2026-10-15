@@ -6,7 +6,7 @@ import type { ClockSample } from '../lib/time'
 import type {
   GroundStation,
   LocationInput,
-  MissionSession,
+  MissionSessionCreated,
   PassPrediction,
   SatelliteSummary,
   SessionSite,
@@ -42,7 +42,8 @@ interface MissionState {
   stations: GroundStation[]
   /** Where the current (or last) session observes from: resumed on reload. */
   site: SessionSite | null
-  session: MissionSession | null
+  /** The live session, with its capability token: in memory only, never persisted. */
+  session: MissionSessionCreated | null
   connection: ConnectionStatus
   snapshot: Snapshot | null
   clockSample: ClockSample | null
@@ -204,10 +205,10 @@ export const useMission = create<MissionState>()(
           socket?.close()
           socket = null
           pendingArcs = []
-          if (previous && !previous.ended_at) void api.endSession(previous.id).catch(() => {})
+          if (previous && !previous.ended_at) void api.endSession(previous).catch(() => {})
           set({ site, session: null, snapshot: null, clockSample: null, tracks: {}, arcs: {}, upcoming: null, passes: null })
 
-          let session: MissionSession
+          let session: MissionSessionCreated
           try {
             session = await api.createSession(site)
           } catch (err) {
@@ -217,12 +218,12 @@ export const useMission = create<MissionState>()(
             return
           }
           if (generation !== sessionGeneration) {
-            void api.endSession(session.id).catch(() => {}) // superseded by a newer call
+            void api.endSession(session).catch(() => {}) // superseded by a newer call
             return
           }
           // A custom location has been applied: it is no longer a draft.
           set((s) => ({ session, draft: 'location' in site ? null : s.draft }))
-          const current = new SessionSocket(session.id, {
+          const current = new SessionSocket(session.id, session.token, {
             onMessage,
             onStatus: (connection) => set({ connection }),
             onOpen: () => {
@@ -234,6 +235,7 @@ export const useMission = create<MissionState>()(
               // e.g. the server ended the session; start a fresh one at the same place
               if (socket === current) setTimeout(() => void get().startSession(site), 1000)
             },
+            onServerBusy: () => get().notify('Mission control is at capacity. Retrying shortly…'),
           })
           socket = current
           current.connect()
@@ -279,7 +281,7 @@ export const useMission = create<MissionState>()(
             passes: { noradId, loading: true, data: s.passes?.noradId === noradId ? s.passes.data : null, error: null },
           }))
           try {
-            const data = await api.passes(session.id, noradId, startIso, 24, controller.signal)
+            const data = await api.passes(session, noradId, startIso, 24, controller.signal)
             if (passesRequest === controller) set({ passes: { noradId, loading: false, data, error: null } })
           } catch (err) {
             if (controller.signal.aborted) return

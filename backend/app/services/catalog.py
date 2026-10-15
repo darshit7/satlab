@@ -23,6 +23,7 @@ from app.data.celestrak import CelestrakClient, CelestrakNotice, TleRecord, pars
 from app.data.classify import classify
 from app.db.models import Satellite
 from app.models.ws import SATELLITE_TYPES
+from app.services.ratelimit import TokenBucket
 from app.sim.fleet import Fleet, FleetRow
 from app.sim.propagate import Elements, elements_from_tle
 
@@ -152,6 +153,9 @@ class CatalogService:
         self._refresh_lock = asyncio.Lock()
         self._fleet_lock = asyncio.Lock()
         self._remote_queries: dict[str, float] = {}
+        # One budget shared by every client, so nobody can make us hammer Celestrak.
+        per_min = settings.remote_search_per_min
+        self._remote_budget = TokenBucket(rate=per_min / 60, burst=per_min)
         self._task: asyncio.Task[None] | None = None
 
     # ----- lifecycle -----
@@ -220,11 +224,12 @@ class CatalogService:
                 self.cache_file.touch()  # our copy is current
                 self.last_error = None
             else:
-                self.last_error = f"Celestrak: {notice}"
+                self.last_error = "Celestrak returned no data; using the cached catalog"
                 log.warning("Celestrak notice for group %r: %s", group, notice)
             return
         except Exception as exc:
-            self.last_error = f"Celestrak fetch failed: {exc}"
+            # Clients see a generic message; the upstream details stay in the server log.
+            self.last_error = "Celestrak fetch failed; using the cached catalog"
             log.warning("Celestrak fetch failed (%s); using cached catalog", exc)
             return
 
@@ -298,6 +303,9 @@ class CatalogService:
         now = time.monotonic()
         if now - self._remote_queries.get(key, -_REMOTE_QUERY_TTL_S) < _REMOTE_QUERY_TTL_S:
             return True  # already searched recently; results are in the DB
+        if not self._remote_budget.take():
+            log.info("Celestrak remote search skipped: global rate limit reached")
+            return False
         try:
             if q.isdigit():
                 records = await self._client.fetch_by_catnr(int(q))

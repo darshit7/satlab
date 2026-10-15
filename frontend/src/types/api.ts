@@ -61,6 +61,11 @@ export interface MissionSession extends LocationInput {
   time_scale: number
 }
 
+/** Returned once by POST /api/sessions. `token` proves ownership: keep it in memory only. */
+export interface MissionSessionCreated extends MissionSession {
+  token: string
+}
+
 export interface PassWindow {
   aos_time: string
   los_time: string
