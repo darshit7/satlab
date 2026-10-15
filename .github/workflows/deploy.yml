@@ -1,0 +1,132 @@
+# Ships main to Azure Container Apps: re-verify → push images to GHCR → migrate the production
+# database → roll out the API, then the web app → smoke-test the public URL.
+# One-time Azure/GitHub setup (OIDC app, `production` environment, secrets, variables): AGENTS.md §5.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
+  publish:
+    name: publish (${{ matrix.image }})
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - image: satlab-api
+            context: backend
+          - image: satlab-web
+            context: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          # Deploys pin the SHA tag, so every merge is a distinct revision and rollback is
+          # `az containerapp update --image ghcr.io/<owner>/<image>:<older sha>`.
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          # Public by design (it ends up in the page): only the web image uses it.
+          build-args: |
+            NEXT_UMAMI_ID=${{ vars.NEXT_UMAMI_ID }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,scope=${{ matrix.image }},mode=max
+
+  # The release step from deploy/neon.md: Alembic as the schema owner (direct host). The running
+  # app never gets this URL. Revisions must stay compatible with the code still running
+  # (expand/contract), because they apply before the new revision rolls out.
+  migrate:
+    needs: publish
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      SATLAB_MIGRATION_DATABASE_URL: ${{ secrets.SATLAB_MIGRATION_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
+          python-version: "3.12"
+      - run: uv sync --frozen --no-dev
+      - name: Refuse to run without the production migration URL
+        run: test -n "$SATLAB_MIGRATION_DATABASE_URL"
+      - run: uv run alembic upgrade head
+      - run: uv run alembic current
+
+  deploy:
+    needs: migrate
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ vars.PUBLIC_URL }}/satlab/
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RG: ${{ vars.AZURE_RESOURCE_GROUP }}
+      API_APP: ${{ vars.AZURE_API_APP }}
+      WEB_APP: ${{ vars.AZURE_WEB_APP }}
+      REGISTRY: ghcr.io/${{ github.repository_owner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      # The API first: the web app's proxy talks to whatever API revision is live.
+      - name: Roll out the API, then the web app
+        run: |
+          rollout() { # rollout <app> <image>: new revision on the SHA tag, wait until it's healthy
+            local app=$1 image=$2 latest ready health
+            az containerapp update -n "$app" -g "$RG" --image "$REGISTRY/$image:$GITHUB_SHA" -o none
+            for _ in $(seq 60); do
+              latest=$(az containerapp show -n "$app" -g "$RG" --query properties.latestRevisionName -o tsv)
+              ready=$(az containerapp show -n "$app" -g "$RG" --query properties.latestReadyRevisionName -o tsv)
+              health=$(az containerapp revision show -n "$app" -g "$RG" --revision "$latest" \
+                --query properties.healthState -o tsv)
+              if [[ $latest == "$ready" && $health == Healthy ]]; then
+                echo "$app: $latest is healthy"
+                return 0
+              fi
+              sleep 10
+            done
+            echo "::error::$app: revision $latest did not become healthy (health: $health)"
+            az containerapp logs show -n "$app" -g "$RG" --type system --tail 50 || true
+            return 1
+          }
+          rollout "$API_APP" satlab-api
+          rollout "$WEB_APP" satlab-web
+      - name: Smoke-test the public URL
+        run: scripts/smoke.sh "${{ vars.PUBLIC_URL }}"

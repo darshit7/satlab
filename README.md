@@ -40,18 +40,32 @@ Each stage uses its own Neon branch: `dev` for local development (`.env`), `test
 migrations run as the schema owner. Without any database URL the backend falls back to SQLite, so a
 fresh clone still runs. Setup, roles, migrations and verification are in [deploy/neon.md](deploy/neon.md).
 
-### Deploying under `/satlab/`
+### Containers and deployment
 
-The frontend is built for `https://<domain>/satlab/` (Vite `base`). Serve `frontend/dist/` at `/satlab/`, and
-reverse-proxy `/satlab/api` and `/satlab/ws` (WebSocket upgrade) to the backend **with the `/satlab` prefix
-stripped**. The backend's own routes are `/api` and `/ws`. Set `NEXT_UMAMI_ID` (your Umami Cloud website ID) when running
-`pnpm build` to include the analytics tracker; without it, no tracker is added.
+The app runs as two containers and is live at https://satlab.darshitp.dev/satlab/ (Azure Container Apps):
+
+- **`satlab-web`** ([frontend/Dockerfile](frontend/Dockerfile)): nginx serves the Vite build at `/satlab/`
+  (`/` redirects there) and reverse-proxies `/satlab/api` and `/satlab/ws` (WebSocket upgrade) to the API
+  **with the `/satlab` prefix stripped**. It also sets the CSP and other security headers.
+  `SATLAB_API_UPSTREAM` points it at the API. Build with `--build-arg NEXT_UMAMI_ID=<uuid>` to include
+  the Umami tracker; without it, no tracker is added.
+- **`satlab-api`** ([backend/Dockerfile](backend/Dockerfile)): uvicorn with one worker, run as a single
+  replica, because sessions live in memory. Only the web container can reach it.
+
+Run both locally and smoke-test them with the commands in [AGENTS.md §5](AGENTS.md#5-commands).
+
+Work happens on `dev`. A PR from `dev` to `main` must pass CI ([ci.yml](.github/workflows/ci.yml)):
+backend lint and tests on SQLite and Postgres, frontend lint, tests and build, and both images built
+and smoke-tested together. Merging runs [deploy.yml](.github/workflows/deploy.yml), which pushes
+both images to GHCR, migrates the production database, rolls out to Azure Container Apps and
+smoke-tests the public URL.
 
 ## Checks
 
 ```bash
 cd backend  && uv run pytest && uv run ruff check . && uv run ruff format --check .   # pytest uses the Neon test branch if .env.test exists
 cd frontend && pnpm test && pnpm lint && pnpm build
+scripts/smoke.sh http://localhost:8080 http://localhost:8000 http://localhost:8080   # against the local containers
 ```
 
 ## How it fits together

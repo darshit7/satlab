@@ -74,10 +74,13 @@ An end-to-end, real-time **satellite mission control simulator** (portfolio / le
 satellite-mission-control/
 ├─ CLAUDE.md                 # this file
 ├─ README.md
-├─ docker-compose.yml        # optional, for parity
+├─ docker-compose.yml        # optional, for parity (Phase 9)
 ├─ .env.example
-├─ deploy/                  # deploy runbooks (neon.md: Postgres setup, roles, migrations)
+├─ .github/workflows/        # ci.yml (PR checks), deploy.yml (main → GHCR → Azure Container Apps)
+├─ scripts/smoke.sh          # end-to-end smoke test of a running web+API pair (CI and post-deploy)
+├─ deploy/                  # deploy runbooks, gitignored/local (neon.md, azure.md)
 ├─ backend/
+│  ├─ Dockerfile             # API image: uvicorn, 1 worker, non-root
 │  ├─ pyproject.toml         # uv-managed
 │  ├─ alembic.ini
 │  ├─ migrations/            # Alembic revisions
@@ -105,6 +108,8 @@ satellite-mission-control/
 │     └─ services/           # orchestration between sim, db, ws
 │  └─ tests/
 └─ frontend/
+   ├─ Dockerfile             # web image: Vite build served by nginx-unprivileged
+   ├─ nginx/                 # nginx config template + security headers (CSP)
    ├─ package.json           # pnpm-managed
    ├─ vite.config.ts
    └─ src/
@@ -159,10 +164,38 @@ pnpm test                                  # vitest
 pnpm lint                                  # oxlint + tsc typecheck
 ```
 
-**Full stack (optional, Phase 9 — not scaffolded yet)**
+**Containers (Phase 2c)** — two images; build and smoke-test them locally before pushing:
 ```bash
-docker compose up --build
+docker build -t satlab-api:local backend
+docker build -t satlab-web:local frontend                # --build-arg NEXT_UMAMI_ID=<uuid> for analytics
+docker network create satlab
+docker run -d --name api --network satlab -p 8000:8000 -e SATLAB_AUTO_MIGRATE=true \
+  -e SATLAB_CATALOG_AUTOLOAD=false -e SATLAB_DOCS_ENABLED=false \
+  -e 'SATLAB_CORS_ORIGINS=["http://localhost:8080"]' satlab-api:local
+docker run -d --name web --network satlab -p 8080:8080 -e SATLAB_API_UPSTREAM=http://api:8000 satlab-web:local
+scripts/smoke.sh http://localhost:8080 http://localhost:8000 http://localhost:8080   # app: http://localhost:8080/satlab/
 ```
+
+**Branches, CI and deploy (Phase 2c)**
+- All work happens on **`dev`**; `main` only receives PRs from `dev` (merge commits, never squash, so the
+  branches don't diverge). `main`'s ruleset requires the CI checks `source-branch`, `backend`,
+  `backend-postgres`, `frontend` and `images` (`.github/workflows/ci.yml`; `images` builds both images and
+  runs `scripts/smoke.sh` against them).
+- A merge to `main` runs `.github/workflows/deploy.yml`: CI again → push `ghcr.io/darshit7/satlab-api` and
+  `satlab-web` (`:<sha>`, `:latest`) → `alembic upgrade head` on Neon `production` as the owner (the release
+  step) → `az containerapp update` the API, then the web app, by SHA → `scripts/smoke.sh` on the public URL.
+- Rollback: `az containerapp update -n <app> -g rg-portfolio --image ghcr.io/darshit7/<image>:<older sha>`
+  (both apps). Migrations are not rolled back automatically, which is why they must be expand/contract.
+- GitHub `production` environment (deploys from `main` only): secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
+  `AZURE_SUBSCRIPTION_ID` (OIDC, federated subject `repo:darshit7/satlab:environment:production`, role
+  scoped to the two satlab apps), `SATLAB_MIGRATION_DATABASE_URL` (prod owner, direct host); variables
+  `AZURE_RESOURCE_GROUP`, `AZURE_API_APP`, `AZURE_WEB_APP`, `NEXT_UMAMI_ID`, `PUBLIC_URL`. Repo secret
+  `SATLAB_TEST_POSTGRES_URL` (Neon `test`, direct host) feeds `backend-postgres`.
+- Azure: environment `cae-portfolio` (rg `rg-portfolio`), apps `ca-satlab-api` (internal ingress :8000,
+  exactly 1 replica) and `ca-satlab-web` (external :8080, `satlab.darshitp.dev`, managed cert). The API's
+  settings live on the app (`SATLAB_DATABASE_URL` as a secret ref, `SATLAB_AUTO_MIGRATE=false`,
+  `SATLAB_CORS_ORIGINS`, `SATLAB_DOCS_ENABLED=false`); `az containerapp update --image` keeps them.
+  One-time setup steps: `deploy/azure.md` (local).
 
 ---
 
@@ -412,11 +445,12 @@ Still to do, when the feature arrives:
 
 Each phase is a **vertical slice** (backend + WebSocket + UI) that runs on its own. Mark the current phase here as you go.
 
-> **Current phase: _Phase 2b — persistent Postgres on Neon (implemented, runnable end-to-end on SQLite or Postgres)._**
+> **Current phase: _Phase 2c — containers + CI/CD to Azure Container Apps (pulled forward from Phase 9)._**
 
 - **Phase 1 — Walking skeleton.** TLE fetch (Celestrak) + SGP4; topocentric geometry; accelerable sim clock; WebSocket snapshot. Frontend: location (geolocation + map click + lat/lon), **full catalog search**, 2D ground track moving live, az/el/range readout. DB: `ground_station`, `satellite`, `mission_session`.
 - **Phase 2 — Visibility & passes.** Visible-set (horizon mask): once a location is set, the server streams **every satellite currently above the mask by default**, with no search needed (design §5.3); search/track still work alongside it. AOS/LOS prediction (+max elevation/azimuths); polar sky plot + all-sky view; filterable list (type, min elevation, time-to-AOS, SAR-capable); selection linked across the map and both sky views. DB: `pass_window`.
 - **Phase 2b — Persistent Postgres (Neon).** Pulled forward from Phase 7 (2026-10-15) ahead of the Azure deploy: a container's filesystem is ephemeral, so SQLite can't persist there. psycopg 3 driver; Postgres engine pooling for Neon's auto-suspend; Alembic on Neon (owner role, direct host); least-privilege app role (pooled host); opt-in Postgres test run. No schema, contract or UI changes; SQLite stays the local/test default. Runbook: [deploy/neon.md](deploy/neon.md).
+- **Phase 2c — Containers + CI/CD (Azure).** Pulled forward from Phase 9 (2026-10-16). API and web images; PR checks on `dev → main`; merge to `main` pushes to GHCR, migrates Neon `production` and rolls out to Azure Container Apps at `https://satlab.darshitp.dev/satlab/`. Public without login, so the §12.11 gaps were closed first: per-session capability tokens, WS `Origin` check + first-message auth + rate/size limits, active-session cap, Celestrak global rate limit, generic upstream errors, `/docs` off, CSP and security headers in nginx.
 - **Phase 3 — Systems & link.** Link budget (margin dB + Doppler) + subsystem models; RAG indicators + rollup bar; sky-plot/all-sky dot colors and the inner "strong-link" region driven by the same link state (design §5.4, §6). DB: `link_profile`.
 - **Phase 4 — Communications.** Per-satellite AX.25/CCSDS templates; command uplink (sim) + telemetry downlink; SatNOGS real-frame replay; packet animation; channel effects. **3D globe (Cesium) + the visibility "V" cone** (design §5.3–5.4): outer cone = above the horizon mask, inner cone = green-margin region; satellites enter at one rim (AOS) and leave at the far rim (LOS), changing color at cone boundaries; the full orbital arc is drawn with the out-of-window part faded; the user can lock onto one active contact while the others dim. DB: `packet_template`, `command`, `telemetry_frame`.
 - **Phase 5 — Scheduling & alarms.** Queue command for a future window; AOS trigger; auto system check; transmit-if-green / alarm-if-red. DB: `alarm` (+ `command.scheduled_aos`).
@@ -479,8 +513,8 @@ Write code as if the Phase 9 deploy already exists.
 - **Check the `Origin` header on WebSocket upgrade** against the configured allow-list (`SATLAB_CORS_ORIGINS`). CORS does **not** protect WebSockets, and any web page can open a socket to `localhost`.
 - **Cap message size and rate per connection.** Clients get a sensible max frame size and a per-connection command rate. A client that floods is disconnected, not queued.
 - **CORS stays an explicit allow-list.** Never `allow_origins=["*"]` together with credentials, and never reflect the request origin.
-- **Bind to `127.0.0.1` in development** (uvicorn's and Vite's defaults). Don't run `--host 0.0.0.0` until auth exists (Phase 9).
-- **Resource IDs aren't secrets.** Session and station IDs are sequential integers. Once there is more than one user, every session-scoped read or write checks ownership. Don't rely on IDs being hard to guess.
+- **Bind to `127.0.0.1` in development** (uvicorn's and Vite's defaults). `--host 0.0.0.0` only inside the API container, whose ingress is internal (reachable from the web container, not the internet).
+- **Resource IDs aren't secrets.** Session and station IDs are sequential integers. Every session-scoped read or write checks the session's capability token (`X-Session-Token` on REST, the `auth` message on the WebSocket), and an unknown session and a wrong token get the same answer. Stations are read-only presets. Don't rely on IDs being hard to guess.
 - **Throttle anything that fans out to a third party.** Remote Celestrak searches, SatNOGS and STAC queries go through a cache plus a global rate limit, so a client can't make our server abuse an upstream API (or get our IP banned).
 
 ### 12.4 External data is hostile input
@@ -507,7 +541,7 @@ Write code as if the Phase 9 deploy already exists.
 - **Treat server messages as untrusted input too.** Only render fields that the `src/types/` contract defines; don't spread unknown fields into props or DOM attributes.
 - **External links** use `rel="noopener noreferrer"` with `target="_blank"`, and only `https:` URLs. Never build an `href` from data without checking the scheme (no `javascript:` URLs).
 - **`localStorage` holds preferences only** (theme, last station, tracked list): nothing secret, nothing the server must trust. Every read is wrapped in `try/catch` and validated, as `src/lib/theme.ts` does.
-- **CSP-ready:** no new inline scripts or inline event-handler attributes. The single inline pre-paint theme script in `index.html` is the documented exception; it gets a CSP hash when a Content-Security-Policy is added (Phase 9), alongside `https://cloud.umami.is` in `script-src`/`connect-src` for analytics (§12.8).
+- **CSP:** no new inline scripts or inline event-handler attributes. The single inline pre-paint theme script in `index.html` is the documented exception: the web image's build hashes it into the nginx `Content-Security-Policy` (`frontend/scripts/csp-script-hashes.mjs`, `frontend/nginx/security-headers.conf`), so the hash can't go stale. A new external host (tiles, analytics) must be added to that CSP too; `cloud.umami.is` (script) and `gateway.umami.is` (events) are there for analytics (§12.8).
 
 ### 12.8 Dependencies (no extra tooling, just habits)
 - **Lockfiles are the source of truth and are committed** (`backend/uv.lock`, `frontend/pnpm-lock.yaml`). Install with `uv sync` / `pnpm install`; never `pip install` into the venv by hand.
@@ -516,21 +550,17 @@ Write code as if the Phase 9 deploy already exists.
 - **Upgrade deliberately:** bump versions in a dedicated change and rerun the full test suite. Don't leave the code pinned to versions with known security fixes available.
 - **No CDN `<script>` tags.** Everything the frontend runs is bundled from the lockfile. The one documented exception is the Umami Cloud tracker (`https://cloud.umami.is/script.js`, `defer`): a fixed host in `vite.config.ts`, injected only into production builds and only when `NEXT_UMAMI_ID` is set (validated as a UUID). Don't add others.
 
-### 12.9 Deploy-time (Phase 9, recorded now so it isn't forgotten)
-- Authentication before binding to a public interface; TLS everywhere (`wss://`, `https://`).
-- Security headers (CSP, `X-Content-Type-Options`, `Referrer-Policy`, `frame-ancestors`); disable FastAPI's `/docs` in production or put it behind auth.
-- Containers run as a non-root user with no secrets baked into images; secrets come from the platform's secret store.
+### 12.9 Deploy-time (in force since Phase 2c)
+- **Public without login is accepted for now** (2026-10-16), because a visitor can only drive their own simulated session: per-session capability tokens, the WS `Origin` check, per-connection rate and size limits, a cap on concurrent sessions (`SATLAB_MAX_ACTIVE_SESSIONS`), a global Celestrak budget and nginx per-IP limits bound what one client can do. **Authentication is required before any feature that writes shared state, stores user data or needs per-user ownership** (accounts, saved missions, SAR tasking quotas).
+- TLS everywhere (`wss://`, `https://`): ACA terminates TLS with a managed certificate; the API is internal-only.
+- Security headers (CSP, `X-Content-Type-Options`, `Referrer-Policy`, `frame-ancestors`) come from nginx; FastAPI's `/docs`, `/redoc` and `/openapi.json` are off in production (`SATLAB_DOCS_ENABLED=false`).
+- Containers run as a non-root user with no secrets baked into images; secrets come from the platform's secret store (ACA secrets, GitHub environment secrets).
 
 ### 12.10 Safety boundary (non-negotiable)
 - **This software never transmits RF.** Uplink is simulated (§1). Never add code that keys a real transmitter or SDR, or sends commands to a real spacecraft or ground-station network: that is illegal without a licence and authorisation. Reading public data (SatNOGS archives, STAC) is fine; writing to those services is not part of this project.
 
 ### 12.11 Known gaps (current code vs these rules)
-Acceptable while the app is local-only and single-user. Close each one when touching that code, and all of them before Phase 9:
-- WebSocket upgrade does not check `Origin` (§12.3).
-- No per-connection WebSocket message-size or rate limit beyond uvicorn's defaults (§12.3).
-- Remote Celestrak search has a per-query cache but no global rate limit (§12.3).
-- `/api/catalog/status` returns raw upstream exception text in `last_error` (§12.1).
-- Sessions and stations have no ownership checks (fine until multi-user, §12.3).
+None open: the gaps listed here were closed before the Phase 2c public deploy (2026-10-16). Record new ones as they're found, and close them when touching that code.
 
 When you close a gap, delete its line here.
 
@@ -562,3 +592,5 @@ When you close a gap, delete its line here.
 - **Sky views are Canvas 2D without D3**: the projection is a few lines (`frontend/src/lib/sky.ts`); D3 joins when a view earns it.
 - **Base path `/satlab/` + Umami analytics** (2026-10-14). The app is published at `https://<domain>/satlab/` next to the author's site and reports to the same Umami website, so pageviews land as `/satlab` and `/satlab/<page>`. Vite `base` is `/satlab/`; every same-origin URL (REST, WebSocket) goes through `appUrl()` (`frontend/src/lib/basePath.ts`); the dev proxy (and the production reverse proxy) strip the prefix, so the backend routes stay at `/api` and `/ws`. The Umami website ID comes from `NEXT_UMAMI_ID` (read only in `vite.config.ts`; `envPrefix` stays `VITE_`), is public by design, and the tracker is injected at build time only, so `pnpm dev` isn't counted. Future client-side routes are tracked automatically (Umami follows `history.pushState`).
 - **Phase 2b — Postgres on Neon, pulled forward from Phase 7** (2026-10-15). Reason: the Azure deploy needs a database that survives container restarts, and the code was already dialect-ready. Neon in every stage, one branch each: `dev` (local `.env`), `test` (`.env.test`), `production` (2026-10-16); SQLite is only the fallback when no URL is configured. Two URLs: `SATLAB_DATABASE_URL` (app, `satlab_app` role, Neon pooled host) and `SATLAB_MIGRATION_DATABASE_URL` (Alembic only, owner role, direct host; falls back to the app URL). Bare `postgres(ql)://` URLs are normalized to `postgresql+psycopg://`; Alembic escapes `%` for configparser. `SATLAB_TEST_POSTGRES_URL` (shell or `.env.test`, never `.env`, so dev credentials can't drive the tests) runs the whole suite on Postgres with one throwaway schema per test via `search_path`. No schema or contract changes; existing SQLite data isn't migrated (the catalog re-ingests, stations re-seed).
+- **Phase 2c — container deploy on Azure Container Apps** (2026-10-16). Two images: `satlab-web` (nginx-unprivileged serving the Vite build at `/satlab/`, `/` → 302 `/satlab/`, and proxying `/satlab/api` → `/api` and `/satlab/ws` → `/ws` with WebSocket upgrade; `SATLAB_API_UPSTREAM`, default `http://ca-satlab-api`) and `satlab-api` (uvicorn, **one worker, exactly one replica**: sessions, the sim loop and the fleet are in-memory, so a second replica would split WebSocket sessions; scaling out needs shared session state first). Both run in the existing `cae-portfolio` environment next to the portfolio site; only the web app has external ingress (`satlab.darshitp.dev`, the URL the portfolio already links to; the `/satlab/` base path is kept, so Umami paths are unchanged). Images live in GHCR, deployed by SHA tag. Migrations are a CI release step before rollout (owner URL only in the GitHub `production` environment), so every revision must be expand/contract-compatible with the code still running.
+- **Session capability tokens + WS auth** (2026-10-16). `POST /api/sessions` returns `MissionSessionCreated` = `MissionSessionOut` + `token` (`secrets.token_urlsafe(32)`), once; the DB keeps only `mission_session.token_hash` (SHA-256 hex, nullable; older sessions without one can't be attached and clients start a new session). `GET /api/sessions/{id}`, `POST …/end` and `GET …/passes` require `X-Session-Token`; missing/wrong token = the same 404 as an unknown session. WebSocket: the first client message must be `auth {token}` within `SATLAB_WS_AUTH_TIMEOUT_S` (default 5 s), sent as a message so the token never appears in URLs or proxy logs. Close codes: `4401` no valid `auth` (client treats it like 4404), `4404` unknown/ended/not-yours, `4503` at `SATLAB_MAX_ACTIVE_SESSIONS` (client keeps its backoff and shows "at capacity" once), `1008` foreign `Origin` (refused before accept, an HTTP 403) or over the per-connection message rate (`SATLAB_WS_MESSAGES_PER_S` / `SATLAB_WS_MESSAGE_BURST`). Frames are capped at 64 KiB (`uvicorn --ws-max-size`). The frontend keeps the token in memory only (the store's `session`, which isn't persisted).
