@@ -54,7 +54,8 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-          # Public by design (it ends up in the page): only the web image uses it.
+          # Public by design (it ends up in the page): only the web image uses it. A repository
+          # variable: this job has no environment, so environment variables aren't visible here.
           build-args: |
             NEXT_UMAMI_ID=${{ vars.NEXT_UMAMI_ID }}
           cache-from: type=gha,scope=${{ matrix.image }}
