@@ -195,7 +195,9 @@ scripts/smoke.sh http://localhost:8080 http://localhost:8000 http://localhost:80
   exactly 1 replica) and `ca-satlab-web` (external :8080, `satlab.darshitp.dev`, managed cert). The API's
   settings live on the app (`SATLAB_DATABASE_URL` as a secret ref, `SATLAB_AUTO_MIGRATE=false`,
   `SATLAB_CORS_ORIGINS`, `SATLAB_DOCS_ENABLED=false`); `az containerapp update --image` keeps them.
-  One-time setup steps: `deploy/azure.md` (local).
+  Images stay **private** in GHCR. Both apps pull them with the same registry credential as `ca-portfolio`
+  (user `darshit7`, a classic PAT with `read:packages`, app secret `ghcrio-darshit7`). Rotate it on all
+  three apps together. One-time setup steps: `deploy/azure.md` (local).
 
 ---
 
