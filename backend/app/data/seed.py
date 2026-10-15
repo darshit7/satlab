@@ -12,7 +12,7 @@ SEED_DIR = Path(__file__).parent / "seed"
 
 
 def seed_ground_stations(db: Session) -> int:
-    data = json.loads((SEED_DIR / "ground_stations.json").read_text())
+    data = json.loads((SEED_DIR / "ground_stations.json").read_text(encoding="utf-8"))
     existing = set(db.scalars(select(GroundStation.name)))
     added = 0
     for entry in data["ground_stations"]:

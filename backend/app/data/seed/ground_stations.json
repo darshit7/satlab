@@ -1,8 +1,33 @@
 {
-  "_comment": "Seed ground stations. Coordinates are approximate public locations of each facility (WGS84). Seeded by name; editing an existing entry here does not update rows already in the DB.",
+  "_comment": "Seed ground stations, grouped by continent (new rows get ids in file order, which is the picker order). Coordinates are approximate public locations of each facility (WGS84). Seeded by name; editing an existing entry here does not update rows already in the DB, and renaming one adds a new row.",
   "ground_stations": [
     { "name": "ISRO ISTRAC, Bengaluru", "lat_deg": 13.0347, "lon_deg": 77.5124, "alt_m": 920 },
     { "name": "KSAT SvalSat, Svalbard", "lat_deg": 78.2297, "lon_deg": 15.4078, "alt_m": 500 },
-    { "name": "NASA Wallops, Virginia", "lat_deg": 37.9402, "lon_deg": -75.4664, "alt_m": 10 }
+    { "name": "NASA Wallops, Virginia", "lat_deg": 37.9402, "lon_deg": -75.4664, "alt_m": 10 },
+
+    { "name": "ISRO SDSC SHAR, Sriharikota", "lat_deg": 13.7199, "lon_deg": 80.2304, "alt_m": 10 },
+    { "name": "JAXA Usuda, Japan", "lat_deg": 36.1325, "lon_deg": 138.3622, "alt_m": 1456 },
+
+    { "name": "ESA Kiruna, Sweden", "lat_deg": 67.8571, "lon_deg": 20.9643, "alt_m": 402 },
+    { "name": "DLR Weilheim, Germany", "lat_deg": 47.8813, "lon_deg": 11.0784, "alt_m": 590 },
+    { "name": "FMI Sodankylä, Finland", "lat_deg": 67.3662, "lon_deg": 26.629, "alt_m": 180 },
+    { "name": "KSAT Tromsø, Norway", "lat_deg": 69.6623, "lon_deg": 18.9406, "alt_m": 115 },
+    { "name": "TU Delft, Netherlands", "lat_deg": 51.999, "lon_deg": 4.3733, "alt_m": 90 },
+
+    { "name": "NASA Goldstone, California", "lat_deg": 35.4259, "lon_deg": -116.8895, "alt_m": 1002 },
+    { "name": "UAF Alaska Satellite Facility, Fairbanks", "lat_deg": 64.8594, "lon_deg": -147.8492, "alt_m": 180 },
+
+    { "name": "ESA Kourou, French Guiana", "lat_deg": 5.2514, "lon_deg": -52.8047, "alt_m": 14 },
+    { "name": "ESA Malargüe, Argentina", "lat_deg": -35.776, "lon_deg": -69.3982, "alt_m": 1550 },
+
+    { "name": "SANSA Hartebeesthoek, South Africa", "lat_deg": -25.8897, "lon_deg": 27.6853, "alt_m": 1415 },
+    { "name": "ASI Malindi, Kenya", "lat_deg": -2.9956, "lon_deg": 40.1947, "alt_m": 12 },
+    { "name": "ESA Maspalomas, Gran Canaria", "lat_deg": 27.7629, "lon_deg": -15.6338, "alt_m": 205 },
+    { "name": "GRAO Kuntunse, Ghana", "lat_deg": 5.7505, "lon_deg": -0.3051, "alt_m": 100 },
+
+    { "name": "NASA Canberra DSCC, Australia", "lat_deg": -35.4022, "lon_deg": 148.9813, "alt_m": 689 },
+    { "name": "ESA New Norcia, Australia", "lat_deg": -31.0482, "lon_deg": 116.1915, "alt_m": 252 },
+
+    { "name": "KSAT TrollSat, Antarctica", "lat_deg": -72.0117, "lon_deg": 2.535, "alt_m": 1270 }
   ]
 }

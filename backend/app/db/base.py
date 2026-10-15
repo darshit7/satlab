@@ -7,7 +7,7 @@ from typing import Any
 
 from sqlalchemy import Dialect, String, create_engine, event
 from sqlalchemy.dialects.postgresql import TIMESTAMP
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.types import TypeDecorator, TypeEngine
 
@@ -18,7 +18,7 @@ class UTCDateTime(TypeDecorator[datetime]):
     """Timezone-aware UTC datetime.
 
     SQLite: ISO-8601 TEXT (e.g. ``2026-10-10T12:00:00.000000+00:00``), which sorts correctly.
-    Postgres (Phase 7): ``TIMESTAMPTZ``. Values are always returned as aware UTC datetimes.
+    Postgres: ``TIMESTAMPTZ``. Values are always returned as aware UTC datetimes.
     """
 
     impl = String(32)
@@ -55,12 +55,21 @@ class Base(DeclarativeBase):
 
 @lru_cache
 def get_engine() -> Engine:
-    url = get_settings().database_url
-    connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
-    engine = create_engine(url, connect_args=connect_args)
-    if engine.dialect.name == "sqlite":
+    url = make_url(get_settings().database_url)
+    if url.get_backend_name() == "sqlite":
+        engine = create_engine(url, connect_args={"check_same_thread": False})
         event.listen(engine, "connect", _sqlite_pragmas)
-    return engine
+        return engine
+    # Postgres (Neon): the compute auto-suspends when idle and drops its connections, so check
+    # connections on checkout and recycle them well before the server side goes away.
+    return create_engine(
+        url,
+        pool_pre_ping=True,
+        pool_recycle=300,
+        pool_size=5,
+        max_overflow=5,
+        connect_args={"connect_timeout": 10},
+    )
 
 
 def _sqlite_pragmas(dbapi_connection: Any, _record: Any) -> None:
