@@ -25,10 +25,10 @@ expect() { # expect <status> <description> <curl args…>
   if [[ $got == "$want" ]]; then pass "$want $what"; else fail "$what: got $got, want $want"; fi
 }
 json() { python3 -c "import json, sys; print(json.load(sys.stdin)$1)"; }
-ws_handshake() { # the HTTP status of a WebSocket upgrade; the socket then idles, so cut it short
+ws_handshake() { # HTTP status of a WebSocket upgrade (key: the RFC 6455 sample, 16 bytes); then cut it short
   curl -s -o /dev/null -w '%{http_code}' --max-time 3 --http1.1 \
     -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
-    -H 'Sec-WebSocket-Key: c2F0bGFiLXNtb2tlLXRlc3Q=' "$@" || true
+    -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$@" || true
 }
 
 # --- static site and headers ---
@@ -64,10 +64,10 @@ if [[ -n $id && -n $token ]]; then
   pass "session created with a token"
   expect 404 "session hidden without its token" "$web/satlab/api/sessions/$id"
   expect 200 "session readable with its token" -H "X-Session-Token: $token" "$web/satlab/api/sessions/$id"
-  [[ $(ws_handshake -H "Origin: $origin" "$web/satlab/ws/sessions/$id") == 101 ]] \
-    && pass "101 WebSocket upgrade via proxy" || fail "WebSocket upgrade via proxy"
-  [[ $(ws_handshake -H 'Origin: https://evil.example' "$web/satlab/ws/sessions/$id") == 403 ]] \
-    && pass "403 WebSocket from a foreign Origin" || fail "foreign Origin not refused"
+  got=$(ws_handshake -H "Origin: $origin" "$web/satlab/ws/sessions/$id")
+  [[ $got == 101 ]] && pass "101 WebSocket upgrade via proxy" || fail "WebSocket upgrade via proxy: got $got"
+  got=$(ws_handshake -H 'Origin: https://evil.example' "$web/satlab/ws/sessions/$id")
+  [[ $got == 403 ]] && pass "403 WebSocket from a foreign Origin" || fail "foreign Origin: got $got, want 403"
   expect 204 "session ended" -X POST -H "X-Session-Token: $token" "$web/satlab/api/sessions/$id/end"
 else
   fail "session create: $session"
