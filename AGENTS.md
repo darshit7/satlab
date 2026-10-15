@@ -48,8 +48,8 @@ An end-to-end, real-time **satellite mission control simulator** (portfolio / le
 | Orbital math | **skyfield** (+ **sgp4**) |
 | ORM / migrations | **SQLAlchemy 2.x** + **Alembic** |
 | Validation / contract | **pydantic v2** |
-| DB (Phase 1–6) | **SQLite** |
-| DB (Phase 7+) | **PostgreSQL** + **PostGIS** (optional **TimescaleDB**) |
+| DB (local dev / tests) | **SQLite** (zero setup) |
+| DB (persistent / prod, Phase 2b+) | **PostgreSQL on Neon** via **psycopg 3**; **PostGIS** at Phase 7 (optional **TimescaleDB**) |
 | Frontend | **React + TypeScript + Vite** |
 | JS package mgr | **pnpm** |
 | 3D globe | **CesiumJS** via **Resium** |
@@ -76,6 +76,7 @@ satellite-mission-control/
 ├─ README.md
 ├─ docker-compose.yml        # optional, for parity
 ├─ .env.example
+├─ deploy/                  # deploy runbooks (neon.md: Postgres setup, roles, migrations)
 ├─ backend/
 │  ├─ pyproject.toml         # uv-managed
 │  ├─ alembic.ini
@@ -133,12 +134,20 @@ satellite-mission-control/
 cd backend
 uv sync                                   # install deps
 uv run uvicorn app.main:app --reload      # dev server (http://localhost:8000); auto-migrates + seeds
-uv run pytest                             # tests (no network: Celestrak is mocked)
+uv run pytest                             # tests: Neon `test` branch if `.env.test` exists, else SQLite (Celestrak always mocked)
 uv run ruff check . && uv run ruff format .
 uv run alembic revision --autogenerate -m "msg"
 uv run alembic upgrade head               # apply migrations (also runs on startup if SATLAB_AUTO_MIGRATE)
 ```
 Runtime data (SQLite DB, Celestrak TLE cache) lives in `backend/var/` (gitignored, disposable).
+
+**Postgres (Neon), one branch per stage** — full runbook in [deploy/neon.md](deploy/neon.md).
+- `.env` (dev → `dev` branch): `SATLAB_DATABASE_URL` = least-privilege `satlab_app` on the **pooled** host,
+  `SATLAB_MIGRATION_DATABASE_URL` = `neondb_owner` on the **direct** host; migrates at startup.
+- `.env.test` (pytest → `test` branch): `SATLAB_TEST_POSTGRES_URL` = owner, **direct** host; one throwaway schema per test.
+- Production (`production` branch): the app gets only the `satlab_app` pooled URL with `SATLAB_AUTO_MIGRATE=false`;
+  migrations are a release step: `uv run --env-file ../.env.production alembic upgrade head` (owner, direct host).
+- With no URL configured, the backend and tests fall back to SQLite.
 
 **Frontend**
 ```bash
@@ -201,8 +210,8 @@ docker compose up --build
 
 ### 8.1 Principles
 - **Event sourcing at the core.** `event` is an append-only, ordered log and the source of truth for playback. Other operational tables are convenient projections/queryable views of what also appears as events; if they ever disagree, the event log is authoritative.
-- **SQLite now, Postgres+PostGIS at Phase 7.** All access via SQLAlchemy 2.x; migrations via Alembic. The swap is a connection string + a few type adjustments (see §8.5).
-- **Geometry:** store AOI/footprints as **bbox columns + GeoJSON (JSON)** under SQLite; switch to real **PostGIS `geometry`** columns at Phase 7 for spatial queries.
+- **SQLite for local dev/tests, Postgres (Neon) for persistence/production — since Phase 2b.** All access via SQLAlchemy 2.x; migrations via Alembic; the URL picks the dialect. Every change must work on both (the opt-in Postgres test run checks this, §5).
+- **Geometry:** store AOI/footprints as **bbox columns + GeoJSON (JSON)**; at Phase 7 enable **PostGIS** on the Neon DB and use real `geometry` columns for spatial queries (SQLite keeps the bbox/JSON fallback).
 - **Rasters on disk, not in DB.** Store file paths / object-store keys only.
 
 ### 8.2 Entity groups
@@ -385,12 +394,16 @@ CREATE TABLE change_result (
   - `sar_status` → `{ task_id, from, to }`
 - Replaying a session = reading `event` for a `session_id` ordered by `seq` and re-emitting through the same renderer. Nothing else is needed for playback.
 
-### 8.5 SQLite → Postgres migration notes (Phase 7)
-- Timestamps: ISO-8601 `TEXT` → `TIMESTAMPTZ`.
-- Booleans: `INTEGER 0/1` → `BOOLEAN`.
-- `JSON` → `JSONB`; add GIN indexes where you query inside payloads.
-- `aoi_geojson` / `footprint`: JSON → **PostGIS `geometry(Polygon, 4326)`**; add GiST indexes; replace bbox filtering with `ST_Intersects`.
-- Optionally convert `event` and `telemetry_frame` to **TimescaleDB hypertables** keyed on time if volume warrants.
+### 8.5 SQLite ↔ Postgres notes
+Already handled (Phase 2b):
+- Timestamps: `UTCDateTime` is ISO-8601 `TEXT` on SQLite and `TIMESTAMPTZ` on Postgres.
+- Booleans: `Boolean` maps to `INTEGER 0/1` / `BOOLEAN`; upserts pick `sqlite_insert` / `pg_insert` by dialect.
+- Engine: Postgres connections use `pool_pre_ping` + recycling (Neon suspends idle compute); bare `postgresql://` URLs are routed to psycopg 3.
+
+Still to do, when the feature arrives:
+- `JSON` → `JSONB` on Postgres; add GIN indexes where you query inside payloads.
+- Phase 7: `aoi_geojson` / `footprint` → **PostGIS `geometry(Polygon, 4326)`**; add GiST indexes; replace bbox filtering with `ST_Intersects`.
+- Phase 9 (optional): `event` / `telemetry_frame` as **TimescaleDB hypertables** if volume warrants (Neon ships only the Apache-2 TimescaleDB feature set — verify then).
 - Keep the ORM dialect-agnostic; gate Postgres-only types behind the configured dialect so SQLite dev still works.
 
 ---
@@ -399,17 +412,18 @@ CREATE TABLE change_result (
 
 Each phase is a **vertical slice** (backend + WebSocket + UI) that runs on its own. Mark the current phase here as you go.
 
-> **Current phase: _Phase 2 — visibility & passes (implemented, runnable end-to-end)._**
+> **Current phase: _Phase 2b — persistent Postgres on Neon (implemented, runnable end-to-end on SQLite or Postgres)._**
 
 - **Phase 1 — Walking skeleton.** TLE fetch (Celestrak) + SGP4; topocentric geometry; accelerable sim clock; WebSocket snapshot. Frontend: location (geolocation + map click + lat/lon), **full catalog search**, 2D ground track moving live, az/el/range readout. DB: `ground_station`, `satellite`, `mission_session`.
 - **Phase 2 — Visibility & passes.** Visible-set (horizon mask): once a location is set, the server streams **every satellite currently above the mask by default**, with no search needed (design §5.3); search/track still work alongside it. AOS/LOS prediction (+max elevation/azimuths); polar sky plot + all-sky view; filterable list (type, min elevation, time-to-AOS, SAR-capable); selection linked across the map and both sky views. DB: `pass_window`.
+- **Phase 2b — Persistent Postgres (Neon).** Pulled forward from Phase 7 (2026-10-15) ahead of the Azure deploy: a container's filesystem is ephemeral, so SQLite can't persist there. psycopg 3 driver; Postgres engine pooling for Neon's auto-suspend; Alembic on Neon (owner role, direct host); least-privilege app role (pooled host); opt-in Postgres test run. No schema, contract or UI changes; SQLite stays the local/test default. Runbook: [deploy/neon.md](deploy/neon.md).
 - **Phase 3 — Systems & link.** Link budget (margin dB + Doppler) + subsystem models; RAG indicators + rollup bar; sky-plot/all-sky dot colors and the inner "strong-link" region driven by the same link state (design §5.4, §6). DB: `link_profile`.
 - **Phase 4 — Communications.** Per-satellite AX.25/CCSDS templates; command uplink (sim) + telemetry downlink; SatNOGS real-frame replay; packet animation; channel effects. **3D globe (Cesium) + the visibility "V" cone** (design §5.3–5.4): outer cone = above the horizon mask, inner cone = green-margin region; satellites enter at one rim (AOS) and leave at the far rim (LOS), changing color at cone boundaries; the full orbital arc is drawn with the out-of-window part faded; the user can lock onto one active contact while the others dim. DB: `packet_template`, `command`, `telemetry_frame`.
 - **Phase 5 — Scheduling & alarms.** Queue command for a future window; AOS trigger; auto system check; transmit-if-green / alarm-if-red. DB: `alarm` (+ `command.scheduled_aos`).
 - **Phase 6 — Record & playback.** Persist full `event` log; timeline scrubber (play/pause/speed/jump); playback reuses the live renderer.
-- **Phase 7 — SAR archive explore (Flow 1).** STAC search (Sentinel-1 RTC / Umbra) for AOI + two dates; swipe compare; v1 log-ratio change detection; flagged regions. **Migrate to Postgres + PostGIS here.** DB: `sar_scene`, `change_result`.
+- **Phase 7 — SAR archive explore (Flow 1).** STAC search (Sentinel-1 RTC / Umbra) for AOI + two dates; swipe compare; v1 log-ratio change detection; flagged regions. **Enable PostGIS on the existing Neon DB** (geometry columns + GiST). DB: `sar_scene`, `change_result`.
 - **Phase 8 — SAR mission tasking (Flow 2).** Simulated tasking over the real acquisition plan; sim states tasked→acquiring→downlink→processing; STAC polling; "waiting for real data" gate; unlock compare when the real scene lands. DB: `sar_task`.
-- **Phase 9 — Polish.** Cesium footprints, day/night terminator, naked-eye model, msgpack, TimescaleDB, cloud deploy, docker-compose parity.
+- **Phase 9 — Polish.** Cesium footprints, day/night terminator, naked-eye model, msgpack, TimescaleDB (Apache-2 feature set on Neon), cloud deploy, docker-compose parity.
 
 ---
 
@@ -459,7 +473,7 @@ Write code as if the Phase 9 deploy already exists.
 ### 12.2 Database
 - **SQLAlchemy expressions only, always bound parameters.** No f-strings, `%` or `+` into SQL, and no `text()` with interpolated values. For `LIKE`/`contains`/`startswith` on user input, pass `autoescape=True`, as `search_local` does.
 - **Migrations only via Alembic**, reviewed like code. Never run DDL from request handlers.
-- **Phase 7 Postgres:** the app connects as a least-privilege role (DML on its tables only; migrations run as a separate owner role). Credentials come from `.env`, never `alembic.ini` or code.
+- **Postgres (since Phase 2b):** the app connects as a least-privilege role (`satlab_app`: DML on its tables only); migrations run as the owner role (`neondb_owner`) in a separate release step, and the app process never receives the owner URL. Credentials come from `.env` or the platform secret store, never `alembic.ini` or code.
 
 ### 12.3 WebSocket and HTTP surface
 - **Check the `Origin` header on WebSocket upgrade** against the configured allow-list (`SATLAB_CORS_ORIGINS`). CORS does **not** protect WebSockets, and any web page can open a socket to `localhost`.
@@ -534,7 +548,7 @@ When you close a gap, delete its line here.
 
 - **Phase 1 — WebSocket contract** (`backend/app/models/ws.py` ↔ `frontend/src/types/ws.ts`). One socket per mission session at `/ws/sessions/{id}`. Server → client: `snapshot` (every tick: clock, observer, tracked `SatelliteState`s), `ground_track` (sub-point samples evenly spaced in time over −0.5…+1 orbit, re-sent when the clock leaves the window), `error`. Client → server: `set_tracked` (full replacement set), `set_clock` (`time_scale` / `paused` / `sim_time`). Close code `4404` = session ended/unknown → client starts a new session. Units in field names (`range_m`, `range_rate_m_s`, `alt_m`, `*_deg`).
 - **Client tweening**: map markers interpolate along the server-sampled `ground_track` at the estimated sim time (last `sim_time` + elapsed × `time_scale`); readouts show raw snapshot values. No orbital math in the frontend.
-- **Timestamps**: `UTCDateTime` column type (`app/db/base.py`) stores ISO-8601 TEXT on SQLite and switches to `TIMESTAMPTZ` on Postgres — the Phase 7 swap needs no model changes for time columns.
+- **Timestamps**: `UTCDateTime` column type (`app/db/base.py`) stores ISO-8601 TEXT on SQLite and switches to `TIMESTAMPTZ` on Postgres — no model changes for time columns across dialects.
 - **Catalog**: Celestrak `GROUP=active` bulk-loaded into `satellite` (cached in `backend/var/cache/` and refreshed when > 12 h old); "full catalog" search hits Celestrak by `NAME`/`CATNR` only on explicit request. The sim loop reads only an in-memory elements registry — never the DB or network.
 - **Session-scoped observer location** (2026-10-15). `ground_station` holds only seeded presets; there is no API to create one. A session observes from its own `location_name` / `lat_deg` / `lon_deg` / `alt_m`, copied from a preset (`station_id` set) or given as a custom `location` (geolocation, map click, typed lat/lon; `station_id` NULL, name "Custom location"). `POST /api/sessions` takes exactly one of `station_id` or `location`; `MissionSessionOut` drops the nested `station` for those flat fields; `ObserverState.station_id` and `PassPrediction.station_id` are nullable. The client remembers the last site (preset id or custom location) in `localStorage` and starts a new session there on reload.
 - **Session clock** is in-memory; after a backend restart a session resumes at `sim_start_time + elapsed × initial time_scale` (approximate until the Phase 6 event log makes it exact). Sessions end after 60 s with no subscribers.
@@ -547,3 +561,4 @@ When you close a gap, delete its line here.
 - **Satellite types**: `station | weather | comms | navigation | sar | other`, from ordered name-pattern rules in `app/data/seed/satellite_types.json` (debris/rocket bodies first; traps such as SENTINEL-2 ≠ SAR, SARAL ≠ SAR, GSAT0xxx = Galileo vs GSAT-xx = ISRO comms are tested). Applied on every upsert and re-applied to the whole catalog at startup, so editing the rules reclassifies existing rows.
 - **Sky views are Canvas 2D without D3**: the projection is a few lines (`frontend/src/lib/sky.ts`); D3 joins when a view earns it.
 - **Base path `/satlab/` + Umami analytics** (2026-10-14). The app is published at `https://<domain>/satlab/` next to the author's site and reports to the same Umami website, so pageviews land as `/satlab` and `/satlab/<page>`. Vite `base` is `/satlab/`; every same-origin URL (REST, WebSocket) goes through `appUrl()` (`frontend/src/lib/basePath.ts`); the dev proxy (and the production reverse proxy) strip the prefix, so the backend routes stay at `/api` and `/ws`. The Umami website ID comes from `NEXT_UMAMI_ID` (read only in `vite.config.ts`; `envPrefix` stays `VITE_`), is public by design, and the tracker is injected at build time only, so `pnpm dev` isn't counted. Future client-side routes are tracked automatically (Umami follows `history.pushState`).
+- **Phase 2b — Postgres on Neon, pulled forward from Phase 7** (2026-10-15). Reason: the Azure deploy needs a database that survives container restarts, and the code was already dialect-ready. Neon in every stage, one branch each: `dev` (local `.env`), `test` (`.env.test`), `production` (2026-10-16); SQLite is only the fallback when no URL is configured. Two URLs: `SATLAB_DATABASE_URL` (app, `satlab_app` role, Neon pooled host) and `SATLAB_MIGRATION_DATABASE_URL` (Alembic only, owner role, direct host; falls back to the app URL). Bare `postgres(ql)://` URLs are normalized to `postgresql+psycopg://`; Alembic escapes `%` for configparser. `SATLAB_TEST_POSTGRES_URL` (shell or `.env.test`, never `.env`, so dev credentials can't drive the tests) runs the whole suite on Postgres with one throwaway schema per test via `search_path`. No schema or contract changes; existing SQLite data isn't migrated (the catalog re-ingests, stations re-seed).

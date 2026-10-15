@@ -28,10 +28,17 @@ pnpm install
 pnpm dev
 ```
 
-On first start the backend creates `backend/var/satlab.db`, seeds a few ground stations, and downloads
+On first start the backend creates `backend/var/satlab.db` (SQLite; see below for Postgres), seeds a few ground stations, and downloads
 the Celestrak "active" catalog (~16k objects) in the background. Open http://localhost:5173/satlab/.
 
 Optional settings: copy [.env.example](.env.example) to `.env`.
+
+### Persistent database (Postgres on Neon)
+
+Each stage uses its own Neon branch: `dev` for local development (`.env`), `test` for `pytest`
+(`.env.test`) and `production`. The app connects as a role that can only read and write rows;
+migrations run as the schema owner. Without any database URL the backend falls back to SQLite, so a
+fresh clone still runs. Setup, roles, migrations and verification are in [deploy/neon.md](deploy/neon.md).
 
 ### Deploying under `/satlab/`
 
@@ -43,7 +50,7 @@ stripped**. The backend's own routes are `/api` and `/ws`. Set `NEXT_UMAMI_ID` (
 ## Checks
 
 ```bash
-cd backend  && uv run pytest && uv run ruff check . && uv run ruff format --check .
+cd backend  && uv run pytest && uv run ruff check . && uv run ruff format --check .   # pytest uses the Neon test branch if .env.test exists
 cd frontend && pnpm test && pnpm lint && pnpm build
 ```
 
