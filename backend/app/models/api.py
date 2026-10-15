@@ -84,6 +84,14 @@ class MissionSessionOut(BaseModel):
     time_scale: float
 
 
+class MissionSessionCreated(MissionSessionOut):
+    """Returned once, by ``POST /api/sessions``. ``token`` proves ownership of the session: send
+    it as ``X-Session-Token`` on the session's REST endpoints and in the WebSocket ``auth``
+    message. It is not stored server-side (only its hash) and cannot be fetched again."""
+
+    token: str
+
+
 class PassWindowOut(BaseModel):
     aos_time: datetime
     los_time: datetime

@@ -76,10 +76,28 @@ def test_session_lifecycle(client: TestClient) -> None:
     assert (session["lat_deg"], session["lon_deg"]) == (station["lat_deg"], station["lon_deg"])
     assert session["ended_at"] is None
 
-    assert client.post(f"/api/sessions/{session['id']}/end").status_code == 204
-    assert client.get(f"/api/sessions/{session['id']}").json()["ended_at"] is not None
+    owner = {"X-Session-Token": session["token"]}
+    url = f"/api/sessions/{session['id']}"
+    assert "token" not in client.get(url, headers=owner).json()  # handed out exactly once
+    assert client.post(f"{url}/end", headers=owner).status_code == 204
+    assert client.get(url, headers=owner).json()["ended_at"] is not None
 
     assert client.post("/api/sessions", json={"station_id": 9999}).status_code == 404
+
+
+def test_session_endpoints_need_its_token(client: TestClient) -> None:
+    location = {"location": {"lat_deg": 12.97, "lon_deg": 77.59}}
+    mine, other = (client.post("/api/sessions", json=location).json() for _ in range(2))
+    assert len(mine["token"]) >= 40 and mine["token"] != other["token"]
+    url = f"/api/sessions/{mine['id']}"
+    for headers in ({}, {"X-Session-Token": other["token"]}, {"X-Session-Token": "x" * 129}):
+        # Missing, someone else's, or malformed: indistinguishable from an unknown session.
+        assert client.get(url, headers=headers).status_code in (404, 422)
+        assert client.post(f"{url}/end", headers=headers).status_code in (404, 422)
+    wrong = {"X-Session-Token": other["token"]}
+    not_found = {"detail": f"mission session {mine['id']} not found"}
+    assert client.get(url, headers=wrong).json() == not_found
+    assert client.get(url, headers={"X-Session-Token": mine["token"]}).json()["ended_at"] is None
 
 
 def test_session_at_custom_location_saves_no_station(client: TestClient) -> None:
@@ -119,6 +137,7 @@ def bluffton_session(catalog: TestClient) -> int:
             "sim_start_time": REFERENCE_TIME.isoformat(),
         },
     ).json()
+    catalog.headers["X-Session-Token"] = session["token"]
     return session["id"]
 
 
@@ -151,6 +170,8 @@ def test_pass_schedule_errors(catalog: TestClient, bluffton_session: int) -> Non
     assert catalog.get(url, params={"norad_id": 99999}).json()["detail"] == "satellite not found"
     missing = catalog.get("/api/sessions/424242/passes", params={"norad_id": 25544})
     assert missing.status_code == 404
+    unowned = catalog.get(url, params={"norad_id": 25544}, headers={"X-Session-Token": "nope"})
+    assert unowned.status_code == 404
     for bad in (
         {"norad_id": 0},
         {"norad_id": 25544, "hours": 0},

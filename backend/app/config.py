@@ -34,7 +34,16 @@ class Settings(BaseSettings):
     auto_migrate: bool = True
     cache_dir: Path = VAR_DIR / "cache"
 
+    # Browser origins allowed to call the API and open WebSockets (CORS + the WS Origin check).
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    docs_enabled: bool = True  # /docs, /redoc, /openapi.json; off in production
+
+    # Public-exposure limits (AGENTS.md §12.3).
+    max_active_sessions: int = Field(default=10, ge=1)  # each one propagates the whole catalog
+    ws_auth_timeout_s: float = Field(default=5.0, gt=0, le=60)
+    ws_messages_per_s: float = Field(default=20.0, gt=0)
+    ws_message_burst: int = Field(default=40, ge=1)
+    remote_search_per_min: int = Field(default=10, ge=1)  # Celestrak queries, all clients together
 
     # Celestrak GP data (https://celestrak.org/NORAD/documentation/gp-data-formats.php).
     # Celestrak asks clients not to re-download a group more than once every ~2 hours.

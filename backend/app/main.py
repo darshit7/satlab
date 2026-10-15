@@ -9,7 +9,16 @@ from typing import Annotated
 
 from alembic import command
 from alembic.config import Config as AlembicConfig
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import AwareDatetime, ValidationError
 from sqlalchemy import select
@@ -24,21 +33,38 @@ from app.models.api import (
     CatalogStatus,
     GroundStationOut,
     MissionSessionCreate,
+    MissionSessionCreated,
     MissionSessionOut,
     PassPrediction,
     SatelliteOut,
     SatelliteSearchResult,
 )
-from app.models.ws import ErrorMessage, NoradId, client_message_adapter
+from app.models.ws import (
+    MAX_SESSION_TOKEN_LENGTH,
+    ErrorMessage,
+    NoradId,
+    auth_message_adapter,
+    client_message_adapter,
+)
 from app.services.catalog import CatalogService
 from app.services.passes import NotFound, PassService
-from app.services.sessions import SessionManager, SessionUnavailable
+from app.services.ratelimit import TokenBucket
+from app.services.sessions import (
+    ServerBusy,
+    SessionManager,
+    SessionUnavailable,
+    new_session_token,
+    session_token_matches,
+)
 from app.sim.loop import Subscriber
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(levelname)-9s %(name)s: %(message)s")
 
-WS_CLOSE_SESSION_UNAVAILABLE = 4404
+WS_CLOSE_POLICY_VIOLATION = 1008  # foreign Origin, or flooding
+WS_CLOSE_AUTH_REQUIRED = 4401  # no valid ``auth`` message in time
+WS_CLOSE_SESSION_UNAVAILABLE = 4404  # unknown, ended, or not this token's session
+WS_CLOSE_SERVER_BUSY = 4503  # at max_active_sessions; the client retries with backoff
 CUSTOM_LOCATION_NAME = "Custom location"
 
 
@@ -77,7 +103,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await catalog.stop()
 
 
-app = FastAPI(title="Satellite Mission Control Simulator", version="0.1.0", lifespan=lifespan)
+_docs = get_settings().docs_enabled
+app = FastAPI(
+    title="Satellite Mission Control Simulator",
+    version="0.1.0",
+    lifespan=lifespan,
+    docs_url="/docs" if _docs else None,
+    redoc_url="/redoc" if _docs else None,
+    openapi_url="/openapi.json" if _docs else None,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().cors_origins,
@@ -86,6 +120,10 @@ app.add_middleware(
 )
 
 Db = Annotated[Session, Depends(get_db)]
+# Capability token of a mission session (see MissionSessionCreated).
+SessionToken = Annotated[
+    str | None, Header(alias="X-Session-Token", max_length=MAX_SESSION_TOKEN_LENGTH)
+]
 
 
 def get_catalog(request: Request) -> CatalogService:
@@ -158,8 +196,8 @@ async def catalog_status(catalog: Catalog) -> CatalogStatus:
 # ---------- mission sessions ----------
 
 
-@app.post("/api/sessions", response_model=MissionSessionOut, status_code=201)
-def create_session(body: MissionSessionCreate, db: Db) -> MissionSession:
+@app.post("/api/sessions", response_model=MissionSessionCreated, status_code=201)
+def create_session(body: MissionSessionCreate, db: Db) -> MissionSessionCreated:
     """Start a session at a preset station or at a custom location (kept on the session only)."""
     if body.station_id is not None:
         station = db.get(GroundStation, body.station_id)
@@ -180,28 +218,39 @@ def create_session(body: MissionSessionCreate, db: Db) -> MissionSession:
             **body.location.model_dump(),
         }
     time_scale = min(body.time_scale, get_settings().max_time_scale)
+    token, token_hash = new_session_token()
     session = MissionSession(
         **site,
         name=body.name,
         sim_start_time=body.sim_start_time or datetime.now(UTC),
         time_scale=time_scale,
+        token_hash=token_hash,
     )
     db.add(session)
     db.commit()
     db.refresh(session)
-    return session
+    return MissionSessionCreated(
+        **MissionSessionOut.model_validate(session).model_dump(), token=token
+    )
+
+
+def _session_not_found(session_id: int) -> HTTPException:
+    # The same answer for "no such session" and "not your session": IDs can't be probed.
+    return HTTPException(404, f"mission session {session_id} not found")
 
 
 @app.get("/api/sessions/{session_id}", response_model=MissionSessionOut)
-def get_session(session_id: int, db: Db) -> MissionSession:
+def get_session(session_id: int, db: Db, token: SessionToken = None) -> MissionSession:
     session = db.get(MissionSession, session_id)
-    if session is None:
-        raise HTTPException(404, f"mission session {session_id} not found")
+    if session is None or not session_token_matches(session, token):
+        raise _session_not_found(session_id)
     return session
 
 
 @app.post("/api/sessions/{session_id}/end", status_code=204)
-async def end_session(session_id: int, sessions: Sessions) -> None:
+async def end_session(session_id: int, sessions: Sessions, token: SessionToken = None) -> None:
+    if await sessions.owned(session_id, token) is None:
+        raise _session_not_found(session_id)
     await sessions.end(session_id)
 
 
@@ -209,11 +258,15 @@ async def end_session(session_id: int, sessions: Sessions) -> None:
 async def predict_passes(
     session_id: int,
     passes: Passes,
+    sessions: Sessions,
     norad_id: Annotated[NoradId, Query()],
     hours: Annotated[float, Query(ge=1, le=72)] = 24,
     start: Annotated[AwareDatetime | None, Query()] = None,
+    token: SessionToken = None,
 ) -> PassPrediction:
     """Upcoming passes of one satellite over the session's location (default: from sim time)."""
+    if await sessions.owned(session_id, token) is None:
+        raise _session_not_found(session_id)
     try:
         return await passes.predict(session_id, norad_id, start, hours)
     except NotFound as exc:
@@ -229,21 +282,61 @@ async def _pump(ws: WebSocket, sub: Subscriber) -> None:
             await ws.send_text(message.model_dump_json())
 
 
+async def _close_with_error(ws: WebSocket, message: str, code: int, reason: str) -> None:
+    await ws.send_text(ErrorMessage(message=message).model_dump_json())
+    await ws.close(code=code, reason=reason)
+
+
+async def _receive_token(ws: WebSocket, timeout_s: float) -> str | None:
+    """The token from the connection's first message, if it is a valid ``auth`` in time."""
+    try:
+        raw = await asyncio.wait_for(ws.receive_text(), timeout_s)
+        return auth_message_adapter.validate_json(raw).token
+    except (TimeoutError, ValidationError):
+        return None
+
+
 @app.websocket("/ws/sessions/{session_id}")
 async def session_stream(ws: WebSocket, session_id: int) -> None:
+    settings = get_settings()
+    # CORS doesn't cover WebSockets: any page can open one, so check where a browser came from.
+    # Non-browser clients send no Origin; they gain nothing a browser page could exploit.
+    origin = ws.headers.get("origin")
+    if origin is not None and origin not in settings.cors_origins:
+        log.warning("session %d: rejected WebSocket from origin %r", session_id, origin[:100])
+        await ws.close(code=WS_CLOSE_POLICY_VIOLATION)  # before accept: an HTTP 403
+        return
     await ws.accept()
     manager: SessionManager = ws.app.state.sessions
     try:
-        runtime, sub = await manager.attach(session_id)
+        token = await _receive_token(ws, settings.ws_auth_timeout_s)
+    except WebSocketDisconnect:
+        return
+    if token is None:
+        await _close_with_error(
+            ws, "authentication required", WS_CLOSE_AUTH_REQUIRED, "authentication required"
+        )
+        return
+    try:
+        runtime, sub = await manager.attach(session_id, token)
     except SessionUnavailable as exc:
-        await ws.send_text(ErrorMessage(message=str(exc)).model_dump_json())
-        await ws.close(code=WS_CLOSE_SESSION_UNAVAILABLE, reason="session unavailable")
+        await _close_with_error(ws, str(exc), WS_CLOSE_SESSION_UNAVAILABLE, "session unavailable")
+        return
+    except ServerBusy:
+        await _close_with_error(
+            ws, "mission control is at capacity; retrying", WS_CLOSE_SERVER_BUSY, "server busy"
+        )
         return
 
     sender = asyncio.create_task(_pump(ws, sub))
+    budget = TokenBucket(settings.ws_messages_per_s, settings.ws_message_burst)
     try:
         while True:
             raw = await ws.receive_text()
+            if not budget.take():  # a flooding client is disconnected, not queued
+                log.warning("session %d: client over the message rate limit", session_id)
+                await ws.close(code=WS_CLOSE_POLICY_VIOLATION, reason="too many messages")
+                break
             try:
                 message = client_message_adapter.validate_json(raw)
             except ValidationError as exc:

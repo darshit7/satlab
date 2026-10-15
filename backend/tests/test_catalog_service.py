@@ -59,7 +59,8 @@ async def test_offline_falls_back_to_cache_file(migrated: Path) -> None:
 
     service, _ = make_service(offline)
     await service.refresh_if_stale()
-    assert "fetch failed" in (service.last_error or "")
+    assert service.last_error == "Celestrak fetch failed; using the cached catalog"
+    assert "offline" not in service.last_error  # upstream details stay in the server log
     assert await service.status_count() == 1  # loaded from stale cache file
 
 
@@ -76,3 +77,15 @@ async def test_resolve_refreshes_stale_elements(migrated: Path) -> None:
 async def test_resolve_unknown_returns_none(migrated: Path) -> None:
     service, _ = make_service(lambda r: httpx.Response(200, text="No GP data found"))
     assert await service.resolve(99999) is None
+
+
+async def test_remote_search_shares_one_global_budget(
+    migrated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(get_settings(), "remote_search_per_min", 2)
+    service, calls = make_service(lambda r: httpx.Response(200, text="No GP data found"))
+    searched = [await service._remote_search(q) for q in ("alpha", "bravo", "charlie")]
+    assert searched == [True, True, False]  # third distinct query: over budget, not sent
+    assert len(calls) == 2
+    assert await service._remote_search("alpha")  # repeats are served by the per-query cache
+    assert len(calls) == 2
