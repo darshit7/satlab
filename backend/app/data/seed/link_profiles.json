@@ -1,0 +1,173 @@
+{
+  "_comment": [
+    "Published downlink budgets, one per satellite (AGENTS.md §13: never invent link parameters).",
+    "Every value is quoted from the source or derived from quoted values; derived ones say how in `derivations`.",
+    "eirp_dbw is the EIRP where the pattern offset is 0 dB; eirp_pattern holds [off-nadir deg, offset dB] pairs (nadir-pointing), interpolated linearly and held beyond the last point.",
+    "station_gt_db_k, system_loss_db and data_rate_bps describe the source's own reference receiving station and budget: system_loss_db sums every loss the budget lists (including implementation/demodulation loss) except the atmospheric/rain loss; data_rate_bps is the rate the source's Eb/N0 is referred to.",
+    "atmospheric_loss_db is that loss as the source quotes it at atmospheric_ref_elev_deg; it is scaled along the slant path by the cosecant law. A source that holds it constant at every elevation keeps it in system_loss_db instead.",
+    "G/T is the source's value at its worked geometry, held at every elevation (a fraction of a dB conservative away from the horizon).",
+    "`checks` are the source's own worked margins; tests/test_linkbudget.py reproduces each to within 0.1 dB.",
+    "Excluded while sourcing (2026-10-20): NOAA-15/18/19 (decommissioned 2025); ISS and SO-50 FM voice (analog, no Eb/N0); Metop-B/C AHRPT (TD 18 gives G/T but no EIRP); Meteor-M LRPT, Sentinel-1 X-band and amateur cubesats (no published EIRP / budget found)."
+  ],
+  "version": 1,
+  "verified_on": "2026-10-20",
+  "profiles": [
+    {
+      "norad_id": 43013,
+      "satellite_name": "NOAA 20 (JPSS-1)",
+      "label": "X-band HRD 7812 MHz, 15 Mbps QPSK, to a 3 m direct-broadcast dish",
+      "frequency_hz": 7812000000,
+      "eirp_dbw": 12.4,
+      "eirp_pattern": [[0.0, -12.5], [17.6, -12.0], [42.7, -9.2], [61.9, 0.0]],
+      "coverage_half_angle_deg": 62.0,
+      "station_gt_db_k": 22.7,
+      "system_loss_db": 3.96,
+      "atmospheric_loss_db": 3.65,
+      "atmospheric_ref_elev_deg": 5.0,
+      "required_ebn0_db": 4.4,
+      "data_rate_bps": 13117647,
+      "sources": [
+        {
+          "title": "JPSS-1 Spacecraft HRD to Direct Broadcast Stations RF ICD, 472-00165 Rev A: Table 4-1 and Appendix A, Fig. A-1",
+          "url": "https://www.nesdis.noaa.gov/s3/2022-03/JPSS-1SCHRDtoDBSRFICDRevA-470-REF-00184February9,2015.pdf"
+        }
+      ],
+      "derivations": {
+        "eirp_dbw": "Fig. A-1: 7.8 W (38.92 dBm) + 5.5 dBi at 62° off nadir − 2.0 dB passive loss = 42.4 dBm",
+        "eirp_pattern": "shape of Table 4-1 minimum EIRP (30.3 / 30.8 / 33.6 / 42.8 dBm at 0 / 17.6 / 42.7 / 61.9° from boresight), relative to its 61.9° value",
+        "system_loss_db": "Fig. A-1: polarisation 0.26 + multipath 0.20 + ground pointing 1.00 + implementation 2.50",
+        "atmospheric_loss_db": "Fig. A-1: rain & atmospheric 3.65 dB at 5° elevation",
+        "data_rate_bps": "15 Mbps CADU × 223/255 (Reed-Solomon) = 71.18 dB-Hz, as Fig. A-1 uses"
+      },
+      "checks": [
+        { "range_km": 2835.0, "elevation_deg": 5.0, "off_nadir_deg": 61.9, "margin_db": 1.18, "where": "Fig. A-1, 5° elevation" }
+      ]
+    },
+    {
+      "norad_id": 54234,
+      "satellite_name": "NOAA 21 (JPSS-2)",
+      "label": "X-band HRD 7812 MHz, 25 Mbps OQPSK, to an HRD ground terminal",
+      "frequency_hz": 7812000000,
+      "eirp_dbw": 9.44,
+      "eirp_pattern": [[0.0, -6.6], [34.2, -6.6], [62.0, 6.175]],
+      "coverage_half_angle_deg": 62.0,
+      "station_gt_db_k": 23.59,
+      "system_loss_db": 4.27,
+      "atmospheric_loss_db": 0.5,
+      "atmospheric_ref_elev_deg": 50.6,
+      "required_ebn0_db": 4.4,
+      "data_rate_bps": 25000000,
+      "sources": [
+        {
+          "title": "JPSS-2 Spacecraft HRD to DBS RF ICD, 6470-ICD23510 Rev E (472-00340 Rev C): Figs. SC-GND-3318 and SC-GND-4525",
+          "url": "https://www.nesdis.noaa.gov/s3/2022-03/472-00340_J2_HRD_to_DBS_RF_ICD_Rev_C.pdf"
+        }
+      ],
+      "derivations": {
+        "eirp_dbw": "Fig. SC-GND-3318: 10.7 W (40.3 dBm) − 0.86 dB transmitter network loss = 39.44 dBm, before antenna gain",
+        "eirp_pattern": "antenna gain: the worst case in coverage, −6.6 dBi at 34.2° (Fig. SC-GND-3318), held from nadir to 34.2°; 6.175 dBi at the 62° edge of coverage (Fig. SC-GND-4525 annotation); linear in between",
+        "system_loss_db": "Fig. SC-GND-3318: pointing 0.00 (in G/T) + polarisation 1.57 + implementation/multipath 2.70",
+        "atmospheric_loss_db": "Fig. SC-GND-3318: excess path loss (incl. scintillation, 99% availability) 0.50 dB at 50.6° elevation; scaled, it gives the required > 1 dB margin at 5° (J2SRD-1589)",
+        "data_rate_bps": "25 Msps CADU (74.0 dB-Hz), the rate Fig. SC-GND-3318 refers Eb/N0 to"
+      },
+      "checks": [
+        { "range_km": 1028.01, "elevation_deg": 50.6, "off_nadir_deg": 34.2, "margin_db": 1.3, "where": "Fig. SC-GND-3318, 50.6° elevation" }
+      ]
+    },
+    {
+      "norad_id": 43010,
+      "satellite_name": "FENGYUN 3D",
+      "label": "X-band MPT 7820 MHz, 45 Mbps QPSK, to a 10 m dish",
+      "frequency_hz": 7820000000,
+      "eirp_dbw": 13.617,
+      "eirp_pattern": [
+        [0.0, -4.5], [5.0, -4.3], [10.0, -4.0], [15.0, -3.7], [20.0, -3.3], [25.0, -3.0], [30.0, -2.3],
+        [35.0, -1.5], [40.0, -0.4], [45.0, 1.0], [50.0, 2.8], [55.0, 4.5], [60.0, 5.5], [62.0, 5.0]
+      ],
+      "coverage_half_angle_deg": 62.0,
+      "station_gt_db_k": 30.0,
+      "system_loss_db": 8.1,
+      "required_ebn0_db": 5.4,
+      "data_rate_bps": 60000000,
+      "sources": [
+        {
+          "title": "Space-to-Ground Interface Control Document of FY-3D Meteorological Satellite (CMA/NSMC), §5.1.7–5.1.8, Tables 2 and 3 (copy hosted by SatDump)",
+          "url": "https://git.satdump.org/SatDump/Resources/raw/commit/d31dc929bcd97e515ad529ea84d3e12268393bda/fy3/Space-to-Ground%20Interface%20Control%20Documents%20of%20FY3D%20Meteorological%20Satellite.pdf"
+        }
+      ],
+      "derivations": {
+        "eirp_dbw": "Table 3: transmitter power 23 W = 13.617 dBW, before antenna gain",
+        "eirp_pattern": "Table 2 minimum antenna gain (dBi) by angle off the antenna axis",
+        "system_loss_db": "Table 3: atmospheric absorption 0.3 + rain 4.5 (the source holds both constant at every elevation, so they stay here) + pointing 0.5 + polarisation 1.0 + demodulation 1.8",
+        "required_ebn0_db": "Table 3: 11.4 dB at BER 1e-7 less the 6.0 dB coding gain of RS(255,223) + CONV(7,3/4)",
+        "data_rate_bps": "60 Msps (77.78 dB), the rate Table 3 refers Eb/N0 to"
+      },
+      "checks": [
+        { "range_km": 2860.18, "elevation_deg": 5.0, "off_nadir_deg": 61.71, "margin_db": 6.5, "where": "Table 3, 5° elevation" },
+        { "range_km": 836.4, "elevation_deg": 90.0, "off_nadir_deg": 0.0, "margin_db": 7.68, "where": "Table 3, 90° elevation" }
+      ]
+    },
+    {
+      "norad_id": 51850,
+      "satellite_name": "GOES 18",
+      "label": "L-band GRB 1686.6 MHz, 15.5 Mbps per polarisation (DVB-S2), to a G/T 15.2 dB/K user station",
+      "frequency_hz": 1686600000,
+      "eirp_dbw": 33.5,
+      "eirp_pattern": [[0.0, 2.0], [3.0, 1.76], [6.0, 1.05], [8.67, 0.0]],
+      "coverage_half_angle_deg": 8.67,
+      "station_gt_db_k": 15.2,
+      "system_loss_db": 4.01,
+      "atmospheric_loss_db": 2.5,
+      "atmospheric_ref_elev_deg": 5.0,
+      "required_ebn0_db": 3.9,
+      "data_rate_bps": 15500000,
+      "sources": [
+        {
+          "title": "NOAA OSPO: Link budget for GRB on GOES-R series satellites to user stations, Rev. A (2017-07-25)",
+          "url": "https://ospo.noaa.gov/operations/goes/grb/pdf/budget.pdf"
+        }
+      ],
+      "derivations": {
+        "eirp_dbw": "edge-of-coverage EIRP per polarisation, 63.5 dBm",
+        "eirp_pattern": "2.0 dB antenna gain reduction at the edge of coverage (17.1 dBi peak, 15.1 dBi EOC), as a parabolic main lobe 2.0·(1 − (θ/8.67°)²); 8.67° is the Earth's edge seen from GEO at 5° elevation",
+        "system_loss_db": "pointing 0.5 + cross-polarisation and adjacent-channel interference 2.11 (C/N0 85.0 → 82.89 dB-Hz) + satellite degradations 0.5 + implementation 0.9",
+        "atmospheric_loss_db": "all atmospheric losses 2.5 dB at 5° elevation",
+        "data_rate_bps": "15.5 Mbps per polarisation"
+      },
+      "checks": [
+        { "range_km": 41125.0, "elevation_deg": 5.0, "off_nadir_deg": 8.67, "margin_db": 5.7, "where": "GRB budget, 5° elevation" }
+      ]
+    },
+    {
+      "norad_id": 60133,
+      "satellite_name": "GOES 19",
+      "label": "L-band GRB 1686.6 MHz, 15.5 Mbps per polarisation (DVB-S2), to a G/T 15.2 dB/K user station",
+      "frequency_hz": 1686600000,
+      "eirp_dbw": 33.5,
+      "eirp_pattern": [[0.0, 2.0], [3.0, 1.76], [6.0, 1.05], [8.67, 0.0]],
+      "coverage_half_angle_deg": 8.67,
+      "station_gt_db_k": 15.2,
+      "system_loss_db": 4.01,
+      "atmospheric_loss_db": 2.5,
+      "atmospheric_ref_elev_deg": 5.0,
+      "required_ebn0_db": 3.9,
+      "data_rate_bps": 15500000,
+      "sources": [
+        {
+          "title": "NOAA OSPO: Link budget for GRB on GOES-R series satellites to user stations, Rev. A (2017-07-25)",
+          "url": "https://ospo.noaa.gov/operations/goes/grb/pdf/budget.pdf"
+        }
+      ],
+      "derivations": {
+        "eirp_dbw": "edge-of-coverage EIRP per polarisation, 63.5 dBm",
+        "eirp_pattern": "2.0 dB antenna gain reduction at the edge of coverage (17.1 dBi peak, 15.1 dBi EOC), as a parabolic main lobe 2.0·(1 − (θ/8.67°)²); 8.67° is the Earth's edge seen from GEO at 5° elevation",
+        "system_loss_db": "pointing 0.5 + cross-polarisation and adjacent-channel interference 2.11 (C/N0 85.0 → 82.89 dB-Hz) + satellite degradations 0.5 + implementation 0.9",
+        "atmospheric_loss_db": "all atmospheric losses 2.5 dB at 5° elevation",
+        "data_rate_bps": "15.5 Mbps per polarisation"
+      },
+      "checks": [
+        { "range_km": 41125.0, "elevation_deg": 5.0, "off_nadir_deg": 8.67, "margin_db": 5.7, "where": "GRB budget, 5° elevation" }
+      ]
+    }
+  ]
+}

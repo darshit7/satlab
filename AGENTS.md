@@ -99,10 +99,12 @@ satellite-mission-control/
 │     │  ├─ passes.py        # AOS/LOS/culmination, sky arcs, rising-soon sweep
 │     │  ├─ linkbudget.py    # SNR/Eb·N0 margin, Doppler, RAG mapping
 │     │  ├─ subsystems.py    # power/thermal/storage/attitude/RF models
+│     │  ├─ sun.py           # Sun position + Earth shadow (eclipse), no ephemeris file
 │     │  ├─ scheduler.py     # command queue, AOS trigger, alarms
 │     │  └─ loop.py          # the tick; emits snapshots + events
 │     ├─ packets/            # per-satellite AX.25 / CCSDS templates
-│     ├─ data/               # TLE (Celestrak), SatNOGS, catalog ingestion
+│     ├─ data/               # TLE (Celestrak), SatNOGS, catalog ingestion; seed/ JSON (stations,
+│     │                      #   type rules, link_profiles, subsystem_models)
 │     ├─ sar/                # STAC search/download, change detection
 │     ├─ events/             # event store: append + replay
 │     └─ services/           # orchestration between sim, db, ws
@@ -240,7 +242,7 @@ scripts/smoke.sh http://localhost:8080 http://localhost:8000 http://localhost:80
 - **RTC** — terrain-corrected, geocoded SAR; scenes align pixel-for-pixel.
 - **AOI** — area of interest for imaging/comparison.
 
-**Link-budget → RAG mapping (canonical):** margin > ~6 dB = **green**; 0–6 dB = **amber**; < 0 dB or below horizon mask = **red**.
+**Link-budget → RAG mapping (canonical):** margin > ~6 dB = **green**; 0–6 dB = **amber**; < 0 dB or below horizon mask = **red**. (Thresholds: `SATLAB_LINK_GREEN_MARGIN_DB` / `SATLAB_LINK_AMBER_MARGIN_DB`.) A satellite without a published link budget has **no** link state, shown as "no RF data" in grey, never a guessed margin.
 
 ---
 
@@ -291,15 +293,22 @@ CREATE TABLE packet_template (
     version     INTEGER NOT NULL DEFAULT 1
 );
 
+-- A published downlink budget; synced from app/data/seed/link_profiles.json (see §14).
 CREATE TABLE link_profile (
-    id                 INTEGER PRIMARY KEY,
-    norad_id           INTEGER NOT NULL REFERENCES satellite(norad_id),
-    frequency_hz       REAL NOT NULL,
-    eirp_dbw           REAL NOT NULL,
-    station_gain_dbi   REAL NOT NULL,
-    system_loss_db     REAL NOT NULL DEFAULT 0,
-    required_ebn0_db   REAL NOT NULL,
-    data_rate_bps      REAL
+    id                       INTEGER PRIMARY KEY,
+    norad_id                 INTEGER NOT NULL UNIQUE REFERENCES satellite(norad_id),
+    label                    TEXT NOT NULL,        -- mode + reference station
+    frequency_hz             REAL NOT NULL,
+    eirp_dbw                 REAL NOT NULL,        -- where the pattern offset is 0 dB
+    eirp_pattern             JSON,                 -- [[off_nadir_deg, offset_db], ...]; NULL = isotropic
+    coverage_half_angle_deg  REAL,                 -- antenna coverage (attitude check)
+    station_gt_db_k          REAL NOT NULL,        -- reference station G/T (replaces station_gain_dbi)
+    system_loss_db           REAL NOT NULL DEFAULT 0,
+    atmospheric_loss_db      REAL NOT NULL DEFAULT 0,  -- as quoted at the ref. elevation
+    atmospheric_ref_elev_deg REAL NOT NULL DEFAULT 90, -- scaled by the cosecant law
+    required_ebn0_db         REAL NOT NULL,
+    data_rate_bps            REAL NOT NULL,        -- the rate the source's Eb/N0 refers to
+    sources                  JSON NOT NULL         -- [{title, url}], https only
 );
 
 -- ========== OPERATIONAL / SESSION ==========
@@ -450,7 +459,9 @@ Still to do, when the feature arrives:
 
 Each phase is a **vertical slice** (backend + WebSocket + UI) that runs on its own. Mark the current phase here as you go.
 
-> **Current phase: _Phase 2c — containers + CI/CD to Azure Container Apps (pulled forward from Phase 9)._**
+> **Current phase: _Phase 3 — Systems & link._** Phases 1, 2, 2b and 2c are done and deployed.
+>
+> Phase numbers are for this plan and the docs only: the UI never shows "Phase N" (`frontend/src/lib/copy.test.ts` guards it).
 
 - **Phase 1 — Walking skeleton.** TLE fetch (Celestrak) + SGP4; topocentric geometry; accelerable sim clock; WebSocket snapshot. Frontend: location (geolocation + map click + lat/lon), **full catalog search**, 2D ground track moving live, az/el/range readout. DB: `ground_station`, `satellite`, `mission_session`.
 - **Phase 2 — Visibility & passes.** Visible-set (horizon mask): once a location is set, the server streams **every satellite currently above the mask by default**, with no search needed (design §5.3); search/track still work alongside it. AOS/LOS prediction (+max elevation/azimuths); polar sky plot + all-sky view; filterable list (type, min elevation, time-to-AOS, SAR-capable); selection linked across the map and both sky views. DB: `pass_window`.
@@ -599,3 +610,7 @@ When you close a gap, delete its line here.
 - **Phase 2b — Postgres on Neon, pulled forward from Phase 7** (2026-10-15). Reason: the Azure deploy needs a database that survives container restarts, and the code was already dialect-ready. Neon in every stage, one branch each: `dev` (local `.env`), `test` (`.env.test`), `production` (2026-10-16); SQLite is only the fallback when no URL is configured. Two URLs: `SATLAB_DATABASE_URL` (app, `satlab_app` role, Neon pooled host) and `SATLAB_MIGRATION_DATABASE_URL` (Alembic only, owner role, direct host; falls back to the app URL). Bare `postgres(ql)://` URLs are normalized to `postgresql+psycopg://`; Alembic escapes `%` for configparser. `SATLAB_TEST_POSTGRES_URL` (shell or `.env.test`, never `.env`, so dev credentials can't drive the tests) runs the whole suite on Postgres with one throwaway schema per test via `search_path`. No schema or contract changes; existing SQLite data isn't migrated (the catalog re-ingests, stations re-seed).
 - **Phase 2c — container deploy on Azure Container Apps** (2026-10-16). Two images: `satlab-web` (nginx-unprivileged serving the Vite build at `/satlab/`, `/` → 302 `/satlab/`, and proxying `/satlab/api` → `/api` and `/satlab/ws` → `/ws` with WebSocket upgrade; `SATLAB_API_UPSTREAM`, default `http://ca-satlab-api`) and `satlab-api` (uvicorn, **one worker, exactly one replica**: sessions, the sim loop and the fleet are in-memory, so a second replica would split WebSocket sessions; scaling out needs shared session state first). Both run in the existing `cae-portfolio` environment next to the portfolio site; only the web app has external ingress (`satlab.darshitp.dev`, the URL the portfolio already links to; the `/satlab/` base path is kept, so Umami paths are unchanged). Images live in GHCR, deployed by SHA tag. Migrations are a CI release step before rollout (owner URL only in the GitHub `production` environment), so every revision must be expand/contract-compatible with the code still running.
 - **Session capability tokens + WS auth** (2026-10-16). `POST /api/sessions` returns `MissionSessionCreated` = `MissionSessionOut` + `token` (`secrets.token_urlsafe(32)`), once; the DB keeps only `mission_session.token_hash` (SHA-256 hex, nullable; older sessions without one can't be attached and clients start a new session). `GET /api/sessions/{id}`, `POST …/end` and `GET …/passes` require `X-Session-Token`; missing/wrong token = the same 404 as an unknown session. WebSocket: the first client message must be `auth {token}` within `SATLAB_WS_AUTH_TIMEOUT_S` (default 5 s), sent as a message so the token never appears in URLs or proxy logs. Close codes: `4401` no valid `auth` (client treats it like 4404), `4404` unknown/ended/not-yours, `4503` at `SATLAB_MAX_ACTIVE_SESSIONS` (client keeps its backoff and shows "at capacity" once), `1008` foreign `Origin` (refused before accept, an HTTP 403) or over the per-connection message rate (`SATLAB_WS_MESSAGES_PER_S` / `SATLAB_WS_MESSAGE_BURST`). Frames are capped at 64 KiB (`uvicorn --ws-max-size`). The frontend keeps the token in memory only (the store's `session`, which isn't persisted).
+- **Phase 3 — link budget from published sources only** (2026-10-21). `link_profile` rows are synced from `backend/app/data/seed/link_profiles.json` inside `CatalogService.rebuild_fleet()` (startup and every ingest), only for satellites already in `satellite`, so the FK always holds without placeholder rows; the seed is authoritative (rows it drops are deleted) and an invalid seed is logged and skipped. Every value is quoted or derived (formula in `derivations`) from the cited source, and each source's own worked margin is a `checks` entry reproduced to 0.1 dB in `tests/test_linkbudget.py`. Deviations from the original DDL: `station_gt_db_k` (G/T, what budgets quote) replaces `station_gain_dbi`; `eirp_pattern` (isoflux antennas: EIRP by off-nadir angle, nadir pointing assumed), `atmospheric_loss_db` at `atmospheric_ref_elev_deg` scaled by the cosecant law, `coverage_half_angle_deg`, `label`, `sources`. Shipped: NOAA 20, NOAA 21 (X-band HRD ICDs), FengYun-3D (MPT ICD; its source holds losses constant, so they stay in `system_loss_db`), GOES 18/19 (GRB budget). Excluded: NOAA-15/18/19 (decommissioned 2025), analog FM (no Eb/N0), anything without a published EIRP (Metop AHRPT, Meteor LRPT, amateur cubesats). The fleet carries a `LinkTable` aligned with its rows; `LinkTable.evaluate` is the one computation behind snapshot links, arc colours, the link filter and RF health.
+- **Phase 3 — contract** (2026-10-21). `SatelliteState.link: LinkState | null` (`frequency_hz`, `data_rate_bps`, `ebn0_db`/`margin_db` null below the horizon, `doppler_hz` = received − transmitted, `rag`, `strong_link_elev_bands_deg` = elevation bands where the margin is green at the current altitude). `PassArcMessage.rag` (link state per point). `Snapshot.health: HealthState | null` for the selected satellite only: `power` (`soc_pct`, `sunlit_fraction`, `illumination`), `thermal` (`temperature_c`, band), `storage` (`fill_pct`, `activity`; null without a profile), `attitude` (`off_nadir_deg` vs `half_beamwidth_deg`; null below the mask), `rf` (= the link), each with `rag` and `modelled`, plus `rollup` (red if any red, else null if any lacks data, else worse of amber/green) and `model_version`. `SetFilter.link_ok_only` (profiled satellites only; in view, margin ≥ amber). `GET /api/link-profiles` (thresholds + profiles with sources). Every new field has a default and the TS mirror marks them optional, so web/API version skew degrades gracefully.
+- **Phase 3 — subsystem health is deterministic in sim time** (2026-10-21). `sim/subsystems.py` integrates from a fixed initial state (full battery, equilibrium temperature, full buffer) over the last `SATLAB_SUBSYSTEM_LOOKBACK_H` (24) hours on an absolute `SATLAB_SUBSYSTEM_STEP_S` (60 s) grid, so a clock jump or a replay gives the same values; grid inputs (sunlit fraction, downlink possible) are cached and extended incrementally (~4 ms/tick). Drivers are real: the Astronomical Almanac low-precision Sun (0.01°) with a conical umbra/penumbra (`sim/sun.py`, no ephemeris download), the pass geometry and the link margin. Parameters are generic and labelled modelled (`seed/subsystem_models.json`): the battery is sized for its own orbit's longest eclipse; storage knows only this station's contacts (a satellite unseen for a day reads full); attitude assumes nadir pointing. Not written to an event log yet (Phase 6); `health_change` events come then.
+- **Phase 3 — RAG colours** (2026-10-21). Green reuses the emerald primary (700 light / 400 dark); amber is a new functional pair amber-700 / amber-400 (amber-600 stays reserved for the greeting); red reuses red-700 / red-400. In the sky views a dot's fill is its link state (grey = no RF data) and the selection is marked by shape (ink ring, larger dot, ink label); the selected pass is coloured by `arc.rag` over a faint green strong-link band. Colour is never the only cue: RAG icons and words (Go / Marginal / No-go / No data) go with it.

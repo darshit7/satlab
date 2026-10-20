@@ -28,10 +28,13 @@ from app.config import BACKEND_DIR, get_settings
 from app.data.classify import reclassify_all
 from app.data.seed import seed_ground_stations
 from app.db.base import get_db, get_sessionmaker
-from app.db.models import GroundStation, MissionSession, Satellite
+from app.db.models import GroundStation, LinkProfile, MissionSession, Satellite
 from app.models.api import (
     CatalogStatus,
     GroundStationOut,
+    LinkProfileOut,
+    LinkProfilesOut,
+    LinkSourceOut,
     MissionSessionCreate,
     MissionSessionCreated,
     MissionSessionOut,
@@ -154,6 +157,42 @@ def health() -> dict[str, str]:
 @app.get("/api/stations", response_model=list[GroundStationOut])
 def list_stations(db: Db) -> list[GroundStation]:
     return list(db.scalars(select(GroundStation).order_by(GroundStation.id)))
+
+
+# ---------- link profiles ----------
+
+
+@app.get("/api/link-profiles", response_model=LinkProfilesOut)
+def list_link_profiles(db: Db) -> LinkProfilesOut:
+    """Published downlink budgets in use (reference data, like the stations)."""
+    settings = get_settings()
+    rows = db.execute(
+        select(LinkProfile, Satellite.name)
+        .join(Satellite, Satellite.norad_id == LinkProfile.norad_id)
+        .order_by(Satellite.name)
+    )
+    return LinkProfilesOut(
+        green_margin_db=settings.link_green_margin_db,
+        amber_margin_db=settings.link_amber_margin_db,
+        profiles=[
+            LinkProfileOut(
+                norad_id=profile.norad_id,
+                satellite_name=name,
+                label=profile.label,
+                frequency_hz=profile.frequency_hz,
+                eirp_dbw=profile.eirp_dbw,
+                station_gt_db_k=profile.station_gt_db_k,
+                system_loss_db=profile.system_loss_db,
+                atmospheric_loss_db=profile.atmospheric_loss_db,
+                atmospheric_ref_elev_deg=profile.atmospheric_ref_elev_deg,
+                required_ebn0_db=profile.required_ebn0_db,
+                data_rate_bps=profile.data_rate_bps,
+                coverage_half_angle_deg=profile.coverage_half_angle_deg,
+                sources=[LinkSourceOut.model_validate(src) for src in profile.sources],
+            )
+            for profile, name in rows
+        ],
+    )
 
 
 # ---------- satellite catalog ----------

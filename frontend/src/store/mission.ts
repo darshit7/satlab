@@ -5,6 +5,7 @@ import { DEFAULT_FILTERS, sanitizeFilters } from '../lib/filters'
 import type { ClockSample } from '../lib/time'
 import type {
   GroundStation,
+  LinkProfiles,
   LocationInput,
   MissionSessionCreated,
   PassPrediction,
@@ -40,6 +41,8 @@ export interface PassSchedule {
 interface MissionState {
   /** Preset stations; custom locations are never saved as stations. */
   stations: GroundStation[]
+  /** Published link budgets in use and the margin → RAG thresholds (reference data). */
+  linkProfiles: LinkProfiles | null
   /** Where the current (or last) session observes from: resumed on reload. */
   site: SessionSite | null
   /** The live session, with its capability token: in memory only, never persisted. */
@@ -59,6 +62,7 @@ interface MissionState {
   notices: Notice[]
 
   loadStations: () => Promise<void>
+  loadLinkProfiles: () => Promise<void>
   startSession: (site: SessionSite) => Promise<void>
   track: (sat: SatelliteSummary) => void
   untrack: (noradId: number) => void
@@ -176,6 +180,7 @@ export const useMission = create<MissionState>()(
 
       return {
         stations: [],
+        linkProfiles: null,
         site: null,
         session: null,
         connection: 'idle',
@@ -196,6 +201,14 @@ export const useMission = create<MissionState>()(
             set({ stations: await api.listStations() })
           } catch (err) {
             get().notify(`Could not load ground stations (${String(err)}). Is the backend running?`)
+          }
+        },
+
+        loadLinkProfiles: async () => {
+          try {
+            set({ linkProfiles: await api.linkProfiles() })
+          } catch {
+            // Reference data only (sources, legend thresholds): the live link state still streams.
           }
         },
 

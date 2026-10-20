@@ -183,6 +183,20 @@ def elevations(satrecs: SatrecArray, epochs: Epochs, observer: Observer) -> Floa
     return elevation
 
 
+def off_nadir_deg(r_sat_m: Floats, r_station_m: Floats) -> Floats:
+    """Angle at the satellite between its nadir and the line of sight to the station (°).
+
+    Positions in one Earth-centred frame, ``[..., 3]``. This is where the station sits in the
+    satellite's antenna pattern, assuming the satellite points its antenna at the nadir.
+    """
+    to_station = r_station_m - r_sat_m
+    with np.errstate(invalid="ignore", divide="ignore"):
+        cos = np.einsum("...i,...i->...", -r_sat_m, to_station) / (
+            np.linalg.norm(r_sat_m, axis=-1) * np.linalg.norm(to_station, axis=-1)
+        )
+        return np.degrees(np.arccos(np.clip(cos, -1.0, 1.0)))
+
+
 def geodetic(r_itrf_m: Floats) -> tuple[Floats, Floats, Floats]:
     """Earth-fixed position → WGS84 (latitude°, longitude°, height m)."""
     x, y, z = r_itrf_m[..., 0], r_itrf_m[..., 1], r_itrf_m[..., 2]

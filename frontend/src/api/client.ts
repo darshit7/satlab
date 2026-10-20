@@ -1,6 +1,7 @@
 import type {
   CatalogStatus,
   GroundStation,
+  LinkProfiles,
   MissionSessionCreate,
   MissionSessionCreated,
   PassPrediction,
@@ -32,6 +33,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   listStations: () => request<GroundStation[]>('/api/stations'),
+  linkProfiles: () => request<LinkProfiles>('/api/link-profiles'),
   searchSatellites: (q: string, remote = false, signal?: AbortSignal) =>
     request<SatelliteSearchResult>(
       `/api/satellites?${new URLSearchParams({ q, limit: '25', remote: String(remote) })}`,

@@ -89,3 +89,34 @@ export interface PassPrediction {
   always_visible: boolean
   passes: PassWindow[]
 }
+
+export interface LinkSource {
+  title: string
+  url: string
+}
+
+/** A satellite's published downlink budget, as the link state is computed from it. */
+export interface LinkProfile {
+  norad_id: number
+  satellite_name: string
+  label: string
+  frequency_hz: number
+  eirp_dbw: number
+  station_gt_db_k: number
+  system_loss_db: number
+  /** At atmospheric_ref_elev_deg, scaled along the slant path. */
+  atmospheric_loss_db: number
+  atmospheric_ref_elev_deg: number
+  required_ebn0_db: number
+  data_rate_bps: number
+  coverage_half_angle_deg: number | null
+  sources: LinkSource[]
+}
+
+export interface LinkProfiles {
+  /** Green strictly above. */
+  green_margin_db: number
+  /** Amber from here up to green; red below (or below the mask). */
+  amber_margin_db: number
+  profiles: LinkProfile[]
+}

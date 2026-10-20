@@ -39,6 +39,15 @@ export function Filters() {
         >
           SAR-capable
         </Button>
+        <Button
+          active={filters.link_ok_only}
+          aria-pressed={filters.link_ok_only}
+          className={toggle}
+          title="Only satellites with a published link budget; of those in view, only with a usable margin (0 dB or better)"
+          onClick={() => setFilters({ link_ok_only: !filters.link_ok_only })}
+        >
+          Link OK
+        </Button>
       </div>
       <div className="grid grid-cols-2 gap-2">
         <Select

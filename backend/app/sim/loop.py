@@ -5,7 +5,8 @@ data only (no I/O):
 
 1. propagates every catalogued satellite at once (vectorized SGP4) and finds those above the
    horizon mask;
-2. streams (above the mask ∩ session filter) + tracked + selected as a ``Snapshot``;
+2. streams (above the mask ∩ session filter) + tracked + selected as a ``Snapshot``, each with
+   its link budget when it has a published profile, plus the selection's subsystem health;
 3. computes a sky arc (``pass_arc``) for satellites newly in view, within a per-tick budget, and a
    ground track for tracked/selected satellites — each recomputed only when it runs out;
 4. advances the rising-soon sweep by one chunk and republishes ``upcoming`` when it changes.
@@ -32,9 +33,13 @@ from app.models.ws import (
     ClockState,
     ErrorMessage,
     GroundTrackMessage,
+    HealthState,
+    LinkState,
     ObserverState,
     PassArcMessage,
+    Rag,
     SatelliteState,
+    SatelliteType,
     SetFilter,
     Snapshot,
     UpcomingMessage,
@@ -42,9 +47,11 @@ from app.models.ws import (
 )
 from app.sim.clock import SimClock, wall_now
 from app.sim.fleet import Fleet
-from app.sim.geometry import Observation, Observer, geodetic, observe
-from app.sim.passes import UpcomingSweep, pass_arcs
+from app.sim.geometry import Observation, Observer, geodetic, observe, off_nadir_deg
+from app.sim.linkbudget import RAG_NAMES, RED, LinkTable, RagThresholds, strong_link_bands
+from app.sim.passes import Arc, UpcomingSweep, pass_arcs
 from app.sim.propagate import Elements, Epochs, epochs, ground_track
+from app.sim.subsystems import HealthTracker
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +68,9 @@ _SLOW_TICK_LOG_INTERVAL_S = 60.0
 # If the tick has already spent this share of its period (e.g. on a burst of new sky arcs), the
 # rising-soon sweep waits for the next tick: sgp4 holds the GIL, so work here delays everything.
 _SWEEP_BUDGET_SHARE = 0.3
+# Strong-link bands are cached per profile and satellite radius rounded to this many metres.
+_BAND_RADIUS_STEP_M = 1000.0
+_BAND_CACHE_SIZE = 256
 
 
 @dataclass(frozen=True)
@@ -76,6 +86,10 @@ class RuntimeConfig:
     upcoming_chunk_size: int = 500
     upcoming_max_time_scale: float = 60.0
     upcoming_limit: int = 100
+    link_green_margin_db: float = 6.0
+    link_amber_margin_db: float = 0.0
+    subsystem_lookback_h: float = 24.0
+    subsystem_step_s: float = 60.0
 
     @classmethod
     def from_settings(cls, s: Settings) -> "RuntimeConfig":
@@ -135,6 +149,7 @@ class _TrackState:
 @dataclass
 class _ArcState:
     epoch_key: tuple[float, float]  # the TLE it was computed from
+    links_version: int  # and the link profiles that coloured it
     computed_at: datetime
     valid_until: datetime
     message: PassArcMessage | None
@@ -149,6 +164,17 @@ class _Target:
     row: int | None = None
     elements: Elements | None = None
     pinned: bool = False  # tracked or selected
+
+
+@dataclass(frozen=True)
+class _Look:
+    """Where a streamed satellite is this tick, as the health model needs it."""
+
+    satrec: Satrec
+    kind: SatelliteType
+    elevation_deg: float
+    off_nadir_deg: float
+    link: LinkState | None
 
 
 def _epoch_key(satrec: Satrec) -> tuple[float, float]:
@@ -174,6 +200,16 @@ class SessionRuntime:
         self._mask_deg = config.horizon_mask_deg
         self._tick_period_s = 1.0 / config.tick_hz
         self._station = Observer(observer.lat_deg, observer.lon_deg, observer.alt_m)
+        self._thresholds = RagThresholds(config.link_green_margin_db, config.link_amber_margin_db)
+        self._health = HealthTracker(
+            self._station,
+            self._mask_deg,
+            self._thresholds,
+            lookback_s=config.subsystem_lookback_h * 3600,
+            step_s=config.subsystem_step_s,
+        )
+        self._bands: dict[tuple[int, int, float], list[tuple[float, float]]] = {}
+        self._selected_look: _Look | None = None
         self.tracked: list[int] = []
         self.selected: int | None = None
         self.filter = SetFilter()
@@ -297,6 +333,8 @@ class SessionRuntime:
         if fleet_look is not None:
             with np.errstate(invalid="ignore"):
                 shown &= fleet_look.elevation_deg[:, 0] >= min_elev
+            if self.filter.link_ok_only:
+                shown &= self._link_ok_rows(fleet, fleet_look)
 
         # 2. What to stream.
         targets = self._targets(fleet, np.flatnonzero(shown))
@@ -304,7 +342,13 @@ class SessionRuntime:
 
         # 3. Geometry the views draw along.
         streamed = {s.norad_id for s in states}
-        self._update_arcs(targets, sim_time, streamed, {s.norad_id for s in states if s.above_mask})
+        self._update_arcs(
+            targets,
+            fleet.links,
+            sim_time,
+            streamed,
+            {s.norad_id for s in states if s.above_mask},
+        )
         for target in targets:
             if target.pinned and target.norad_id in streamed:
                 elements = target.elements or self._lookup(target.norad_id)
@@ -324,6 +368,7 @@ class SessionRuntime:
             observer=self.observer,
             visible_count=int(above.sum()),
             satellites=states,
+            health=self._selected_health(fleet.links, sim_time),
         )
         self.tick += 1
         self._publish(snapshot)
@@ -337,8 +382,28 @@ class SessionRuntime:
         allowed = fleet.type_mask(self.filter.types)
         if self.filter.sar_only:
             allowed &= fleet.sar
+        if self.filter.link_ok_only:
+            allowed &= fleet.links.has_profile
         self._allowed = (fleet.version, self.filter, allowed)
         return allowed
+
+    def _link_ok_rows(self, fleet: Fleet, look: Observation) -> NDArray[np.bool_]:
+        """Per fleet row: has a link profile and, now, a margin at or above the amber threshold."""
+        ok = np.zeros(len(fleet), dtype=bool)
+        links = fleet.links
+        rows = links.rows
+        if len(rows):
+            ev = links.evaluate(
+                links.profile_of_row[rows],
+                range_m=look.range_m[rows, 0],
+                range_rate_m_s=look.range_rate_m_s[rows, 0],
+                elevation_deg=look.elevation_deg[rows, 0],
+                off_nadir_deg=off_nadir_deg(look.r_itrf_m[rows, 0], self._station.itrf_m),
+                mask_deg=self._mask_deg,
+                thresholds=self._thresholds,
+            )
+            ok[rows] = ev.rag != RED
+        return ok
 
     def _targets(self, fleet: Fleet, shown_rows: Iterable[int]) -> list[_Target]:
         targets: dict[int, _Target] = {}
@@ -372,11 +437,13 @@ class SessionRuntime:
         if extras:
             extra_look = observe(SatrecArray([t.satrec for t in extras]), now_epoch, self._station)
             looks += [(t, extra_look, i) for i, t in enumerate(extras)]
+        self._selected_look = None
         if not looks:
             return []
 
         r_itrf = np.stack([obs.r_itrf_m[i, 0] for _, obs, i in looks])
         lat, lon, alt = geodetic(r_itrf)
+        links = self._link_states(fleet.links, looks, r_itrf)
 
         states: list[SatelliteState] = []
         for k, (target, obs, i) in enumerate(looks):
@@ -420,9 +487,92 @@ class SessionRuntime:
                     range_m=round(rng, 1),
                     range_rate_m_s=round(rate, 3),
                     above_mask=el >= self._mask_deg,
+                    link=links.get(k),
                 )
             )
+            if target.norad_id == self.selected:
+                off_nadir = off_nadir_deg(r_itrf[k], self._station.itrf_m)
+                self._selected_look = _Look(target.satrec, kind, el, float(off_nadir), links.get(k))
         return states
+
+    def _link_states(
+        self,
+        links: LinkTable,
+        looks: list[tuple[_Target, Observation, int]],
+        r_itrf: NDArray[np.float64],
+    ) -> dict[int, LinkState]:
+        """Link state per entry of ``looks`` that has a profile (keyed by position in ``looks``)."""
+        with_profile = [
+            (k, links.by_norad[t.norad_id])
+            for k, (t, _, _) in enumerate(looks)
+            if t.norad_id in links.by_norad
+        ]
+        if not with_profile:
+            return {}
+        ks = [k for k, _ in with_profile]
+        ev = links.evaluate(
+            [p for _, p in with_profile],
+            range_m=np.array([looks[k][1].range_m[looks[k][2], 0] for k in ks]),
+            range_rate_m_s=np.array([looks[k][1].range_rate_m_s[looks[k][2], 0] for k in ks]),
+            elevation_deg=np.array([looks[k][1].elevation_deg[looks[k][2], 0] for k in ks]),
+            off_nadir_deg=off_nadir_deg(r_itrf[ks], self._station.itrf_m),
+            mask_deg=self._mask_deg,
+            thresholds=self._thresholds,
+        )
+        station_radius = float(np.linalg.norm(self._station.itrf_m))
+        result: dict[int, LinkState] = {}
+        for j, (k, p) in enumerate(with_profile):
+            profile = links.profiles[p]
+            margin, ebn0, doppler = ev.margin_db[j], ev.ebn0_db[j], ev.doppler_hz[j]
+            result[k] = LinkState(
+                frequency_hz=profile.frequency_hz,
+                data_rate_bps=profile.data_rate_bps,
+                ebn0_db=round(float(ebn0), 2) if math.isfinite(ebn0) else None,
+                margin_db=round(float(margin), 2) if math.isfinite(margin) else None,
+                doppler_hz=round(float(doppler), 1) if math.isfinite(doppler) else 0.0,
+                rag=RAG_NAMES[int(ev.rag[j])],  # type: ignore[arg-type]
+                strong_link_elev_bands_deg=self._strong_link_bands(
+                    links, p, float(np.linalg.norm(r_itrf[k])), station_radius
+                ),
+            )
+        return result
+
+    def _strong_link_bands(
+        self, links: LinkTable, profile: int, sat_radius_m: float, station_radius_m: float
+    ) -> list[tuple[float, float]]:
+        key = (links.version, profile, round(sat_radius_m / _BAND_RADIUS_STEP_M))
+        bands = self._bands.get(key)
+        if bands is None:
+            if len(self._bands) >= _BAND_CACHE_SIZE:
+                self._bands.clear()
+            bands = strong_link_bands(
+                links.profiles[profile],
+                key[2] * _BAND_RADIUS_STEP_M,
+                station_radius_m,
+                self._mask_deg,
+                self._thresholds,
+            )
+            self._bands[key] = bands
+        return bands
+
+    def _selected_health(self, links: LinkTable, sim_time: datetime) -> HealthState | None:
+        look = self._selected_look
+        if look is None or self.selected is None:
+            return None
+        try:
+            return self._health.state(
+                norad_id=self.selected,
+                satrec=look.satrec,
+                kind=look.kind,
+                links=links,
+                sim_time=sim_time,
+                elevation_deg=look.elevation_deg,
+                off_nadir=look.off_nadir_deg,
+                link=look.link,
+            )
+        except Exception:
+            log.exception("session %d: health of %s failed", self.session_id, self.selected)
+            return None
 
     def _report_failure(self, target: _Target) -> None:
         if target.norad_id not in self._failed:
@@ -435,7 +585,12 @@ class SessionRuntime:
     # ----- sky arcs -----
 
     def _update_arcs(
-        self, targets: list[_Target], sim_time: datetime, streamed: set[int], in_view: set[int]
+        self,
+        targets: list[_Target],
+        links: LinkTable,
+        sim_time: datetime,
+        streamed: set[int],
+        in_view: set[int],
     ) -> None:
         # Arcs follow what is in view, plus pinned satellites (their next pass, if below).
         wanted = {
@@ -448,7 +603,7 @@ class SessionRuntime:
         stale = [
             t
             for t in sorted(wanted.values(), key=lambda t: not t.pinned)  # pinned first
-            if not self._arc_valid(self._arcs.get(t.norad_id), t.satrec, sim_time)
+            if not self._arc_valid(self._arcs.get(t.norad_id), t.satrec, links, sim_time)
         ][: self.config.max_arcs_per_tick]
         if not stale:
             return
@@ -473,10 +628,12 @@ class SessionRuntime:
                     start_time=arc.start,
                     end_time=arc.end,
                     points=arc.points,
+                    rag=self._arc_rag(links, target.norad_id, arc),
                 )
                 self._publish(message)
             self._arcs[target.norad_id] = _ArcState(
                 epoch_key=_epoch_key(target.satrec),
+                links_version=links.version,
                 computed_at=sim_time,
                 valid_until=arc.end
                 if arc is not None
@@ -484,11 +641,30 @@ class SessionRuntime:
                 message=message,
             )
 
+    def _arc_rag(self, links: LinkTable, norad_id: int, arc: Arc) -> list[Rag] | None:
+        """The link state at each arc point: the same evaluation as the snapshot's."""
+        profile = links.by_norad.get(norad_id)
+        if profile is None or not arc.points:
+            return None
+        ev = links.evaluate(
+            np.full(len(arc.points), profile),
+            range_m=arc.range_m,
+            range_rate_m_s=arc.range_rate_m_s,
+            elevation_deg=np.array([el for _, el in arc.points]),
+            off_nadir_deg=arc.off_nadir_deg,
+            mask_deg=self._mask_deg,
+            thresholds=self._thresholds,
+        )
+        return [RAG_NAMES[int(r)] for r in ev.rag]  # type: ignore[misc]
+
     @staticmethod
-    def _arc_valid(state: _ArcState | None, satrec: Satrec, sim_time: datetime) -> bool:
+    def _arc_valid(
+        state: _ArcState | None, satrec: Satrec, links: LinkTable, sim_time: datetime
+    ) -> bool:
         return (
             state is not None
             and state.epoch_key == _epoch_key(satrec)
+            and state.links_version == links.version
             and state.computed_at <= sim_time + timedelta(seconds=1)  # no backwards jump
             and sim_time <= state.valid_until
         )

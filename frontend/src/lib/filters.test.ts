@@ -17,7 +17,15 @@ describe('sanitizeFilters', () => {
         rising_within_min: 17.6,
         extra: '<script>',
       }),
-    ).toEqual({ types: ['weather', 'sar'], sar_only: false, min_elevation_deg: 90, rising_within_min: 18 })
+    ).toEqual({
+      types: ['weather', 'sar'],
+      sar_only: false,
+      link_ok_only: false,
+      min_elevation_deg: 90,
+      rising_within_min: 18,
+    })
+    expect(sanitizeFilters({ link_ok_only: true }).link_ok_only).toBe(true)
+    expect(sanitizeFilters({ link_ok_only: 1 }).link_ok_only).toBe(false)
     expect(sanitizeFilters({ rising_within_min: 1e9, min_elevation_deg: -5 })).toMatchObject({
       rising_within_min: 60,
       min_elevation_deg: 0,

@@ -113,3 +113,34 @@ class PassPrediction(BaseModel):
     end: datetime
     always_visible: bool  # above the mask for the whole window (e.g. geostationary)
     passes: list[PassWindowOut]
+
+
+class LinkSourceOut(BaseModel):
+    title: str
+    url: str
+
+
+class LinkProfileOut(BaseModel):
+    """A satellite's published downlink budget, as the link state is computed from it."""
+
+    norad_id: int
+    satellite_name: str
+    label: str
+    frequency_hz: float
+    eirp_dbw: float
+    station_gt_db_k: float
+    system_loss_db: float
+    atmospheric_loss_db: float  # at atmospheric_ref_elev_deg, scaled by the cosecant law
+    atmospheric_ref_elev_deg: float
+    required_ebn0_db: float
+    data_rate_bps: float
+    coverage_half_angle_deg: float | None
+    sources: list[LinkSourceOut]
+
+
+class LinkProfilesOut(BaseModel):
+    """Every link profile in use, with the margin thresholds that map margins to RAG."""
+
+    green_margin_db: float  # green strictly above
+    amber_margin_db: float  # amber from here up to green; red below (or below the mask)
+    profiles: list[LinkProfileOut]

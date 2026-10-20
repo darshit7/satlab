@@ -5,7 +5,6 @@ import { useMission } from '../store/mission'
 import type { ConnectionStatus } from '../ws/sessionSocket'
 import { Button } from './ui/Button'
 import { cn } from './ui/cn'
-import { Pill } from './ui/Pill'
 import { ThemeSwitcher } from './ui/ThemeSwitcher'
 
 const RATES = [1, 10, 60, 600, 3600]
@@ -36,10 +35,7 @@ export function ClockBar() {
 
   return (
     <header className="sticky top-2 z-20 flex flex-wrap items-center gap-x-6 gap-y-3 bg-white/75 px-4 py-3 shadow-xs backdrop-blur md:rounded-2xl lg:top-3 dark:bg-dark/75">
-      <div className="flex items-center gap-2">
-        <Wordmark />
-        <Pill size="sm">Phase 2</Pill>
-      </div>
+      <Wordmark />
 
       <div className="min-w-[13rem]">
         <div className="font-mono text-base tabular-nums">{simMs !== null ? formatUtc(simMs) : '—'}</div>

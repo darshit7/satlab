@@ -24,7 +24,7 @@ from numpy.typing import NDArray
 from sgp4.api import Satrec, SatrecArray
 
 from app.sim.fleet import Fleet
-from app.sim.geometry import Observer, elevations, observe_pairs
+from app.sim.geometry import Observation, Observer, elevations, observe_pairs, off_nadir_deg
 from app.sim.propagate import epochs
 
 # A pass can peak between two grid samples; local maxima this far below the mask get refined too.
@@ -86,13 +86,17 @@ class _Pairs:
         self.observer = observer
         self.precision = precision
 
+    def observe(self, sats: Ints, offsets_s: Floats) -> Observation:
+        """``satrecs[sats[i]]`` seen from the observer at ``start + offsets_s[i]``."""
+        return observe_pairs(
+            [self.satrecs[int(i)] for i in sats], epochs(self.start, offsets_s), self.observer
+        )
+
     def look(self, sats: Ints, offsets_s: Floats) -> tuple[Floats, Floats]:
         """(azimuth°, elevation°) of ``satrecs[sats[i]]`` at ``start + offsets_s[i]``."""
         if len(sats) == 0:
             return np.empty(0), np.empty(0)
-        obs = observe_pairs(
-            [self.satrecs[int(i)] for i in sats], epochs(self.start, offsets_s), self.observer
-        )
+        obs = self.observe(sats, offsets_s)
         return obs.azimuth_deg, np.where(obs.ok, obs.elevation_deg, _BELOW)
 
     def bisect(self, sats: Ints, lo: Floats, hi: Floats, mask_deg: float, rising: bool) -> Floats:
@@ -244,7 +248,10 @@ def find_spans(
 
 @dataclass(frozen=True)
 class Arc:
-    """A pass sampled for drawing: ``points`` are (azimuth°, elevation°) evenly spaced in time."""
+    """A pass sampled for drawing: ``points`` are (azimuth°, elevation°) evenly spaced in time.
+
+    ``range_m`` / ``range_rate_m_s`` / ``off_nadir_deg`` give the link geometry at each point.
+    """
 
     aos: datetime | None
     los: datetime | None
@@ -252,6 +259,9 @@ class Arc:
     start: datetime
     end: datetime
     points: list[tuple[float, float]]
+    range_m: Floats
+    range_rate_m_s: Floats
+    off_nadir_deg: Floats
 
 
 def pass_arcs(
@@ -293,8 +303,12 @@ def pass_arcs(
         ]
     )
     sats = np.repeat(np.asarray(picked, dtype=np.intp), n_points)
-    az, el = _Pairs(satrecs, window_start, observer).look(sats, offsets)
+    obs = _Pairs(satrecs, window_start, observer).observe(sats, offsets)
+    az, el = obs.azimuth_deg, np.where(obs.ok, obs.elevation_deg, _BELOW)
     points = np.stack((np.round(az, 3), np.round(el, 3)), axis=-1).reshape(-1, n_points, 2).tolist()
+    ranges = obs.range_m.reshape(-1, n_points)
+    rates = obs.range_rate_m_s.reshape(-1, n_points)
+    off_nadir = off_nadir_deg(obs.r_itrf_m, observer.itrf_m).reshape(-1, n_points)
     for row, (k, (a, b)) in enumerate(zip(picked, bounds, strict=True)):
         span = chosen[k]
         assert span is not None
@@ -305,6 +319,9 @@ def pass_arcs(
             start=a,
             end=b,
             points=[(x, y) for x, y in points[row]],
+            range_m=ranges[row],
+            range_rate_m_s=rates[row],
+            off_nadir_deg=off_nadir[row],
         )
     return arcs
 

@@ -1,9 +1,9 @@
 // Canvas drawing for the sky views (polar plot, all-sky). Presentation only: every position comes
 // from the backend's snapshots and server-sampled pass arcs.
 
-import { positionOnArc, project, type Hit, type SkyProjection, type TimedArc, type XY } from '../lib/sky'
+import { positionOnArc, project, ringRadius, type Hit, type SkyProjection, type TimedArc, type XY } from '../lib/sky'
 import type { ResolvedTheme } from '../lib/theme'
-import type { PassArcMessage, SatelliteState, Snapshot } from '../types/ws'
+import type { PassArcMessage, Rag, SatelliteState, Snapshot } from '../types/ws'
 
 const CARDINALS: [string, number][] = [
   ['N', 0],
@@ -17,7 +17,11 @@ function token(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(`--color-${name}`).trim()
 }
 
-/** Sky colors per theme, from the same tokens as the UI and the map. */
+/** Sky colors per theme, from the same tokens as the UI and the map.
+ *
+ *  In the sky views a dot's fill is its link state (the server's RAG; grey = no RF data), so the
+ *  emerald there always means "green link". The selection is marked by shape: an ink ring, a
+ *  larger dot and an ink label. */
 export function palette(theme: ResolvedTheme) {
   const light = theme === 'light'
   return {
@@ -32,6 +36,13 @@ export function palette(theme: ResolvedTheme) {
     faint: token(light ? 'gray-300' : 'gray-600'),
     accent: token(light ? 'primary-600' : 'primary-400'),
     ground: token(light ? 'white' : 'dark'),
+    /** The selection's ring, label and (without RF data) its pass. */
+    ink: token(light ? 'gray-900' : 'gray-100'),
+    rag: {
+      green: token(light ? 'primary-600' : 'primary-400'),
+      amber: token(light ? 'amber-700' : 'amber-400'),
+      red: token(light ? 'red-700' : 'red-400'),
+    } satisfies Record<Rag, string>,
   }
 }
 export type SkyPalette = ReturnType<typeof palette>
@@ -56,6 +67,8 @@ export interface SkyFrame {
 export interface SkyArc extends TimedArc {
   hasAos: boolean
   hasLos: boolean
+  /** Server link state at each point; null without a link profile. */
+  rag: Rag[] | null
 }
 
 const timedArcs = new WeakMap<PassArcMessage, SkyArc>()
@@ -68,6 +81,7 @@ export function timed(arc: PassArcMessage): SkyArc {
       points: arc.points,
       hasAos: arc.aos_time !== null,
       hasLos: arc.los_time !== null,
+      rag: arc.rag && arc.rag.length === arc.points.length ? arc.rag : null,
     }
     timedArcs.set(arc, t)
   }
@@ -144,20 +158,59 @@ export function strokePath(ctx: CanvasRenderingContext2D, points: XY[]) {
   ctx.stroke()
 }
 
-/** A dot, optionally with the selection halo. */
-export function dot(ctx: CanvasRenderingContext2D, [x, y]: XY, radius: number, fill: string, halo?: string) {
-  if (halo) {
-    ctx.globalAlpha = 0.2
-    ctx.fillStyle = halo
-    ctx.beginPath()
-    ctx.arc(x, y, radius + 6, 0, 2 * Math.PI)
-    ctx.fill()
-    ctx.globalAlpha = 1
-  }
+/** A dot. */
+export function dot(ctx: CanvasRenderingContext2D, [x, y]: XY, radius: number, fill: string) {
   ctx.fillStyle = fill
   ctx.beginPath()
   ctx.arc(x, y, radius, 0, 2 * Math.PI)
   ctx.fill()
+}
+
+/** The selection: a ring in ink around its (link-coloured) dot, on a ground-coloured gap. */
+export function selectionRing(ctx: CanvasRenderingContext2D, [x, y]: XY, radius: number, c: SkyPalette) {
+  ctx.lineWidth = 3
+  ctx.strokeStyle = c.ground
+  ctx.beginPath()
+  ctx.arc(x, y, radius + 3, 0, 2 * Math.PI)
+  ctx.stroke()
+  ctx.lineWidth = 1.5
+  ctx.strokeStyle = c.ink
+  ctx.beginPath()
+  ctx.arc(x, y, radius + 4, 0, 2 * Math.PI)
+  ctx.stroke()
+}
+
+/** Fill of a satellite's dot: its link state, or grey without RF data. */
+export function linkColor(c: SkyPalette, sat: SatelliteState, fallback: string = c.sat): string {
+  return sat.link ? c.rag[sat.link.rag] : fallback
+}
+
+/** The inner "strong-link" region: the elevation bands where the selection's margin is green. */
+export function strongLinkRegion(f: SkyFrame, bands: [number, number][]) {
+  const { ctx, p, c } = f
+  ctx.save()
+  for (const [lo, hi] of bands) {
+    const outer = ringRadius(lo, p)
+    const inner = ringRadius(hi, p)
+    ctx.globalAlpha = 0.1
+    ctx.fillStyle = c.rag.green
+    ctx.beginPath()
+    ctx.arc(p.cx, p.cy, outer, 0, 2 * Math.PI)
+    if (inner > 0.5) ctx.arc(p.cx, p.cy, inner, 0, 2 * Math.PI, true)
+    ctx.fill()
+    ctx.globalAlpha = 0.6
+    ctx.strokeStyle = c.rag.green
+    ctx.lineWidth = 1
+    ctx.setLineDash([2, 3])
+    for (const r of [outer, inner]) {
+      if (r <= 0.5) continue
+      ctx.beginPath()
+      ctx.arc(p.cx, p.cy, r, 0, 2 * Math.PI)
+      ctx.stroke()
+    }
+    ctx.setLineDash([])
+  }
+  ctx.restore()
 }
 
 /** A name next to a dot, haloed in the ground color so it reads over grid lines and other dots. */
