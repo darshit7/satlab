@@ -1,7 +1,8 @@
 """The fleet: every catalogued satellite, ready for vectorized propagation.
 
-An immutable bundle of parallel arrays plus one ``SatrecArray``. The catalog service builds a new
-one after each ingest and swaps it in with a single assignment; the sim loop only ever reads it.
+An immutable bundle of parallel arrays plus one ``SatrecArray``, and the link profiles aligned with
+its rows. The catalog service builds a new one after each ingest and swaps it in with a single
+assignment; the sim loop only ever reads it.
 """
 
 import itertools
@@ -14,6 +15,7 @@ from numpy.typing import NDArray
 from sgp4.api import Satrec, SatrecArray
 
 from app.models.ws import SATELLITE_TYPES, SatelliteType
+from app.sim.linkbudget import LinkProfile, LinkTable
 from app.sim.propagate import jd_to_datetime
 
 _versions = itertools.count(1)
@@ -41,9 +43,10 @@ class Fleet:
     satrecs: tuple[Satrec, ...]
     index: dict[int, int] = field(repr=False)
     array: SatrecArray | None = field(repr=False)
+    links: LinkTable = field(repr=False)
 
     @classmethod
-    def build(cls, rows: Iterable[FleetRow]) -> "Fleet":
+    def build(cls, rows: Iterable[FleetRow], profiles: Iterable[LinkProfile] = ()) -> "Fleet":
         kept: list[tuple[FleetRow, Satrec]] = []
         seen: set[int] = set()
         for row in rows:
@@ -58,6 +61,7 @@ class Fleet:
             seen.add(row.norad_id)
             kept.append((row, satrec))
         satrecs = tuple(s for _, s in kept)
+        index = {r.norad_id: i for i, (r, _) in enumerate(kept)}
         return cls(
             version=next(_versions),
             norad_ids=np.array([r.norad_id for r, _ in kept], dtype=np.int64),
@@ -66,8 +70,9 @@ class Fleet:
             sar=np.array([r.is_sar_capable for r, _ in kept], dtype=np.bool_),
             tle_epochs=tuple(jd_to_datetime(s.jdsatepoch, s.jdsatepochF) for s in satrecs),
             satrecs=satrecs,
-            index={r.norad_id: i for i, (r, _) in enumerate(kept)},
+            index=index,
             array=SatrecArray(list(satrecs)) if satrecs else None,
+            links=LinkTable.build(profiles, index, len(kept)),
         )
 
     @classmethod

@@ -1,0 +1,29 @@
+{
+  "_comment": [
+    "Generic, MODELLED subsystem parameters (the UI labels them so). They are not any satellite's real values.",
+    "What drives them is real: eclipse from the Sun's position and the Earth's shadow, contact and link margin from the pass geometry and the published link budget.",
+    "power: the battery is sized for its own orbit, so `design_dod_pct` is the depth of discharge at the end of that orbit's longest eclipse (β = 0); in sunlight it recharges `recharge_factor` times faster than it would need to.",
+    "thermal: a first-order lag toward the sunlit / eclipse equilibrium temperature, weighted by the sunlit fraction.",
+    "storage: fills from the payload in `fill_hours` without a downlink; a contact with this station with margin at or above the amber threshold empties a full buffer in `capacity_downlink_s`. Only this station's contacts are known, so a satellite this station hasn't seen for a day reads full.",
+    "attitude: the station's angle off the satellite's nadir against the antenna's coverage (the link profile's, when it has one).",
+    "`types` override `default` per satellite type; `version` is reported with every health state."
+  ],
+  "version": 1,
+  "thresholds": {
+    "power_soc_pct": { "green_at_or_above": 70.0, "amber_at_or_above": 50.0 },
+    "storage_fill_pct": { "green_at_or_below": 70.0, "amber_at_or_below": 90.0 },
+    "thermal_amber_beyond_band_c": 5.0,
+    "attitude_amber_beyond_beam_deg": 5.0
+  },
+  "default": {
+    "power": { "design_dod_pct": 35.0, "recharge_factor": 1.5 },
+    "thermal": { "sunlit_eq_c": 22.0, "eclipse_eq_c": -18.0, "tau_s": 2400.0, "band_min_c": -10.0, "band_max_c": 45.0 },
+    "storage": { "fill_hours": 24.0, "capacity_downlink_s": 300.0 },
+    "attitude": { "half_beamwidth_deg": 62.0 }
+  },
+  "types": {
+    "station": {
+      "thermal": { "sunlit_eq_c": 24.0, "eclipse_eq_c": 10.0, "tau_s": 10800.0, "band_min_c": 15.0, "band_max_c": 30.0 }
+    }
+  }
+}

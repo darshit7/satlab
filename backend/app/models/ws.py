@@ -1,7 +1,8 @@
 """WebSocket contract. Mirrored in frontend/src/types/ws.ts — change both in lockstep.
 
-Server → client: ``snapshot`` (every tick), ``ground_track`` and ``pass_arc`` (when (re)computed),
-``upcoming`` (when the rising-soon list changes), ``error``.
+Server → client: ``snapshot`` (every tick; link state per satellite, subsystem health of the
+selection), ``ground_track`` and ``pass_arc`` (when (re)computed), ``upcoming`` (when the
+rising-soon list changes), ``error``.
 Client → server: ``auth`` (first message on every connection), then ``set_tracked``,
 ``set_selected``, ``set_filter``, ``set_clock``.
 """
@@ -27,6 +28,9 @@ MAX_CLIENT_NORAD_IDS = 100
 MAX_RISING_WITHIN_MIN = 60
 NoradId = Annotated[int, Field(ge=1, le=999_999_999)]
 
+# Link and subsystem health (AGENTS.md §7): green > 6 dB margin, amber 0-6 dB, red below.
+Rag = Literal["green", "amber", "red"]
+
 # ---------- server → client ----------
 
 
@@ -42,6 +46,21 @@ class ObserverState(BaseModel):
     lon_deg: float
     alt_m: float
     horizon_mask_deg: float
+
+
+class LinkState(BaseModel):
+    """The satellite's published downlink, received at this station (one link-budget computation
+    drives the readout, the sky-view colours and the RF subsystem)."""
+
+    frequency_hz: float
+    data_rate_bps: float
+    ebn0_db: float | None  # null below the horizon: no line of sight
+    margin_db: float | None  # Eb/N0 minus the required Eb/N0
+    doppler_hz: float  # received minus transmitted frequency; positive while approaching
+    rag: Rag  # red below the horizon mask, whatever the margin
+    # Elevations where the margin would be green at the satellite's current altitude: the inner
+    # "strong-link" region of the sky. Empty when it never is.
+    strong_link_elev_bands_deg: list[tuple[float, float]]
 
 
 class SatelliteState(BaseModel):
@@ -60,6 +79,64 @@ class SatelliteState(BaseModel):
     range_m: float
     range_rate_m_s: float
     above_mask: bool  # elevation ≥ the horizon mask: "in view" (geometric, not naked-eye)
+    link: LinkState | None = None  # null: no published RF parameters for this satellite
+
+
+Illumination = Literal["sunlit", "penumbra", "eclipse"]
+
+
+class PowerHealth(BaseModel):
+    rag: Rag
+    soc_pct: float  # battery state of charge
+    sunlit_fraction: float  # of the solar disc, now (real geometry)
+    illumination: Illumination
+    modelled: bool = True
+
+
+class ThermalHealth(BaseModel):
+    rag: Rag
+    temperature_c: float
+    band_min_c: float  # operating band
+    band_max_c: float
+    modelled: bool = True
+
+
+class StorageHealth(BaseModel):
+    rag: Rag | None  # null without a link profile: nothing to downlink at
+    fill_pct: float | None
+    activity: Literal["filling", "downlinking", "full"] | None
+    modelled: bool = True
+
+
+class AttitudeHealth(BaseModel):
+    rag: Rag | None  # null below the horizon mask: the station isn't in view to point at
+    off_nadir_deg: float | None  # the station's angle off the satellite's nadir
+    half_beamwidth_deg: float  # antenna coverage (the link profile's, when there is one)
+    modelled: bool = True
+
+
+class RfHealth(BaseModel):
+    rag: Rag | None  # null: no published RF parameters
+    margin_db: float | None
+    modelled: bool = False  # from the published link budget
+
+
+class HealthState(BaseModel):
+    """Subsystem health of one satellite. Power, thermal, storage and attitude are modelled from
+    generic parameters (driven by real eclipse and pass geometry); RF is the link budget.
+
+    ``rollup``: red if any subsystem is red; otherwise null if any has no data; otherwise the
+    worse of amber and green.
+    """
+
+    norad_id: int
+    model_version: int  # of app/data/seed/subsystem_models.json
+    rollup: Rag | None
+    power: PowerHealth
+    thermal: ThermalHealth
+    storage: StorageHealth
+    attitude: AttitudeHealth
+    rf: RfHealth
 
 
 class Snapshot(BaseModel):
@@ -74,6 +151,7 @@ class Snapshot(BaseModel):
     observer: ObserverState
     visible_count: int  # satellites above the mask before the session filter
     satellites: list[SatelliteState]
+    health: HealthState | None = None  # of the selected satellite
 
 
 class GroundTrackMessage(BaseModel):
@@ -100,6 +178,7 @@ class PassArcMessage(BaseModel):
     start_time: datetime
     end_time: datetime
     points: list[tuple[float, float]]  # (azimuth_deg, elevation_deg)
+    rag: list[Rag] | None = None  # link state at each point; null without a link profile
 
 
 class UpcomingPass(BaseModel):
@@ -175,6 +254,8 @@ class SetFilter(BaseModel):
         default_factory=lambda: list(SATELLITE_TYPES), max_length=len(SATELLITE_TYPES)
     )
     sar_only: bool = False
+    # Only satellites with a link profile; of those in view, only with margin ≥ the amber threshold.
+    link_ok_only: bool = False
     # Effective threshold is max(horizon mask, this). For rising-soon passes it applies to the
     # pass's (approximate) maximum elevation.
     min_elevation_deg: float = Field(default=0.0, ge=0.0, le=90.0)

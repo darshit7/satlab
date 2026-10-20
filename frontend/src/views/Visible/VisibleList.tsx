@@ -4,12 +4,14 @@ import { Card } from '../../components/ui/Card'
 import { cn } from '../../components/ui/cn'
 import { Emoji } from '../../components/ui/Emoji'
 import { Pill } from '../../components/ui/Pill'
+import { RagDot } from '../../components/ui/Rag'
 import { focusRing } from '../../components/ui/Button'
 import { TYPE_LABELS } from '../../lib/filters'
+import { formatMarginDb, ragWord } from '../../lib/rag'
 import { formatCountdown } from '../../lib/time'
 import { useSimNow } from '../../lib/useSimNow'
 import { useMission } from '../../store/mission'
-import type { SatelliteState, SatelliteType, UpcomingPass } from '../../types/ws'
+import type { LinkState, SatelliteState, SatelliteType, UpcomingPass } from '../../types/ws'
 import { Filters } from './Filters'
 
 const MAX_ROWS = 100
@@ -22,12 +24,15 @@ function Row({
   type,
   detail,
   pinned,
+  link,
 }: {
   noradId: number
   name: string
   type: SatelliteType
   detail: ReactNode
   pinned: boolean
+  /** The link state, for satellites with a published RF profile. */
+  link?: LinkState | null
 }) {
   const selected = useMission((s) => s.selectedId === noradId)
   const select = useMission((s) => s.select)
@@ -46,6 +51,7 @@ function Row({
         <span className="min-w-0 flex-1">
           <span className={cn('flex items-center gap-1.5 truncate text-sm font-semibold', selected && 'text-primary-700 dark:text-primary-400')}>
             {pinned && <Crosshair size={14} strokeWidth={1.5} className="shrink-0" aria-label="tracked" />}
+            {link && <RagDot rag={link.rag} label={`Link ${ragWord(link.rag)}, ${formatMarginDb(link.margin_db)} dB`} />}
             <span className="truncate">{name}</span>
           </span>
           <span className="text-xs text-gray-500 dark:text-gray-400">
@@ -74,9 +80,10 @@ function UpNow({ sats, simMs }: { sats: SatelliteState[]; simMs: number }) {
             name={sat.name}
             type={sat.type}
             pinned={trackedIds.has(sat.norad_id)}
+            link={sat.link}
             detail={
               <>
-                <span className="text-primary-700 dark:text-primary-400">{sat.elevation_deg.toFixed(0)}°</span>
+                <span>{sat.elevation_deg.toFixed(0)}°</span>
                 <span className="text-gray-500 dark:text-gray-400"> az {sat.azimuth_deg.toFixed(0)}°</span>
                 <span className="block text-xs text-gray-500 dark:text-gray-400">
                   {los

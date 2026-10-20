@@ -1,8 +1,11 @@
+import { Metric } from '../../components/Metric'
 import { Card } from '../../components/ui/Card'
-import { cn } from '../../components/ui/cn'
 import { Emoji } from '../../components/ui/Emoji'
 import { Pill, StatusText } from '../../components/ui/Pill'
+import { RagIcon } from '../../components/ui/Rag'
+import { RAG_TEXT } from '../../components/ui/ragClasses'
 import { TYPE_LABELS } from '../../lib/filters'
+import { formatDb, formatDopplerKHz, formatFrequency, formatMarginDb, ragWord } from '../../lib/rag'
 import { formatAge, formatCountdown } from '../../lib/time'
 import { useSimNow } from '../../lib/useSimNow'
 import { useMission } from '../../store/mission'
@@ -13,20 +16,29 @@ const kmPerS = (mps: number) => (mps / 1000).toFixed(2)
 const deg = (d: number, digits = 1) => d.toFixed(digits)
 const muted = 'text-xs text-gray-500 dark:text-gray-400'
 
-// In view (above the horizon mask) is the "active" state, so it takes the accent.
-const elevationTone = (sat: SatelliteState) =>
-  sat.above_mask ? 'text-primary-700 dark:text-primary-400' : 'text-gray-500 dark:text-gray-400'
+// Below the mask the elevation reads muted. In view it stays neutral: the "in view" status carries
+// the accent, and next to a margin tile emerald means a green link.
+const elevationTone = (sat: SatelliteState) => (sat.above_mask ? undefined : 'text-gray-500 dark:text-gray-400')
 
-/** A metric tile, label over value: keeps the whole readout on one row. */
-function Metric({ label, value, title, className }: { label: string; value: string; title?: string; className?: string }) {
+/** Margin and Doppler from the published link budget, or a plain "no RF data". */
+function LinkMetrics({ sat }: { sat: SatelliteState }) {
+  const link = sat.link
+  if (!link) return <Metric label="Link" value="no RF data" className="text-gray-500 dark:text-gray-400" title="No published RF parameters for this satellite" />
   return (
-    <div
-      className="flex flex-col rounded-lg bg-gray-50 px-2 py-1 leading-tight ring-1 ring-gray-900/5 dark:bg-white/5 dark:ring-white/10"
-      title={title}
-    >
-      <dt className={muted}>{label}</dt>
-      <dd className={cn('font-mono text-sm tabular-nums', className)}>{value}</dd>
-    </div>
+    <>
+      <Metric
+        label="Margin dB"
+        value={formatMarginDb(link.margin_db)}
+        className={RAG_TEXT[link.rag]}
+        icon={<RagIcon rag={link.rag} size={13} />}
+        title={`Link: ${ragWord(link.rag)}${link.ebn0_db !== null ? ` · Eb/N0 ${formatDb(link.ebn0_db)} dB` : ''}`}
+      />
+      <Metric
+        label="Doppler kHz"
+        value={formatDopplerKHz(link.doppler_hz)}
+        title={`Shift of the ${formatFrequency(link.frequency_hz)} downlink (${link.doppler_hz > 0 ? 'approaching' : 'receding'})`}
+      />
+    </>
   )
 }
 
@@ -74,8 +86,8 @@ function SelectedSatellite({ sat, simMs, mask }: { sat: SatelliteState; simMs: n
           value={`${sat.range_rate_m_s >= 0 ? '+' : ''}${kmPerS(sat.range_rate_m_s)} km/s`}
           title={sat.range_rate_m_s < 0 ? 'Approaching' : 'Receding'}
         />
-        <Metric label="Lat" value={`${deg(sat.lat_deg, 2)}°`} />
-        <Metric label="Lon" value={`${deg(sat.lon_deg, 2)}°`} />
+        <LinkMetrics sat={sat} />
+        <Metric label="Lat, lon" value={`${deg(sat.lat_deg, 2)}°, ${deg(sat.lon_deg, 2)}°`} title="Sub-satellite point" />
         <Metric label="Alt km" value={km(sat.alt_m)} />
         <Metric label="TLE" value={formatAge(simMs - Date.parse(sat.tle_epoch))} title="TLE age at sim time" />
       </dl>

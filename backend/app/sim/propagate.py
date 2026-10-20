@@ -113,6 +113,28 @@ def epochs(start: datetime, offsets_s: Sequence[float] | NDArray[np.float64] = (
     )
 
 
+def epochs_unix(t_unix_s: Sequence[float] | NDArray[np.float64]) -> Epochs:
+    """Instants given as absolute Unix seconds, each split into (jd, fr) on its own, so an instant
+    always gets the same SGP4 input whichever batch it is part of."""
+    t = np.atleast_1d(np.asarray(t_unix_s, dtype=np.float64))
+    if t.size == 0:
+        raise ValueError("epochs_unix() needs at least one instant")
+    whole = np.floor(t / DAY_S)
+    fr = (t - whole * DAY_S) / DAY_S
+    jd = _UNIX_EPOCH_JD + whole
+    start = datetime.fromtimestamp(float(t[0]), UTC)
+    dut1_s = _dut1_s(start.replace(hour=0, minute=0, second=0, microsecond=0))  # per UTC day
+    gmst, gmst_rate_per_day = theta_GMST1982(jd, fr + dut1_s / DAY_S)
+    return Epochs(
+        start=start,
+        offsets_s=t - t[0],
+        jd=jd,
+        fr=fr,
+        gmst_rad=np.asarray(gmst, dtype=np.float64),
+        gmst_rate_rad_s=float(np.ravel(gmst_rate_per_day)[0]) / DAY_S,
+    )
+
+
 def linspace_epochs(start: datetime, end: datetime, n_points: int) -> Epochs:
     return epochs(start, np.linspace(0.0, (end - start).total_seconds(), n_points))
 

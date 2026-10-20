@@ -78,6 +78,36 @@ export function arcSegment(arc: TimedArc, fromMs: number, toMs: number, p: SkyPr
   return out
 }
 
+/** The arc between two instants split into runs of equal server-given state (e.g. the link RAG
+ *  at each sample). A sample's state holds halfway to its neighbours; the runs share their joints. */
+export function arcRuns<T>(
+  arc: TimedArc,
+  states: readonly T[],
+  fromMs: number,
+  toMs: number,
+  p: SkyProjection,
+): { state: T; points: XY[] }[] {
+  const n = arc.points.length
+  if (n < 2 || states.length !== n) return []
+  const step = (arc.endMs - arc.startMs) / (n - 1)
+  const runs: { state: T; points: XY[] }[] = []
+  let first = 0
+  for (let i = 1; i <= n; i++) {
+    if (i < n && states[i] === states[first]) continue
+    const a = Math.max(fromMs, arc.startMs + (first - 0.5) * step)
+    const b = Math.min(toMs, arc.startMs + (i - 0.5) * step)
+    const points = b > a ? arcSegment(arc, a, b, p) : []
+    if (points.length >= 2) runs.push({ state: states[first]!, points })
+    first = i
+  }
+  return runs
+}
+
+/** Radius of an elevation ring, px. */
+export function ringRadius(el_deg: number, p: SkyProjection): number {
+  return radialFraction(el_deg, p.kind) * p.radius
+}
+
 export interface Hit {
   id: number
   x: number

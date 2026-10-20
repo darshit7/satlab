@@ -6,6 +6,9 @@ export type SatelliteType = (typeof SATELLITE_TYPES)[number]
 /** Longest "rising within" the server accepts (MAX_RISING_WITHIN_MIN). */
 export const MAX_RISING_WITHIN_MIN = 60
 
+/** Link and subsystem health: green > 6 dB margin, amber 0–6 dB, red below (AGENTS.md §7). */
+export type Rag = 'green' | 'amber' | 'red'
+
 // ---------- server → client ----------
 
 export interface ClockState {
@@ -23,6 +26,22 @@ export interface ObserverState {
   horizon_mask_deg: number
 }
 
+/** The satellite's published downlink, received at this station (one link-budget computation). */
+export interface LinkState {
+  frequency_hz: number
+  data_rate_bps: number
+  /** Null below the horizon: no line of sight. */
+  ebn0_db: number | null
+  /** Eb/N0 minus the required Eb/N0. */
+  margin_db: number | null
+  /** Received minus transmitted frequency; positive while approaching. */
+  doppler_hz: number
+  /** Red below the horizon mask, whatever the margin. */
+  rag: Rag
+  /** Elevations where the margin would be green at the current altitude; empty when it never is. */
+  strong_link_elev_bands_deg: [from_deg: number, to_deg: number][]
+}
+
 export interface SatelliteState {
   norad_id: number
   name: string
@@ -38,6 +57,62 @@ export interface SatelliteState {
   range_rate_m_s: number
   /** Elevation ≥ the horizon mask: "in view" (geometric, not naked-eye). */
   above_mask: boolean
+  /** Null (or absent from an older server): no published RF parameters for this satellite. */
+  link?: LinkState | null
+}
+
+export type Illumination = 'sunlit' | 'penumbra' | 'eclipse'
+
+export interface PowerHealth {
+  rag: Rag
+  soc_pct: number
+  sunlit_fraction: number
+  illumination: Illumination
+  modelled: boolean
+}
+
+export interface ThermalHealth {
+  rag: Rag
+  temperature_c: number
+  band_min_c: number
+  band_max_c: number
+  modelled: boolean
+}
+
+export interface StorageHealth {
+  /** Null without a link profile: nothing to downlink at. */
+  rag: Rag | null
+  fill_pct: number | null
+  activity: 'filling' | 'downlinking' | 'full' | null
+  modelled: boolean
+}
+
+export interface AttitudeHealth {
+  /** Null below the horizon mask. */
+  rag: Rag | null
+  off_nadir_deg: number | null
+  half_beamwidth_deg: number
+  modelled: boolean
+}
+
+export interface RfHealth {
+  /** Null: no published RF parameters. */
+  rag: Rag | null
+  margin_db: number | null
+  modelled: boolean
+}
+
+/** Subsystem health of the selected satellite. Rollup: red if any is red, else null if any has no
+ *  data, else the worse of amber and green. */
+export interface HealthState {
+  norad_id: number
+  model_version: number
+  rollup: Rag | null
+  power: PowerHealth
+  thermal: ThermalHealth
+  storage: StorageHealth
+  attitude: AttitudeHealth
+  rf: RfHealth
 }
 
 /** Streamed satellites = (above the mask ∩ the session filter) ∪ tracked ∪ selected. */
@@ -52,6 +127,8 @@ export interface Snapshot {
   /** Satellites above the mask before the session filter. */
   visible_count: number
   satellites: SatelliteState[]
+  /** Of the selected satellite. */
+  health?: HealthState | null
 }
 
 export interface GroundTrackMessage {
@@ -74,6 +151,8 @@ export interface PassArcMessage {
   start_time: string
   end_time: string
   points: [azimuth_deg: number, elevation_deg: number][]
+  /** Link state at each point; null without a link profile. */
+  rag?: Rag[] | null
 }
 
 export interface UpcomingPass {
@@ -119,6 +198,8 @@ export interface SetSelected {
 export interface VisibilityFilter {
   types: SatelliteType[]
   sar_only: boolean
+  /** Only satellites with a link profile; of those in view, only with a usable margin. */
+  link_ok_only: boolean
   /** Effective threshold is max(horizon mask, this). */
   min_elevation_deg: number
   rising_within_min: number

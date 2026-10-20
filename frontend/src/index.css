@@ -12,7 +12,7 @@
 
 @theme static {
   /* Only the sanctioned colors exist: one accent, one grey family, two display-only gradient
-     ends and one functional error color. Values are the Tailwind v3 hexes the design system was
+     ends and the functional colors (errors; link and subsystem RAG). Values are the Tailwind v3 hexes the design system was
      specified (and contrast-checked) against; v4's oklch palette is slightly different. */
   --color-*: initial;
   --color-white: #ffffff;
@@ -47,9 +47,13 @@
   --color-amber-600: #d97706;
   --color-lime-500: #84cc16;
 
-  /* functional: errors and server notices */
+  /* functional: errors, server notices and RAG red */
   --color-red-400: #f87171;
   --color-red-700: #b91c1c;
+
+  /* functional: RAG amber (link margin 0–6 dB, subsystems marginal). Green is the primary. */
+  --color-amber-400: #fbbf24;
+  --color-amber-700: #b45309;
 
   --font-sans: 'Nunito Variable', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;

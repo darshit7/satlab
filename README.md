@@ -4,13 +4,19 @@ A real-time satellite mission control simulator. Positions and geometry come fro
 with **SGP4** for **your real location**. Nothing is faked. See [AGENTS.md](AGENTS.md) for the architecture,
 conventions, database design, and phase plan.
 
-**Status: Phase 2 (visibility & passes).** Pick a ground station (a preset, your geolocation, a map click,
+**Status: Phase 3 (systems & link).** Pick a ground station (a preset, your geolocation, a map click,
 or typed lat/lon; a custom location is used for that session only, never saved) and every satellite above the horizon mask appears at once, with no search needed: on
 the 2D map, a polar sky plot and an all-sky (looking-up) view, all linked by selection. Filter by type,
 minimum elevation, SAR capability and "rising within N minutes" (computed across the whole catalog). Any
 satellite gets a 24-hour pass schedule (AOS / LOS / max elevation / azimuths) with a jump-to-AOS button.
 Search the full catalog and track satellites to keep them on screen with ground tracks and live
 azimuth / elevation / range / range-rate readouts. The sim clock can be paused or accelerated up to 3600×.
+
+Satellites with a **published downlink budget** (NOAA 20 and 21, FengYun-3D, GOES 18 and 19) get a real
+link margin (dB), Eb/N0 and Doppler at your station, mapped to green / amber / red; the same state colours
+their sky-plot dots and pass arcs and draws the "strong-link" region of the sky. The selected satellite has
+a systems strip: a worst-of rollup over power, thermal, storage, attitude and RF, which change truthfully
+as it rises, peaks, sets and crosses the Earth's shadow.
 
 ## Quick start
 
@@ -96,11 +102,18 @@ browser ──REST──▶ FastAPI ── stations / sessions / pass schedule  
   to the naked eye; most satellites shown are too small or unlit to see.
 - TLE accuracy degrades with age; each satellite's TLE age is shown.
 - Commanding real satellites is impossible. Uplink in later phases is **simulated**.
+- Link margins use each satellite's **published** RF budget and that source's reference receiving
+  station; a satellite without one shows "no RF data" rather than a guessed margin
+  ([`link_profiles.json`](backend/app/data/seed/link_profiles.json) cites every value).
+- Power, thermal, storage and attitude are **modelled** from generic parameters, driven by real eclipse
+  and pass geometry; the UI labels them so.
 
 ## Data sources
 
 - Orbital elements: [Celestrak GP](https://celestrak.org/NORAD/documentation/gp-data-formats.php)
   (please respect their fetch etiquette; the backend caches and refreshes at most every 12 h).
+- Link budgets: NOAA/NESDIS JPSS-1 and JPSS-2 HRD RF ICDs, the CMA FY-3D space-to-ground ICD and
+  NOAA OSPO's GOES-R GRB link budget (links in the seed file and in the app).
 - Basemap: [OpenFreeMap](https://openfreemap.org/) © OpenMapTiles, © OpenStreetMap contributors.
 - Emoji: [Twemoji](https://github.com/jdecked/twemoji) graphics, CC-BY 4.0. Fonts: Nunito, JetBrains Mono, Playpen Sans (SIL OFL), self-hosted via Fontsource.
 

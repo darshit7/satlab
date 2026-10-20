@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  arcRuns,
   arcSegment,
   nearest,
   positionOnArc,
   project,
   proximityRadius,
   radialFraction,
+  ringRadius,
   type SkyProjection,
   type TimedArc,
 } from './sky'
@@ -79,6 +81,40 @@ describe('arcSegment', () => {
 
   it('covers the whole arc when asked for more', () => {
     expect(arcSegment(overhead, -10_000, 10_000, polar)).toHaveLength(5)
+  })
+})
+
+describe('arcRuns', () => {
+  const rag = ['red', 'amber', 'green', 'amber', 'red'] as const
+
+  it('splits halfway between samples whose state differs', () => {
+    const runs = arcRuns(overhead, rag, -Infinity, Infinity, polar)
+    expect(runs.map((r) => r.state)).toEqual(['red', 'amber', 'green', 'amber', 'red'])
+    // red holds until halfway to the second sample (t = 500), where amber takes over
+    close(runs[0]!.points.at(-1)!, positionOnArc(overhead, 500, polar)!)
+    close(runs[1]!.points[0]!, positionOnArc(overhead, 500, polar)!)
+    // the green run is centred on the zenith sample
+    close(runs[2]!.points[0]!, positionOnArc(overhead, 1500, polar)!)
+    close(runs[2]!.points.at(-1)!, positionOnArc(overhead, 2500, polar)!)
+  })
+
+  it('merges equal neighbours and clips to the interval', () => {
+    const runs = arcRuns(overhead, ['amber', 'amber', 'green', 'green', 'green'], 1000, 4000, polar)
+    expect(runs.map((r) => r.state)).toEqual(['amber', 'green'])
+    close(runs[0]!.points[0]!, positionOnArc(overhead, 1000, polar)!)
+    close(runs[1]!.points.at(-1)!, project(135, 0, polar))
+  })
+
+  it('needs one state per sample', () => {
+    expect(arcRuns(overhead, ['green'], 0, 4000, polar)).toEqual([])
+  })
+})
+
+describe('ringRadius', () => {
+  it('matches the projection', () => {
+    expect(ringRadius(90, polar)).toBeCloseTo(0)
+    expect(ringRadius(45, polar)).toBeCloseTo(50)
+    expect(ringRadius(0, allSky)).toBeCloseTo(100)
   })
 })
 

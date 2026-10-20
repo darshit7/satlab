@@ -16,6 +16,7 @@ export const RISING_WITHIN_OPTIONS = [0, 15, 30, 60] as const
 export const DEFAULT_FILTERS: VisibilityFilter = {
   types: [...SATELLITE_TYPES],
   sar_only: false,
+  link_ok_only: false,
   min_elevation_deg: 0,
   rising_within_min: 30,
 }
@@ -32,6 +33,7 @@ export function sanitizeFilters(raw: unknown): VisibilityFilter {
   return {
     types,
     sar_only: r.sar_only === true,
+    link_ok_only: r.link_ok_only === true,
     min_elevation_deg: num(r.min_elevation_deg, DEFAULT_FILTERS.min_elevation_deg, 0, 90),
     rising_within_min: Math.round(num(r.rising_within_min, DEFAULT_FILTERS.rising_within_min, 0, MAX_RISING_WITHIN_MIN)),
   }

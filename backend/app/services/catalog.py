@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import Settings
 from app.data.celestrak import CelestrakClient, CelestrakNotice, TleRecord, parse_tle_text
 from app.data.classify import classify
+from app.data.seed import load_link_profiles, sync_link_profiles
 from app.db.models import Satellite
 from app.models.ws import SATELLITE_TYPES
 from app.services.ratelimit import TokenBucket
@@ -254,16 +255,25 @@ class CatalogService:
         await self.rebuild_fleet()
 
     async def rebuild_fleet(self) -> None:
-        """Rebuild the fleet from the DB off the event loop, then swap it in."""
+        """Rebuild the fleet and its link profiles from the DB off the event loop; swap them in.
+
+        Link profiles are synced from the seed here first: a profile can only be stored once its
+        satellite is catalogued, and every ingest ends up here.
+        """
 
         def build() -> Fleet:
             with self._sessions() as db:
-                return Fleet.build(load_fleet_rows(db))
+                sync_link_profiles(db)
+                return Fleet.build(load_fleet_rows(db), load_link_profiles(db))
 
         async with self._fleet_lock:
             fleet = await asyncio.to_thread(build)
             self.fleet = fleet
-        log.info("fleet: %d satellites ready for propagation", len(fleet))
+        log.info(
+            "fleet: %d satellites ready for propagation, %d with a link profile",
+            len(fleet),
+            len(fleet.links.rows),
+        )
 
     def _refresh_registry(self, records: Iterable[TleRecord]) -> None:
         """Swap in new elements for satellites currently in use by the sim."""

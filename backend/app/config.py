@@ -2,8 +2,9 @@
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Self
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -72,6 +73,22 @@ class Settings(BaseSettings):
     upcoming_chunk_size: int = Field(default=500, ge=1)
     upcoming_max_time_scale: float = 60.0  # above this the sweep can't keep up: list is paused
     upcoming_limit: int = Field(default=100, ge=1, le=500)
+
+    # Link budget → RAG (AGENTS.md §7): green above `green`, amber from `amber` up to it, red below
+    # (or below the horizon mask).
+    link_green_margin_db: float = Field(default=6.0, ge=0.0, le=30.0)
+    link_amber_margin_db: float = Field(default=0.0, ge=-10.0, le=10.0)
+    # Subsystem health is integrated over this much sim time, on this grid, from a fixed start.
+    subsystem_lookback_h: float = Field(default=24.0, ge=1.0, le=48.0)
+    subsystem_step_s: float = Field(default=60.0, ge=5.0, le=300.0)
+
+    @model_validator(mode="after")
+    def _check_link_and_health(self) -> Self:
+        if self.link_green_margin_db <= self.link_amber_margin_db:
+            raise ValueError("link_green_margin_db must be above link_amber_margin_db")
+        if self.subsystem_lookback_h * 3600 / self.subsystem_step_s > 20_000:
+            raise ValueError("subsystem_lookback_h / subsystem_step_s: too many grid points")
+        return self
 
     @field_validator("database_url", "migration_database_url")
     @classmethod
