@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Annotated, Self
 
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError, model_validator
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
@@ -267,6 +267,7 @@ class PacketTemplatesFile(BaseModel):
 
 
 PACKET_TEMPLATES_FILE = SEED_DIR / "packet_templates.json"
+_TEMPLATE_COLUMNS = ("framing", "spec", "version", "active")
 
 
 @lru_cache
@@ -296,22 +297,39 @@ def sync_packet_templates(db: Session, path: Path = PACKET_TEMPLATES_FILE) -> in
         if norad_id in present
         for t in templates
     }
-    rows = {(r.norad_id, r.kind, r.name): r for r in db.scalars(select(PacketTemplate))}
-    for key, template in wanted.items():
-        values = {
-            "framing": template.framing.type,
-            "spec": template.model_dump(mode="json"),
-            "version": specs.version,
-            "active": True,
-        }
-        if (row := rows.get(key)) is None:
-            db.add(PacketTemplate(norad_id=key[0], kind=key[1], name=key[2], **values))
-        else:
-            for column, value in values.items():
-                setattr(row, column, value)
-    for key, row in rows.items():
-        if key not in wanted:
-            row.active = False
+    # One upsert, not insert-if-absent: two syncs can overlap (the old and new revision during a
+    # deploy) and both see the rows missing; ON CONFLICT lets both succeed.
+    if wanted:
+        insert = pg_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
+        stmt = insert(PacketTemplate).values(
+            [
+                {
+                    "norad_id": norad_id,
+                    "kind": kind,
+                    "name": name,
+                    "framing": template.framing.type,
+                    "spec": template.model_dump(mode="json"),
+                    "version": specs.version,
+                    "active": True,
+                }
+                for (norad_id, kind, name), template in wanted.items()
+            ]
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[PacketTemplate.norad_id, PacketTemplate.kind, PacketTemplate.name],
+            set_={col: stmt.excluded[col] for col in _TEMPLATE_COLUMNS},
+        )
+        db.execute(stmt)
+    active = db.execute(
+        select(
+            PacketTemplate.id, PacketTemplate.norad_id, PacketTemplate.kind, PacketTemplate.name
+        ).where(PacketTemplate.active)
+    )
+    dropped = [row.id for row in active if (row.norad_id, row.kind, row.name) not in wanted]
+    if dropped:
+        db.execute(
+            update(PacketTemplate).where(PacketTemplate.id.in_(dropped)).values(active=False)
+        )
     db.commit()
     return len(wanted)
 
