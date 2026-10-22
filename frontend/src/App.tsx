@@ -57,21 +57,6 @@ export default function App() {
           <VisibleList />
         </aside>
       </div>
-      <footer className="space-y-1 text-sm text-gray-600 dark:text-gray-400">
-        <p>
-          Positions and passes are computed server-side with SGP4 from real Celestrak TLEs, for your real location.
-          “In view” means above the horizon mask, geometrically: most satellites shown are not visible to the naked
-          eye. Accuracy degrades as a TLE ages. The globe’s imagery is Natural Earth II; its cone shows where a
-          satellite is above the mask (and, for the selection, where its link margin is green), not what you could see.
-        </p>
-        <p>
-          Link margins use each satellite’s published RF budget and that source’s reference receiving station;
-          satellites without one show “no RF data”. Power, thermal, storage and attitude are modelled from generic
-          parameters, driven by real eclipse and pass geometry. Nothing here commands a real satellite: uplink is
-          simulated and never transmitted. Downlink is either simulated from those models or real frames received by
-          SatNOGS stations, replayed during your pass.
-        </p>
-      </footer>
       <Notices />
     </div>
   )
