@@ -155,12 +155,18 @@ class Snapshot(BaseModel):
 
 
 class GroundTrackMessage(BaseModel):
+    """The orbit around the sim time, sampled evenly in time: drawn on the map and the globe."""
+
     type: Literal["ground_track"] = "ground_track"
     norad_id: int
     start_time: datetime
     end_time: datetime
     period_s: float
     points: list[tuple[float, float]]  # (lon_deg, lat_deg)
+    # Aligned with ``points``: height above the WGS84 ellipsoid, and whether this station sees the
+    # satellite above its horizon mask there (the in-view part of the orbit, drawn bright).
+    alt_m: list[float] | None = None
+    above_mask: list[bool] | None = None
 
 
 class PassArcMessage(BaseModel):

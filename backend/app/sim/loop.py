@@ -47,10 +47,17 @@ from app.models.ws import (
 )
 from app.sim.clock import SimClock, wall_now
 from app.sim.fleet import Fleet
-from app.sim.geometry import Observation, Observer, geodetic, observe, off_nadir_deg
+from app.sim.geometry import (
+    Observation,
+    Observer,
+    geodetic,
+    ground_track,
+    observe,
+    off_nadir_deg,
+)
 from app.sim.linkbudget import RAG_NAMES, RED, LinkTable, RagThresholds, strong_link_bands
 from app.sim.passes import Arc, UpcomingSweep, pass_arcs
-from app.sim.propagate import Elements, Epochs, epochs, ground_track
+from app.sim.propagate import Elements, Epochs, epochs
 from app.sim.subsystems import HealthTracker
 
 log = logging.getLogger(__name__)
@@ -678,13 +685,17 @@ class SessionRuntime:
             limit = timedelta(seconds=elements.period_s * _TRACK_REFRESH_ORBITS)
             if timedelta(0) <= offset <= limit:
                 return
-        track = ground_track(elements, sim_time, self.config.ground_track_points)
+        track = ground_track(
+            elements, sim_time, self.config.ground_track_points, self._station, self._mask_deg
+        )
         message = GroundTrackMessage(
             norad_id=elements.norad_id,
             start_time=track.start,
             end_time=track.end,
             period_s=elements.period_s,
             points=track.points,
+            alt_m=track.alt_m,
+            above_mask=track.above_mask,
         )
         self._tracks[elements.norad_id] = _TrackState(elements, sim_time, message)
         self._publish(message)

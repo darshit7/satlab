@@ -1,6 +1,6 @@
 """End-to-end link state and subsystem health on the stream, during a real NOAA 20 pass."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -79,6 +79,30 @@ def test_link_state_and_health(client: TestClient, wallops: dict) -> None:
         arc = ws.find("pass_arc", lambda m: m["norad_id"] == NOAA_20)
         assert arc["rag"] is not None and len(arc["rag"]) == len(arc["points"])
         assert ws.find("pass_arc", lambda m: m["norad_id"] == GOES_16)["rag"] is None
+
+
+def test_ground_track_marks_the_pass(client: TestClient, wallops: dict) -> None:
+    """The selection's track says where it is in view: inside AOS → LOS, not just outside."""
+    with open_stream(client, wallops) as ws:
+        _paused_at(ws)
+        ws.send(type="set_selected", norad_id=NOAA_20)
+        track = ws.until("ground_track", lambda m: m["norad_id"] == NOAA_20)
+        arc = ws.find("pass_arc", lambda m: m["norad_id"] == NOAA_20)
+
+    points, above = track["points"], track["above_mask"]
+    assert len(track["alt_m"]) == len(above) == len(points)
+    assert all(800_000 < alt < 860_000 for alt in track["alt_m"])  # NOAA 20: ~830 km
+    when = datetime.fromisoformat
+    start, end = when(track["start_time"]), when(track["end_time"])
+    aos, los = when(arc["aos_time"]), when(arc["los_time"])
+    step = (end - start) / (len(points) - 1)
+    margin, near = timedelta(seconds=30), timedelta(minutes=15)
+    for i, in_view in enumerate(above):
+        t = start + step * i
+        if aos + margin < t < los - margin:
+            assert in_view, t
+        elif aos - near < t < aos - margin or los + margin < t < los + near:
+            assert not in_view, t
 
 
 def test_link_filter(client: TestClient, wallops: dict) -> None:

@@ -131,6 +131,7 @@ export interface Snapshot {
   health?: HealthState | null
 }
 
+/** The orbit around the sim time, sampled evenly in time: drawn on the map and the globe. */
 export interface GroundTrackMessage {
   type: 'ground_track'
   norad_id: number
@@ -138,6 +139,10 @@ export interface GroundTrackMessage {
   end_time: string
   period_s: number
   points: [lon_deg: number, lat_deg: number][]
+  /** Per point: height above the WGS84 ellipsoid (absent from an older server). */
+  alt_m?: number[] | null
+  /** Per point: above this station's horizon mask, the in-view part of the orbit. */
+  above_mask?: boolean[] | null
 }
 
 /** The current (or next) pass in the sky, sampled evenly in time from start_time to end_time. */
