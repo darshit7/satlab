@@ -52,7 +52,7 @@ An end-to-end, real-time **satellite mission control simulator** (portfolio / le
 | DB (persistent / prod, Phase 2b+) | **PostgreSQL on Neon** via **psycopg 3**; **PostGIS** at Phase 7 (optional **TimescaleDB**) |
 | Frontend | **React + TypeScript + Vite** |
 | JS package mgr | **pnpm** |
-| 3D globe | **CesiumJS** via **Resium** |
+| 3D globe | **CesiumJS**: `@cesium/engine` (`CesiumWidget`, imperative like the 2D map; no Resium, no Viewer widgets) + `@cesium/core` |
 | 2D map | **MapLibre GL** (or Leaflet) |
 | Sky plot / all-sky / indicators | **Canvas 2D** (+ **D3** when a view earns it) |
 | Client state | **Zustand** |
@@ -100,14 +100,18 @@ satellite-mission-control/
 │     │  ├─ linkbudget.py    # SNR/Eb·N0 margin, Doppler, RAG mapping
 │     │  ├─ subsystems.py    # power/thermal/storage/attitude/RF models
 │     │  ├─ sun.py           # Sun position + Earth shadow (eclipse), no ephemeris file
-│     │  ├─ scheduler.py     # command queue, AOS trigger, alarms
+│     │  ├─ channel.py       # downlink channel: light time, bit errors from the link margin
+│     │  ├─ comms.py         # contact, beacons, replayed frames, command lifecycle (per session)
+│     │  ├─ scheduler.py     # command queue, AOS trigger, alarms (Phase 5)
 │     │  └─ loop.py          # the tick; emits snapshots + events
-│     ├─ packets/            # per-satellite AX.25 / CCSDS templates
-│     ├─ data/               # TLE (Celestrak), SatNOGS, catalog ingestion; seed/ JSON (stations,
-│     │                      #   type rules, link_profiles, subsystem_models)
+│     ├─ packets/            # AX.25 / CCSDS codecs (bounds-checked), CRCs, packet templates
+│     ├─ data/               # TLE (Celestrak), SatNOGS client, catalog ingestion; seed/ JSON
+│     │                      #   (stations, type rules, link_profiles, subsystem_models,
+│     │                      #   packet_templates)
 │     ├─ sar/                # STAC search/download, change detection
 │     ├─ events/             # event store: append + replay
-│     └─ services/           # orchestration between sim, db, ws
+│     └─ services/           # orchestration between sim, db, ws (catalog, sessions, passes,
+│                            #   comms writer, SatNOGS archive)
 │  └─ tests/
 └─ frontend/
    ├─ Dockerfile             # web image: Vite build served by nginx-unprivileged
@@ -119,7 +123,8 @@ satellite-mission-control/
       ├─ ws/                 # WS client + reconnect
       ├─ types/              # TS mirrors of pydantic contract
       ├─ views/
-      │  ├─ Globe/           # Cesium 3D globe + access cone
+      │  ├─ Map/             # map panel: 3D globe (default) / 2D map toggle
+      │  ├─ Globe/           # Cesium 3D globe + access cone (lazy chunk)
       │  ├─ AllSky/          # observer all-sky (fisheye) view
       │  ├─ SkyPlot/         # polar az/el plot
       │  ├─ Indicators/      # RAG panel + rollup bar
@@ -283,14 +288,17 @@ CREATE TABLE satellite (
     fetched_at      TEXT                  -- when TLE was pulled
 );
 
+-- Synced from app/data/seed/packet_templates.json (see §14, Phase 4b).
 CREATE TABLE packet_template (
     id          INTEGER PRIMARY KEY,
     norad_id    INTEGER NOT NULL REFERENCES satellite(norad_id),
     kind        TEXT NOT NULL,            -- telemetry | command
     framing     TEXT NOT NULL,            -- ax25 | ccsds
     name        TEXT NOT NULL,
-    spec        JSON NOT NULL,            -- field definitions, IDs, encoding
-    version     INTEGER NOT NULL DEFAULT 1
+    spec        JSON NOT NULL,            -- the validated template (fields, IDs, encoding)
+    version     INTEGER NOT NULL DEFAULT 1,  -- of the seed file
+    active      INTEGER NOT NULL DEFAULT 1,  -- 0: dropped from the seed (kept for command FKs)
+    UNIQUE (norad_id, kind, name)
 );
 
 -- A published downlink budget; synced from app/data/seed/link_profiles.json (see §14).
@@ -347,8 +355,9 @@ CREATE TABLE command (
     norad_id      INTEGER NOT NULL REFERENCES satellite(norad_id),
     template_id   INTEGER REFERENCES packet_template(id),
     params        JSON NOT NULL,
-    scheduled_aos TEXT,                   -- target pass AOS (sim time)
-    status        TEXT NOT NULL,          -- queued|sent|failed|aborted
+    scheduled_aos TEXT,                   -- target pass AOS (sim time; Phase 5)
+    status        TEXT NOT NULL,          -- queued|sent|acked|failed|aborted
+    sim_time      TEXT NOT NULL,          -- when it was issued
     created_at    TEXT NOT NULL
 );
 CREATE INDEX ix_command_session_status ON command(session_id, status);
@@ -357,11 +366,15 @@ CREATE TABLE telemetry_frame (
     id          INTEGER PRIMARY KEY,
     session_id  INTEGER NOT NULL REFERENCES mission_session(id),
     norad_id    INTEGER NOT NULL REFERENCES satellite(norad_id),
+    template_id INTEGER REFERENCES packet_template(id),
+    command_id  INTEGER REFERENCES command(id),  -- when it answers a command
     sim_time    TEXT NOT NULL,
-    raw         BLOB,                     -- raw frame bytes (small)
-    decoded     JSON,                     -- decoded named fields
+    wall_time   TEXT NOT NULL,
+    raw         BLOB,                     -- raw frame bytes as received (≤ 512)
+    decoded     JSON,                     -- [{name, value, unit}]; NULL if the check failed
     source      TEXT NOT NULL,            -- satnogs | simulated
-    crc_ok      INTEGER NOT NULL DEFAULT 1
+    crc_ok      INTEGER NOT NULL DEFAULT 1,
+    origin      JSON                      -- SatNOGS provenance {observation_id, station_id, received_at}
 );
 CREATE INDEX ix_tlm_session_simtime ON telemetry_frame(session_id, sim_time);
 
@@ -459,7 +472,7 @@ Still to do, when the feature arrives:
 
 Each phase is a **vertical slice** (backend + WebSocket + UI) that runs on its own. Mark the current phase here as you go.
 
-> **Current phase: _Phase 3 — Systems & link._** Phases 1, 2, 2b and 2c are done and deployed.
+> **Current phase: _Phase 4b — Comms._** Phases 1, 2, 2b, 2c and 3 are done and deployed; 4a (globe, cone, 2D/3D toggle) is done. Phase 4 ships in two parts: 4a, then 4b (communications).
 >
 > Phase numbers are for this plan and the docs only: the UI never shows "Phase N" (`frontend/src/lib/copy.test.ts` guards it).
 
@@ -468,7 +481,9 @@ Each phase is a **vertical slice** (backend + WebSocket + UI) that runs on its o
 - **Phase 2b — Persistent Postgres (Neon).** Pulled forward from Phase 7 (2026-10-15) ahead of the Azure deploy: a container's filesystem is ephemeral, so SQLite can't persist there. psycopg 3 driver; Postgres engine pooling for Neon's auto-suspend; Alembic on Neon (owner role, direct host); least-privilege app role (pooled host); opt-in Postgres test run. No schema, contract or UI changes; SQLite stays the local/test default. Runbook: [deploy/neon.md](deploy/neon.md).
 - **Phase 2c — Containers + CI/CD (Azure).** Pulled forward from Phase 9 (2026-10-16). API and web images; PR checks on `dev → main`; merge to `main` pushes to GHCR, migrates Neon `production` and rolls out to Azure Container Apps at `https://satlab.darshitp.dev/satlab/`. Public without login, so the §12.11 gaps were closed first: per-session capability tokens, WS `Origin` check + first-message auth + rate/size limits, active-session cap, Celestrak global rate limit, generic upstream errors, `/docs` off, CSP and security headers in nginx.
 - **Phase 3 — Systems & link.** Link budget (margin dB + Doppler) + subsystem models; RAG indicators + rollup bar; sky-plot/all-sky dot colors and the inner "strong-link" region driven by the same link state (design §5.4, §6). DB: `link_profile`.
-- **Phase 4 — Communications.** Per-satellite AX.25/CCSDS templates; command uplink (sim) + telemetry downlink; SatNOGS real-frame replay; packet animation; channel effects. **3D globe (Cesium) + the visibility "V" cone** (design §5.3–5.4): outer cone = above the horizon mask, inner cone = green-margin region; satellites enter at one rim (AOS) and leave at the far rim (LOS), changing color at cone boundaries; the full orbital arc is drawn with the out-of-window part faded; the user can lock onto one active contact while the others dim. DB: `packet_template`, `command`, `telemetry_frame`.
+- **Phase 4 — Communications**, in two parts (2026-10-22):
+  - **4a — Globe.** **3D globe (Cesium) + the visibility "V" cone** (design §5.3–5.4): outer cone = above the horizon mask, inner cone = green-margin region; satellites enter at one rim (AOS) and leave at the far rim (LOS), changing color at cone boundaries; the full orbital arc is drawn with the out-of-window part faded; the user can lock onto one active contact while the others dim. The globe joins the 2D map rather than replacing it: a **2D/3D toggle, 3D by default**.
+  - **4b — Comms.** Per-satellite AX.25/CCSDS templates; command uplink (sim) + telemetry downlink; SatNOGS real-frame replay; packet animation; channel effects. DB: `packet_template`, `command`, `telemetry_frame`.
 - **Phase 5 — Scheduling & alarms.** Queue command for a future window; AOS trigger; auto system check; transmit-if-green / alarm-if-red. DB: `alarm` (+ `command.scheduled_aos`).
 - **Phase 6 — Record & playback.** Persist full `event` log; timeline scrubber (play/pause/speed/jump); playback reuses the live renderer.
 - **Phase 7 — SAR archive explore (Flow 1).** STAC search (Sentinel-1 RTC / Umbra) for AOI + two dates; swipe compare; v1 log-ratio change detection; flagged regions. **Enable PostGIS on the existing Neon DB** (geometry columns + GiST). DB: `sar_scene`, `change_result`.
@@ -483,7 +498,7 @@ Each phase is a **vertical slice** (backend + WebSocket + UI) that runs on its o
 |---|---|---|
 | Celestrak | TLEs by catalog number | Primary orbital data. |
 | Space-Track | Authoritative TLEs | Needs account → `.env`. |
-| SatNOGS (Network/DB API) | Real decoded telemetry; real stations | Archived observations, not a live station feed. |
+| SatNOGS (Network/DB API) | Real decoded telemetry; real stations | Archived observations, not a live station feed. DB `/api/telemetry/` needs an account token (401 without; `SATLAB_SATNOGS_API_TOKEN`); Network `/api/observations/?norad_cat_id=` is public. Both rate-limit hard (429 after ~20 quick requests). |
 | Copernicus / Sentinel-1 | Real C-band SAR | Final constellation Sentinel-1C+1D (2026), ~6-day revisit. |
 | Microsoft Planetary Computer | STAC: `sentinel-1-rtc`, `sentinel-1-grd` | RTC = analysis-ready; **assets require `planetary_computer.sign`**. |
 | Umbra Open Data (AWS) | Very high-res spotlight SAR time series | STAC catalog; great for change demos. |
@@ -557,7 +572,7 @@ Write code as if the Phase 9 deploy already exists.
 - **Treat server messages as untrusted input too.** Only render fields that the `src/types/` contract defines; don't spread unknown fields into props or DOM attributes.
 - **External links** use `rel="noopener noreferrer"` with `target="_blank"`, and only `https:` URLs. Never build an `href` from data without checking the scheme (no `javascript:` URLs).
 - **`localStorage` holds preferences only** (theme, last station, tracked list): nothing secret, nothing the server must trust. Every read is wrapped in `try/catch` and validated, as `src/lib/theme.ts` does.
-- **CSP:** no new inline scripts or inline event-handler attributes. The single inline pre-paint theme script in `index.html` is the documented exception: the web image's build hashes it into the nginx `Content-Security-Policy` (`frontend/scripts/csp-script-hashes.mjs`, `frontend/nginx/security-headers.conf`), so the hash can't go stale. A new external host (tiles, analytics) must be added to that CSP too; `cloud.umami.is` (script) and `gateway.umami.is` (events) are there for analytics (§12.8).
+- **CSP:** no new inline scripts or inline event-handler attributes. The single inline pre-paint theme script in `index.html` is the documented exception: the web image's build hashes it into the nginx `Content-Security-Policy` (`frontend/scripts/csp-script-hashes.mjs`, `frontend/nginx/security-headers.conf`), so the hash can't go stale. A new external host (tiles, analytics) must be added to that CSP too; `cloud.umami.is` (script) and `gateway.umami.is` (events) are there for analytics (§12.8). WebAssembly stays blocked (no `'wasm-unsafe-eval'`): the globe's Cesium workers and imagery come from our own origin, and the one Cesium dependency that compiles wasm on import (meshoptimizer) is stubbed out of the bundle (§14, Phase 4a).
 
 ### 12.8 Dependencies (no extra tooling, just habits)
 - **Lockfiles are the source of truth and are committed** (`backend/uv.lock`, `frontend/pnpm-lock.yaml`). Install with `uv sync` / `pnpm install`; never `pip install` into the venv by hand.
@@ -599,7 +614,13 @@ When you close a gap, delete its line here.
 - **Session-scoped observer location** (2026-10-15). `ground_station` holds only seeded presets; there is no API to create one. A session observes from its own `location_name` / `lat_deg` / `lon_deg` / `alt_m`, copied from a preset (`station_id` set) or given as a custom `location` (geolocation, map click, typed lat/lon; `station_id` NULL, name "Custom location"). `POST /api/sessions` takes exactly one of `station_id` or `location`; `MissionSessionOut` drops the nested `station` for those flat fields; `ObserverState.station_id` and `PassPrediction.station_id` are nullable. The client remembers the last site (preset id or custom location) in `localStorage` and starts a new session there on reload.
 - **Session clock** is in-memory; after a backend restart a session resumes at `sim_start_time + elapsed × initial time_scale` (approximate until the Phase 6 event log makes it exact). Sessions end after 60 s with no subscribers.
 - **Phase 1 — UI design system**: the frontend follows `design-system.md` ("Warm Notebook", from the author's site). Tailwind v4 with tokens pinned to the system's v3 hexes and all other palettes removed; light/dark/system theme; the map reads its colors from the same tokens and swaps basemaps per theme.
-- **Cesium globe + visibility "V" cone → Phase 4** (2026-10-10; resolves design doc open question #5). Until then the visible set is shown on the 2D map, polar sky plot and all-sky view (Phase 2).
+- **Cesium globe + visibility "V" cone → Phase 4** (2026-10-10; resolves design doc open question #5). Until then the visible set is shown on the 2D map, polar sky plot and all-sky view (Phase 2). **2D/3D toggle, 3D by default** (2026-10-22): the map panel switches between the Cesium globe and the existing MapLibre ground-track map, which stays as the 2D option and takes over if the globe can't start (its chunk fails to load, Cesium throws, or the browser has no WebGL; MapLibre needs WebGL2 itself, so a browser with no WebGL at all gets neither). The choice is a `localStorage` preference (`satlab.mapMode`). Both render the same streamed state, selection and filters, so switching never changes what's shown.
+- **Phase 4a — globe** (2026-10-22).
+  - **Contract:** `GroundTrackMessage` gains `alt_m` and `above_mask` per point (both optional, default null). `ground_track()` moved to `sim/geometry.py` and now samples through the tick's vectorized chain (`observe` + `geodetic`) from the session's station, so the in-view flags are the same elevation test as everything else.
+  - **Cesium:** `@cesium/engine` `CesiumWidget` only (no Viewer, so no Knockout and no `unsafe-eval`), loaded as a lazy chunk. Core classes (`Cartesian3`, `Matrix4`, geometries, `FixedFrameTransforms`) are imported from `@cesium/core`; the engine's re-exports of them are deprecated proxies that log and slow every access. Imagery is the bundled Natural Earth II on the ellipsoid: no Cesium ion, no token, no new CSP host. No sky box, so no Sun or Moon (they'd follow the wall clock, not the sim clock).
+  - **Assets:** a Vite plugin serves `@cesium/engine/Build/{Workers,Assets}` at `/satlab/cesium/` in dev and copies them into `dist/cesium/` (ThirdParty's wasm decoders are left out). nginx serves that path with a 404 for missing files, never the SPA page; `scripts/smoke.sh` checks a worker's MIME type and the imagery.
+  - **meshoptimizer is aliased to a stub** (`src/views/Globe/meshoptStub.ts`): its index compiles WebAssembly on import, which the CSP refuses, and Cesium uses it only for meshopt-compressed glTF and 3D-tiles terrain, neither of which the globe loads. Revisit together with the CSP if a globe feature ever needs those formats.
+  - **Cones are presentation:** built on the client (`views/Globe/cone.ts`) from server angles (the mask, the selection's `strong_link_elev_bands_deg`) and the selection's streamed altitude, ending on its altitude shell (with nothing selected, a 1000 km reference shell). No state is decided from them; dot colours are the server's link RAG, as in the sky views. Wireframe only (rim + 8 lines from the station): a filled cone big enough to hold the camera, as a GEO one is, tints the whole view. A strong-link band that starts at the mask replaces the mask cone (same surface).
 - **Phase 2 — one vectorized engine** (2026-10-11). The tick propagates the whole catalog at once (`sgp4.api.SatrecArray`; TEME → Earth-fixed by GMST 1982, as skyfield does) — ~20 ms for ~18k objects — and every streamed state (visible, tracked, selected) comes from that path. skyfield's per-satellite `look_angles`/`sub_point` stay as the test reference (agreement ~1e-6°, < 1 cm; `tests/test_vector_geometry.py`). `CatalogService.fleet` (`app/sim/fleet.py`) is rebuilt from the DB after each ingest and swapped in with one assignment; the loop reads only it and the elements registry. **sgp4's C extension holds the GIL**: anything bigger than one epoch across the catalog is sliced into per-tick chunks.
 - **Phase 2 — WebSocket contract.** Snapshot streams (above the mask ∩ session filter) ∪ tracked ∪ selected; adds `visible_count`, `observer.horizon_mask_deg`, and per satellite `type`, `is_sar_capable`, `above_mask`. New server messages: `pass_arc` (the current/next pass as evenly time-spaced (az, el) samples clipped to [now − 30 min, now + 60 min]; sky views tween along it exactly like the map does along `ground_track`) and `upcoming` (rising-soon list, server-filtered, soonest `upcoming_limit`, with `total` and `status` computing/ready/paused). New client messages: `set_filter` (types, `sar_only`, `min_elevation_deg` — effective max(mask, value), also applied to rising passes' max elevation — and `rising_within_min` ≤ 60) and `set_selected` (the selection is always streamed with a ground track). **Filtering is server-side** (golden rule 3), so all views agree. Arc/track/upcoming messages precede the snapshot that uses them in each batch.
 - **Pass prediction** (`app/sim/passes.py`): one algorithm (coarse elevation grid → runs above the mask + near-mask local maxima for short grazes → golden-section culmination + bisected AOS/LOS, batched as (satellite, instant) pairs) serves the schedule endpoint (`GET /api/sessions/{id}/passes`, persisted to `pass_window`, replaced per session/satellite/window), the sky arcs and the rising-soon sweep. Checked against skyfield `find_events` (AOS/LOS < 1 s, max elevation < 0.01°). The rising-soon sweep covers the next 90 min of the whole catalog in chunks (adaptive: full size while nothing is shown, otherwise just enough to finish before the current result expires) and **pauses above 60×**, where it can't keep up — the UI says so instead of showing a stale list.
@@ -614,3 +635,11 @@ When you close a gap, delete its line here.
 - **Phase 3 — contract** (2026-10-21). `SatelliteState.link: LinkState | null` (`frequency_hz`, `data_rate_bps`, `ebn0_db`/`margin_db` null below the horizon, `doppler_hz` = received − transmitted, `rag`, `strong_link_elev_bands_deg` = elevation bands where the margin is green at the current altitude). `PassArcMessage.rag` (link state per point). `Snapshot.health: HealthState | null` for the selected satellite only: `power` (`soc_pct`, `sunlit_fraction`, `illumination`), `thermal` (`temperature_c`, band), `storage` (`fill_pct`, `activity`; null without a profile), `attitude` (`off_nadir_deg` vs `half_beamwidth_deg`; null below the mask), `rf` (= the link), each with `rag` and `modelled`, plus `rollup` (red if any red, else null if any lacks data, else worse of amber/green) and `model_version`. `SetFilter.link_ok_only` (profiled satellites only; in view, margin ≥ amber). `GET /api/link-profiles` (thresholds + profiles with sources). Every new field has a default and the TS mirror marks them optional, so web/API version skew degrades gracefully.
 - **Phase 3 — subsystem health is deterministic in sim time** (2026-10-21). `sim/subsystems.py` integrates from a fixed initial state (full battery, equilibrium temperature, full buffer) over the last `SATLAB_SUBSYSTEM_LOOKBACK_H` (24) hours on an absolute `SATLAB_SUBSYSTEM_STEP_S` (60 s) grid, so a clock jump or a replay gives the same values; grid inputs (sunlit fraction, downlink possible) are cached and extended incrementally (~4 ms/tick). Drivers are real: the Astronomical Almanac low-precision Sun (0.01°) with a conical umbra/penumbra (`sim/sun.py`, no ephemeris download), the pass geometry and the link margin. Parameters are generic and labelled modelled (`seed/subsystem_models.json`): the battery is sized for its own orbit's longest eclipse; storage knows only this station's contacts (a satellite unseen for a day reads full); attitude assumes nadir pointing. Not written to an event log yet (Phase 6); `health_change` events come then.
 - **Phase 3 — RAG colours** (2026-10-21). Green reuses the emerald primary (700 light / 400 dark); amber is a new functional pair amber-700 / amber-400 (amber-600 stays reserved for the greeting); red reuses red-700 / red-400. In the sky views a dot's fill is its link state (grey = no RF data) and the selection is marked by shape (ink ring, larger dot, ink label); the selected pass is coloured by `arc.rag` over a faint green strong-link band. Colour is never the only cue: RAG icons and words (Go / Marginal / No-go / No data) go with it.
+- **Phase 4b — packet templates** (2026-10-23). Seed `backend/app/data/seed/packet_templates.json` (template sets assigned to satellites, validated strictly: unknown keys are errors), synced to `packet_template` in `CatalogService.rebuild_fleet()` for catalogued satellites; upsert by (satellite, kind, name), rows the seed drops are set `active=false` (not deleted) so `command.template_id` holds. Codecs in `app/packets/` (AX.25 v2.2 UI frames, CCSDS 133.0-B-2 space packets with a CUC time header and CRC-16 error control) bound every length against the bytes present and the protocol maximum; payload encodings `binary`, `csv` (CroCube) and `aprs`. Satellites, chosen by research (SatNOGS DB `telemetries[].decoder`, recent good observations on the Network API, a public layout):
+  - **NOAA 20/21, FY-3D, GOES 18/19** (`ccsds_bus`): simulated housekeeping from the modelled subsystems; layout, APIDs (0x100 hk, 0x101 ack, 0x180 TC) and opcodes are **illustrative** (no public housekeeping/command ICD) and labelled so. Commands PING, REQUEST_HK, SET_BEACON_INTERVAL (10–120 s, changes the session's hk cadence only).
+  - **ISS** (`iss_aprs`): real AX.25 APRS frames replayed from SatNOGS (145.825 MHz digipeater); command APRS_MESSAGE from the placeholder N0CALL via ARISS, answered by the digipeated copy (H bit set).
+  - **CroCube** (62394; official amateur-radio document, CSV beacons TRX/OBC/PSU/MGS/SOL every 90 s) and **UWE-4** (43880; binary housekeeping, layout from the SatNOGS decoder, recognised by its header since its callsign check never matched): receive-only, no published command set. Neither publishes a full link budget, so both stay "no RF data".
+- **Phase 4b — comms runtime and channel** (2026-10-23). `sim/comms.py` (`CommsRuntime`, one per session, stepped by the tick, no I/O). The **contact is the selected satellite** (the antenna follows the selection) while above the mask, with templates, at ≤ `SATLAB_COMMS_MAX_TIME_SCALE` (60). Periodic templates beacon on an absolute sim-time grid (≤ `SATLAB_COMMS_MAX_PACKETS_PER_TICK` per tick, no backlog after a jump). `sim/channel.py`: one-way light time = range / c (real); for satellites with a link profile, bit errors from the real margin on the uncoded-BPSK curve anchored at BER 1e-5 for 0 dB (modelled, documented), flips drawn from `default_rng([session, packet seq])` so replays corrupt identically; the CRC decides `crc_ok`, and a bad frame yields no decoded values. Uplink: no published uplink budgets, so not modelled; a command is sent only in contact and its answer comes down through the same channel (a weak link can lose an ack). Command statuses: queued → sent → acked | failed, or aborted (contact lost before sending, clock moved back); `acked` is added to the DDL's vocabulary. Queueing for a later pass is Phase 5.
+- **Phase 4b — contract** (2026-10-23). `Snapshot.contact: ContactState | null` (`state` active/below_mask/no_template/too_fast, `downlink`, `channel_modelled`, `one_way_light_time_s`, `archive` ok/empty/not_configured/unavailable). Server messages `packet` (direction, kind telemetry/command/ack/response/digipeat, framing, source, size, raw hex, delivered, crc_ok, bit_errors, ber, margin, light time, decoded fields, layout_sourced, command id, SatNOGS origin ids) and `command_status`; the `Subscriber` queues them in order (≤ 200, oldest dropped) and a (re)connecting client gets the last 50 packets. Client message `send_command {norad_id, command, params}` (strict int/str values, ≤ 8 params); the session manager checks a per-session budget (`SATLAB_COMMANDS_PER_MIN`), the template, the params and the contact, stores the `queued` row (cap `SATLAB_MAX_COMMANDS_PER_SESSION`), then queues it. REST `GET /api/packet-templates` (reference data with sources, plus whether SatNOGS is configured). Every new field has a default; the TS mirror marks them optional.
+- **Phase 4b — persistence and SatNOGS** (2026-10-23). The runtime hands frames and status changes to `services/comms.py` `CommsWriter` (non-blocking queue, batches on a worker thread; ≤ `SATLAB_MAX_TELEMETRY_FRAMES_PER_SESSION` stored, more still stream; hourly purge of comms rows of sessions ended > `SATLAB_COMMS_RETENTION_DAYS` ago). `services/satnogs.py` `SatnogsArchive` fetches each replayed satellite's recent frames from the SatNOGS DB at most every `SATLAB_SATNOGS_REFRESH_HOURS` within one global budget (429 → back off for Retry-After, clamped 1 min–6 h), keeps only frames that decode cleanly with a template, caches raw frames on disk (validated on load) and swaps them in per satellite. The client (`data/satnogs.py`) sends the token only as `Authorization: Token`, streams with a 2 MB cap, follows `next` only to the configured endpoint and never follows redirects. Without `SATLAB_SATNOGS_API_TOKEN` the archive reads `not_configured` and the UI says so; tests blank the token. Production: ACA secret `satnogs-api-token` (deploy/azure.md).
+- **Phase 4b — UI** (2026-10-23). `views/Comms/CommsPanel.tsx` under the Systems strip, for the selection: contact state, a packet-flow strip (`PacketFlow.tsx`: commands up in ink, frames down coloured intact / corrupted / lost; slowed down, the real light time beside it), a command composer from the templates (params checked as the server will), recent command statuses, the packet log and the latest decoded frame (SatNOGS origin linked by observation id). Honesty lines: "Uplink is simulated: nothing is transmitted" and what the downlink is. The globe flies the same packets along its line of sight. Packets and statuses merge into the store once per snapshot, like arcs.

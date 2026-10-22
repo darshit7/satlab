@@ -73,6 +73,14 @@ server {
         }
     }
 
+    # Cesium's workers and assets (the 3D globe). Not content-hashed, so cached for a day only; a
+    # missing file is a 404, never the SPA page (a worker served as HTML fails obscurely).
+    location /satlab/cesium/ {
+        include /etc/nginx/snippets/security-headers.conf;
+        add_header Cache-Control "public, max-age=86400" always;
+        try_files $uri =404;
+    }
+
     location /satlab/api/ {
         limit_req zone=satlab_api burst=40 nodelay;
         proxy_pass ${SATLAB_API_UPSTREAM}/api/;

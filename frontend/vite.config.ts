@@ -1,5 +1,8 @@
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
+import { cpSync, createReadStream, statSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { dirname, extname, join, resolve, sep } from 'node:path'
 import { loadEnv, type Plugin } from 'vite'
 import { defineConfig } from 'vitest/config'
 
@@ -27,6 +30,50 @@ function umami(websiteId: string | undefined): Plugin {
   }
 }
 
+// Cesium's web workers and static assets (globe imagery, ellipsoid data), served from our own
+// origin at <base>cesium/ (CESIUM_BASE_URL, src/views/Globe/cesiumBase.ts). ThirdParty (wasm
+// decoders for glTF / 3D tiles) is left out: the globe doesn't use them.
+const CESIUM_PATH = 'cesium/'
+const CESIUM_DIRS = ['Workers', 'Assets']
+const CESIUM_TYPES: Record<string, string> = {
+  '.js': 'text/javascript',
+  '.json': 'application/json',
+  '.xml': 'application/xml',
+  '.jpg': 'image/jpeg',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+}
+
+function cesiumAssets(): Plugin {
+  const root = join(dirname(createRequire(import.meta.url).resolve('@cesium/engine/package.json')), 'Build')
+  const allowed = CESIUM_DIRS.map((d) => join(root, d) + sep)
+  return {
+    name: 'satlab-cesium-assets',
+    configureServer(server) {
+      server.middlewares.use(`${BASE}${CESIUM_PATH}`, (req, res, next) => {
+        let file: string
+        try {
+          file = resolve(root, '.' + decodeURIComponent((req.url ?? '').split('?')[0]!))
+        } catch {
+          return next()
+        }
+        if (!allowed.some((dir) => file.startsWith(dir))) return next() // no escaping Build/<dir>
+        try {
+          if (!statSync(file).isFile()) return next()
+        } catch {
+          return next()
+        }
+        res.setHeader('Content-Type', CESIUM_TYPES[extname(file)] ?? 'application/octet-stream')
+        createReadStream(file).pipe(res)
+      })
+    },
+    writeBundle(options) {
+      const out = options.dir ?? 'dist'
+      for (const dir of CESIUM_DIRS) cpSync(join(root, dir), join(out, CESIUM_PATH, dir), { recursive: true })
+    },
+  }
+}
+
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
   // Only NEXT_UMAMI_ID is read here; envPrefix stays VITE_ so no other variable reaches the bundle.
@@ -34,7 +81,12 @@ export default defineConfig(({ mode }) => {
 
   return {
     base: BASE,
-    plugins: [react(), tailwindcss(), umami(umamiId)],
+    plugins: [react(), tailwindcss(), umami(umamiId), cesiumAssets()],
+    resolve: {
+      // Cesium's meshopt decoder compiles WebAssembly on import, which the CSP refuses; the globe
+      // never decodes meshopt data (src/views/Globe/meshoptStub.ts).
+      alias: [{ find: /^meshoptimizer$/, replacement: resolve('src/views/Globe/meshoptStub.ts') }],
+    },
     server: {
       port: 5173,
       // Same-origin in dev: REST and WebSocket are proxied to the FastAPI backend, base prefix stripped.

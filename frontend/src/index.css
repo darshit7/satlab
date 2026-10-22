@@ -117,3 +117,27 @@
 .dark .maplibregl-ctrl-attrib-button {
   filter: invert(1);
 }
+
+/* Packet flow (comms): a packet crossing between the station and the satellite. Slowed down to be
+   seen; the real one-way light time is printed beside it. */
+@keyframes packet-up {
+  from {
+    left: 0%;
+  }
+  to {
+    left: 100%;
+  }
+}
+@keyframes packet-down {
+  from {
+    left: 100%;
+  }
+  to {
+    left: 0%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .packet-flight {
+    animation-duration: 1ms !important;
+  }
+}

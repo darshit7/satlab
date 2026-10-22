@@ -4,8 +4,8 @@ from datetime import timedelta
 
 import pytest
 
-from app.sim.geometry import Observer, look_angles, sub_point
-from app.sim.propagate import elements_from_tle, ground_track, to_time
+from app.sim.geometry import Observer, ground_track, look_angles, sub_point
+from app.sim.propagate import elements_from_tle, to_time
 from tests.conftest import BLUFFTON, ISS_LINE1, ISS_LINE2, ISS_NAME, REFERENCE_TIME
 
 
@@ -50,8 +50,27 @@ def test_range_rate_matches_finite_difference(iss, bluffton) -> None:
     assert now.range_rate_m_s == pytest.approx(numeric, abs=1.0)
 
 
+def test_ground_track_matches_skyfield(iss, bluffton) -> None:
+    """Every sample of the vectorized track agrees with skyfield's one-at-a-time reference."""
+    observer = Observer(*BLUFFTON)
+    n = 60
+    track = ground_track(iss, REFERENCE_TIME, n, observer, mask_deg=5.0)
+    assert len(track.points) == len(track.alt_m) == len(track.above_mask) == n
+    step = (track.end - track.start) / (n - 1)
+    for i, ((lon, lat), alt, above) in enumerate(
+        zip(track.points, track.alt_m, track.above_mask, strict=True)
+    ):
+        t = to_time(track.start + step * i)
+        ref = sub_point(iss.satellite, t)
+        assert lat == pytest.approx(ref.lat_deg, abs=1e-4)  # points are rounded to 1e-4°
+        assert lon == pytest.approx(ref.lon_deg, abs=1e-4)
+        assert alt == pytest.approx(ref.alt_m, abs=1.0)
+        assert above == (look_angles(iss.satellite, bluffton, t).elevation_deg >= 5.0)
+    assert any(track.above_mask) and not all(track.above_mask)
+
+
 def test_ground_track(iss) -> None:
-    track = ground_track(iss, REFERENCE_TIME, n_points=120)
+    track = ground_track(iss, REFERENCE_TIME, 120, Observer(*BLUFFTON), mask_deg=5.0)
     assert len(track.points) == 120
     assert track.end - track.start == timedelta(seconds=iss.period_s * 1.5)
     for lon, lat in track.points:

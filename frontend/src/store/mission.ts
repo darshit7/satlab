@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 import { api } from '../api/client'
+import { appendPackets, mergeStatuses } from '../lib/comms'
 import { DEFAULT_FILTERS, sanitizeFilters } from '../lib/filters'
 import type { ClockSample } from '../lib/time'
 import type {
@@ -8,12 +9,15 @@ import type {
   LinkProfiles,
   LocationInput,
   MissionSessionCreated,
+  PacketTemplates,
   PassPrediction,
   SatelliteSummary,
   SessionSite,
 } from '../types/api'
 import type {
+  CommandStatusMessage,
   GroundTrackMessage,
+  PacketMessage,
   PassArcMessage,
   ServerMessage,
   SetClock,
@@ -43,6 +47,8 @@ interface MissionState {
   stations: GroundStation[]
   /** Published link budgets in use and the margin → RAG thresholds (reference data). */
   linkProfiles: LinkProfiles | null
+  /** Satellites with packet templates and the commands they take (reference data). */
+  packetTemplates: PacketTemplates | null
   /** Where the current (or last) session observes from: resumed on reload. */
   site: SessionSite | null
   /** The live session, with its capability token: in memory only, never persisted. */
@@ -54,6 +60,10 @@ interface MissionState {
   /** Sky arcs of the satellites in the latest snapshot. */
   arcs: Record<number, PassArcMessage>
   upcoming: UpcomingMessage | null
+  /** The session's latest packets, oldest first. */
+  packets: PacketMessage[]
+  /** The latest status of each recent command, by command id. */
+  commands: Record<number, CommandStatusMessage>
   tracked: SatelliteSummary[]
   selectedId: number | null
   filters: VisibilityFilter
@@ -63,6 +73,8 @@ interface MissionState {
 
   loadStations: () => Promise<void>
   loadLinkProfiles: () => Promise<void>
+  loadPacketTemplates: () => Promise<void>
+  sendCommand: (noradId: number, command: string, params: Record<string, number | string>) => void
   startSession: (site: SessionSite) => Promise<void>
   track: (sat: SatelliteSummary) => void
   untrack: (noradId: number) => void
@@ -89,8 +101,11 @@ let sessionGeneration = 0 // guards against overlapping startSession calls
 let noticeSeq = 0
 let filterTimer: ReturnType<typeof setTimeout> | null = null
 let passesRequest: AbortController | null = null
-// Arcs arrive in bursts just ahead of the snapshot that uses them: merge them in one update.
+// Arcs, packets and command statuses arrive in bursts just ahead of a snapshot: merge them in one
+// update with it.
 let pendingArcs: PassArcMessage[] = []
+let pendingPackets: PacketMessage[] = []
+let pendingStatuses: CommandStatusMessage[] = []
 
 const inRange = (v: unknown, min: number, max: number): v is number =>
   typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max
@@ -151,10 +166,17 @@ export const useMission = create<MissionState>()(
           for (const arc of pendingArcs) arcs[arc.norad_id] = arc
           pendingArcs = []
         }
+        const comms =
+          pendingPackets.length > 0 || pendingStatuses.length > 0
+            ? { packets: appendPackets(get().packets, pendingPackets), commands: mergeStatuses(get().commands, pendingStatuses) }
+            : {}
+        pendingPackets = []
+        pendingStatuses = []
         set({
           snapshot: message,
           arcs,
           clockSample: { simMs: Date.parse(message.sim_time), receivedAt: performance.now(), clock: message.clock },
+          ...comms,
         })
       }
 
@@ -172,6 +194,12 @@ export const useMission = create<MissionState>()(
           case 'upcoming':
             set({ upcoming: message })
             break
+          case 'packet':
+            pendingPackets.push(message)
+            break
+          case 'command_status':
+            pendingStatuses.push(message)
+            break
           case 'error':
             get().notify(message.message)
             break
@@ -181,6 +209,7 @@ export const useMission = create<MissionState>()(
       return {
         stations: [],
         linkProfiles: null,
+        packetTemplates: null,
         site: null,
         session: null,
         connection: 'idle',
@@ -189,6 +218,8 @@ export const useMission = create<MissionState>()(
         tracks: {},
         arcs: {},
         upcoming: null,
+        packets: [],
+        commands: {},
         tracked: [],
         selectedId: null,
         filters: DEFAULT_FILTERS,
@@ -212,14 +243,39 @@ export const useMission = create<MissionState>()(
           }
         },
 
+        loadPacketTemplates: async () => {
+          try {
+            set({ packetTemplates: await api.packetTemplates() })
+          } catch {
+            // Reference data (commands, sources): without it the comms panel offers no commands.
+          }
+        },
+
+        sendCommand: (noradId, command, params) => {
+          socket?.send({ type: 'send_command', norad_id: noradId, command, params })
+        },
+
         startSession: async (site) => {
           const generation = ++sessionGeneration
           const previous = get().session
           socket?.close()
           socket = null
           pendingArcs = []
+          pendingPackets = []
+          pendingStatuses = []
           if (previous && !previous.ended_at) void api.endSession(previous).catch(() => {})
-          set({ site, session: null, snapshot: null, clockSample: null, tracks: {}, arcs: {}, upcoming: null, passes: null })
+          set({
+            site,
+            session: null,
+            snapshot: null,
+            clockSample: null,
+            tracks: {},
+            arcs: {},
+            upcoming: null,
+            passes: null,
+            packets: [],
+            commands: {},
+          })
 
           let session: MissionSessionCreated
           try {

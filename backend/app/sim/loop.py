@@ -17,6 +17,7 @@ import contextlib
 import logging
 import math
 import time
+from collections import deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -31,11 +32,13 @@ from app.data.classify import classify
 from app.models.ws import (
     MAX_RISING_WITHIN_MIN,
     ClockState,
+    CommandStatusMessage,
     ErrorMessage,
     GroundTrackMessage,
     HealthState,
     LinkState,
     ObserverState,
+    PacketMessage,
     PassArcMessage,
     Rag,
     SatelliteState,
@@ -46,11 +49,27 @@ from app.models.ws import (
     UpcomingPass,
 )
 from app.sim.clock import SimClock, wall_now
+from app.sim.comms import (
+    CommsConfig,
+    CommsRuntime,
+    ContactLook,
+    FrameArchive,
+    NoArchive,
+    OutgoingCommand,
+    Record,
+)
 from app.sim.fleet import Fleet
-from app.sim.geometry import Observation, Observer, geodetic, observe, off_nadir_deg
+from app.sim.geometry import (
+    Observation,
+    Observer,
+    geodetic,
+    ground_track,
+    observe,
+    off_nadir_deg,
+)
 from app.sim.linkbudget import RAG_NAMES, RED, LinkTable, RagThresholds, strong_link_bands
 from app.sim.passes import Arc, UpcomingSweep, pass_arcs
-from app.sim.propagate import Elements, Epochs, epochs, ground_track
+from app.sim.propagate import Elements, Epochs, epochs
 from app.sim.subsystems import HealthTracker
 
 log = logging.getLogger(__name__)
@@ -90,6 +109,8 @@ class RuntimeConfig:
     link_amber_margin_db: float = 0.0
     subsystem_lookback_h: float = 24.0
     subsystem_step_s: float = 60.0
+    comms_max_time_scale: float = 60.0
+    comms_max_packets_per_tick: int = 4
 
     @classmethod
     def from_settings(cls, s: Settings) -> "RuntimeConfig":
@@ -100,8 +121,11 @@ class Subscriber:
     """Latest-value mailbox for one client.
 
     Snapshots and the rising-soon list coalesce; ground tracks and pass arcs coalesce per
-    satellite but are never dropped; errors queue.
+    satellite but are never dropped; errors queue; packets and command statuses queue in order,
+    up to ``MAX_EVENTS`` (a client that stops reading loses the oldest, not the server's memory).
     """
+
+    MAX_EVENTS = 200
 
     def __init__(self) -> None:
         self._snapshot: Snapshot | None = None
@@ -109,6 +133,7 @@ class Subscriber:
         self._tracks: dict[int, GroundTrackMessage] = {}
         self._arcs: dict[int, PassArcMessage] = {}
         self._errors: list[ErrorMessage] = []
+        self._events: deque[PacketMessage | CommandStatusMessage] = deque(maxlen=self.MAX_EVENTS)
         self._ready = asyncio.Event()
 
     def offer(self, message: BaseModel) -> None:
@@ -121,6 +146,8 @@ class Subscriber:
                 self._tracks[message.norad_id] = message
             case PassArcMessage():
                 self._arcs[message.norad_id] = message
+            case PacketMessage() | CommandStatusMessage():
+                self._events.append(message)
             case ErrorMessage():
                 self._errors.append(message)
         self._ready.set()
@@ -129,13 +156,19 @@ class Subscriber:
         await self._ready.wait()
         self._ready.clear()
         # geometry first, so the snapshot that uses it never arrives ahead of it
-        batch: list[BaseModel] = [*self._errors, *self._tracks.values(), *self._arcs.values()]
+        batch: list[BaseModel] = [
+            *self._errors,
+            *self._tracks.values(),
+            *self._arcs.values(),
+            *self._events,
+        ]
         if self._upcoming is not None:
             batch.append(self._upcoming)
         if self._snapshot is not None:
             batch.append(self._snapshot)
         self._snapshot, self._upcoming = None, None
         self._tracks, self._arcs, self._errors = {}, {}, []
+        self._events.clear()
         return batch
 
 
@@ -168,11 +201,13 @@ class _Target:
 
 @dataclass(frozen=True)
 class _Look:
-    """Where a streamed satellite is this tick, as the health model needs it."""
+    """Where the selected satellite is this tick, as the health model and comms need it."""
 
     satrec: Satrec
     kind: SatelliteType
     elevation_deg: float
+    above_mask: bool
+    range_m: float
     off_nadir_deg: float
     link: LinkState | None
 
@@ -190,6 +225,8 @@ class SessionRuntime:
         elements_lookup: Callable[[int], Elements | None],
         fleet_source: Callable[[], Fleet],
         config: RuntimeConfig,
+        archive: FrameArchive | None = None,
+        sink: Callable[[Record], None] = lambda record: None,
     ) -> None:
         self.session_id = session_id
         self.observer = observer
@@ -232,6 +269,15 @@ class SessionRuntime:
         self._upcoming_dirty = True
         self._upcoming_published_at = -math.inf
         self._slow_logged_at = -math.inf
+        self.comms = CommsRuntime(
+            session_id,
+            CommsConfig(
+                max_time_scale=config.comms_max_time_scale,
+                max_packets_per_tick=config.comms_max_packets_per_tick,
+            ),
+            archive or NoArchive(),
+            sink,
+        )
 
     # ----- subscribers -----
 
@@ -244,6 +290,8 @@ class SessionRuntime:
                 sub.offer(arc.message)
         if self._upcoming is not None:
             sub.offer(self._upcoming)
+        for packet in self.comms.recent:  # the packet log, for a client that (re)connects
+            sub.offer(packet)
         self._subscribers.add(sub)
         return sub
 
@@ -260,6 +308,10 @@ class SessionRuntime:
 
     def publish_error(self, message: str) -> None:
         self._publish(ErrorMessage(message=message))
+
+    def submit_command(self, command: OutgoingCommand) -> None:
+        """Queue a stored, validated command for the satellite in contact."""
+        self._publish(self.comms.submit(command))
 
     # ----- control -----
 
@@ -359,6 +411,18 @@ class SessionRuntime:
         busy = time.perf_counter() - started > _SWEEP_BUDGET_SHARE * self._tick_period_s
         self._update_upcoming(fleet, sim_time, above, advance=not busy)
 
+        # 5. The selection's systems, and the link with it.
+        health = self._selected_health(fleet.links, sim_time)
+        for message in self.comms.step(
+            sim_time,
+            self._contact_look(),
+            health,
+            fleet.comms,
+            time_scale=self.clock.time_scale,
+            paused=self.clock.paused,
+        ):
+            self._publish(message)
+
         snapshot = Snapshot(
             session_id=self.session_id,
             tick=self.tick,
@@ -368,7 +432,8 @@ class SessionRuntime:
             observer=self.observer,
             visible_count=int(above.sum()),
             satellites=states,
-            health=self._selected_health(fleet.links, sim_time),
+            health=health,
+            contact=self.comms.contact,
         )
         self.tick += 1
         self._publish(snapshot)
@@ -492,7 +557,15 @@ class SessionRuntime:
             )
             if target.norad_id == self.selected:
                 off_nadir = off_nadir_deg(r_itrf[k], self._station.itrf_m)
-                self._selected_look = _Look(target.satrec, kind, el, float(off_nadir), links.get(k))
+                self._selected_look = _Look(
+                    target.satrec,
+                    kind,
+                    el,
+                    el >= self._mask_deg,
+                    rng,
+                    float(off_nadir),
+                    links.get(k),
+                )
         return states
 
     def _link_states(
@@ -554,6 +627,19 @@ class SessionRuntime:
             )
             self._bands[key] = bands
         return bands
+
+    def _contact_look(self) -> ContactLook | None:
+        look = self._selected_look
+        if look is None or self.selected is None:
+            return None
+        return ContactLook(
+            norad_id=self.selected,
+            elevation_deg=look.elevation_deg,
+            above_mask=look.above_mask,
+            range_m=look.range_m,
+            margin_db=look.link.margin_db if look.link is not None else None,
+            has_link=look.link is not None,
+        )
 
     def _selected_health(self, links: LinkTable, sim_time: datetime) -> HealthState | None:
         look = self._selected_look
@@ -678,13 +764,17 @@ class SessionRuntime:
             limit = timedelta(seconds=elements.period_s * _TRACK_REFRESH_ORBITS)
             if timedelta(0) <= offset <= limit:
                 return
-        track = ground_track(elements, sim_time, self.config.ground_track_points)
+        track = ground_track(
+            elements, sim_time, self.config.ground_track_points, self._station, self._mask_deg
+        )
         message = GroundTrackMessage(
             norad_id=elements.norad_id,
             start_time=track.start,
             end_time=track.end,
             period_s=elements.period_s,
             points=track.points,
+            alt_m=track.alt_m,
+            above_mask=track.above_mask,
         )
         self._tracks[elements.norad_id] = _TrackState(elements, sim_time, message)
         self._publish(message)

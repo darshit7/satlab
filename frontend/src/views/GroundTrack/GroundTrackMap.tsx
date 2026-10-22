@@ -12,6 +12,7 @@ import { useEffect, useRef } from 'react'
 import { positionOnTrack, splitAntimeridian, wrapLon, type TimedTrack } from '../../lib/geo'
 import { currentResolvedTheme, onThemeChange, type ResolvedTheme } from '../../lib/theme'
 import { estimateSimMs } from '../../lib/time'
+import { token } from '../../lib/tokens'
 import { useMission } from '../../store/mission'
 import type { GroundTrackMessage, Snapshot } from '../../types/ws'
 
@@ -25,11 +26,6 @@ const STYLE_URLS: Record<ResolvedTheme, string> = {
 // Map labels are drawn by MapLibre from the basemap's glyph server, so they use its font.
 const LABEL_FONT = import.meta.env.VITE_MAP_LABEL_FONT ?? 'Noto Sans Regular'
 const FRAME_INTERVAL_MS = 50
-
-/** Read a design-system color token (emitted by `@theme static` in index.css). */
-function token(name: string): string {
-  return getComputedStyle(document.documentElement).getPropertyValue(`--color-${name}`).trim()
-}
 
 /** Map colors per theme, from the same tokens as the UI: accent for selection, gray for the rest. */
 function palette(theme: ResolvedTheme) {

@@ -3,6 +3,7 @@
 
 import { positionOnArc, project, ringRadius, type Hit, type SkyProjection, type TimedArc, type XY } from '../lib/sky'
 import type { ResolvedTheme } from '../lib/theme'
+import { token } from '../lib/tokens'
 import type { PassArcMessage, Rag, SatelliteState, Snapshot } from '../types/ws'
 
 const CARDINALS: [string, number][] = [
@@ -11,11 +12,6 @@ const CARDINALS: [string, number][] = [
   ['S', 180],
   ['W', 270],
 ]
-
-/** Read a design-system color token (emitted by `@theme static` in index.css). */
-function token(name: string): string {
-  return getComputedStyle(document.documentElement).getPropertyValue(`--color-${name}`).trim()
-}
 
 /** Sky colors per theme, from the same tokens as the UI and the map.
  *

@@ -1,5 +1,39 @@
 import { describe, expect, it } from 'vitest'
-import { lerpLonLat, positionOnTrack, splitAntimeridian, wrapLon, type LonLat } from './geo'
+import { altitudeOnTrack, inViewRuns, lerpLonLat, positionOnTrack, splitAntimeridian, wrapLon, type LonLat } from './geo'
+
+describe('altitudeOnTrack', () => {
+  const track = { startMs: 0, endMs: 2000, points: [[0, 0], [1, 0], [2, 0]] as LonLat[], alt_m: [800, 900, 700] }
+
+  it('interpolates the server heights at the sim time', () => {
+    expect(altitudeOnTrack(track, 500)).toBeCloseTo(850)
+    expect(altitudeOnTrack(track, 1500)).toBeCloseTo(800)
+  })
+
+  it('is null outside the track, or without (aligned) heights', () => {
+    expect(altitudeOnTrack(track, 2500)).toBeNull()
+    expect(altitudeOnTrack({ ...track, alt_m: undefined }, 500)).toBeNull()
+    expect(altitudeOnTrack({ ...track, alt_m: [800] }, 500)).toBeNull()
+  })
+})
+
+describe('inViewRuns', () => {
+  it('splits at each change, sharing the boundary point', () => {
+    expect(inViewRuns([false, false, true, true, false], 5)).toEqual([
+      { inView: false, start: 0, end: 1 },
+      { inView: true, start: 1, end: 3 },
+      { inView: false, start: 3, end: 4 },
+    ])
+  })
+
+  it('is one run when nothing changes', () => {
+    expect(inViewRuns([true, true, true], 3)).toEqual([{ inView: true, start: 0, end: 2 }])
+  })
+
+  it('is empty without usable flags', () => {
+    expect(inViewRuns(null, 3)).toEqual([])
+    expect(inViewRuns([true, false], 3)).toEqual([])
+  })
+})
 
 describe('wrapLon', () => {
   it('normalises into [-180, 180)', () => {

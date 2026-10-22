@@ -7,13 +7,14 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Self
 
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError, model_validator
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
-from app.db.models import GroundStation, LinkProfile, Satellite
+from app.db.models import GroundStation, LinkProfile, PacketTemplate, Satellite
+from app.packets.templates import CommandTemplate, Name, TelemetryTemplate
 from app.sim.linkbudget import LinkProfile as LinkProfileModel
 
 log = logging.getLogger(__name__)
@@ -207,3 +208,124 @@ def load_link_profiles(db: Session) -> list[LinkProfileModel]:
         except (TypeError, ValueError):
             log.warning("link profile for %d is malformed; skipped", row.norad_id)
     return profiles
+
+
+# ---------- packet templates ----------
+
+Template = Annotated[TelemetryTemplate | CommandTemplate, Field(discriminator="kind")]
+_template_adapter: TypeAdapter[TelemetryTemplate | CommandTemplate] = TypeAdapter(Template)
+
+
+class TemplateSet(BaseModel):
+    telemetry: list[TelemetryTemplate] = Field(min_length=1, max_length=16)
+    commands: list[CommandTemplate] = Field(default_factory=list, max_length=16)
+
+    @model_validator(mode="after")
+    def _consistent(self) -> Self:
+        names = [t.name for t in self.telemetry]
+        if len(names) != len(set(names)) or len(self.commands) != len(
+            {c.name for c in self.commands}
+        ):
+            raise ValueError("template names must be unique within a set")
+        for command in self.commands:
+            if command.response_template is not None and command.response_template not in names:
+                raise ValueError(
+                    f"{command.name}: no telemetry template {command.response_template}"
+                )
+        return self
+
+
+class SatelliteTemplatesSpec(BaseModel):
+    norad_id: int = Field(ge=1, le=999_999_999)
+    satellite_name: str = Field(max_length=100)
+    template_set: Name
+
+
+class PacketTemplatesFile(BaseModel):
+    version: int = Field(ge=1)
+    verified_on: date
+    template_sets: dict[Name, TemplateSet] = Field(max_length=32)
+    satellites: list[SatelliteTemplatesSpec] = Field(max_length=200)
+
+    @model_validator(mode="after")
+    def _consistent(self) -> Self:
+        ids = [s.norad_id for s in self.satellites]
+        if len(ids) != len(set(ids)):
+            raise ValueError("one template set per satellite")
+        for s in self.satellites:
+            if s.template_set not in self.template_sets:
+                raise ValueError(f"unknown template set {s.template_set}")
+        return self
+
+    def templates(self) -> dict[int, list[TelemetryTemplate | CommandTemplate]]:
+        """Per satellite, its set's templates."""
+        result: dict[int, list[TelemetryTemplate | CommandTemplate]] = {}
+        for s in self.satellites:
+            chosen = self.template_sets[s.template_set]
+            result[s.norad_id] = [*chosen.telemetry, *chosen.commands]
+        return result
+
+
+PACKET_TEMPLATES_FILE = SEED_DIR / "packet_templates.json"
+
+
+@lru_cache
+def packet_template_specs(path: Path = PACKET_TEMPLATES_FILE) -> PacketTemplatesFile:
+    return PacketTemplatesFile.model_validate_json(path.read_bytes())
+
+
+def sync_packet_templates(db: Session, path: Path = PACKET_TEMPLATES_FILE) -> int:
+    """Make ``packet_template`` match the seed for satellites already in the catalog.
+
+    Upserts by (satellite, kind, name). Rows the seed no longer lists are deactivated, not deleted,
+    so commands that used them keep their foreign key. An unreadable seed is logged and leaves the
+    table as it is.
+    """
+    try:
+        specs = packet_template_specs(path)
+    except (OSError, ValueError, ValidationError):
+        log.exception("packet templates: could not read %s; keeping the current table", path.name)
+        return 0
+    per_satellite = specs.templates()
+    present = set(
+        db.scalars(select(Satellite.norad_id).where(Satellite.norad_id.in_(list(per_satellite))))
+    )
+    wanted = {
+        (norad_id, t.kind, t.name): t
+        for norad_id, templates in per_satellite.items()
+        if norad_id in present
+        for t in templates
+    }
+    rows = {(r.norad_id, r.kind, r.name): r for r in db.scalars(select(PacketTemplate))}
+    for key, template in wanted.items():
+        values = {
+            "framing": template.framing.type,
+            "spec": template.model_dump(mode="json"),
+            "version": specs.version,
+            "active": True,
+        }
+        if (row := rows.get(key)) is None:
+            db.add(PacketTemplate(norad_id=key[0], kind=key[1], name=key[2], **values))
+        else:
+            for column, value in values.items():
+                setattr(row, column, value)
+    for key, row in rows.items():
+        if key not in wanted:
+            row.active = False
+    db.commit()
+    return len(wanted)
+
+
+def load_packet_templates(
+    db: Session,
+) -> list[tuple[int, int, TelemetryTemplate | CommandTemplate]]:
+    """The active templates as (id, NORAD ID, template); rows that don't validate are skipped."""
+    templates = []
+    for row in db.scalars(
+        select(PacketTemplate).where(PacketTemplate.active).order_by(PacketTemplate.id)
+    ):
+        try:
+            templates.append((row.id, row.norad_id, _template_adapter.validate_python(row.spec)))
+        except ValidationError:
+            log.warning("packet template %d (%s) is malformed; skipped", row.id, row.name)
+    return templates

@@ -16,6 +16,7 @@ Units: degrees and metres at the boundary, radians inside the math.
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from functools import cached_property
 
 import numpy as np
@@ -25,7 +26,7 @@ from skyfield.api import EarthSatellite, wgs84
 from skyfield.timelib import Time
 from skyfield.toposlib import GeographicPosition
 
-from app.sim.propagate import Epochs, sgp4_teme, sgp4_teme_pairs
+from app.sim.propagate import Elements, Epochs, linspace_epochs, sgp4_teme, sgp4_teme_pairs
 
 WGS84_A_M = 6_378_137.0
 WGS84_F = 1 / 298.257223563
@@ -210,3 +211,41 @@ def geodetic(r_itrf_m: Floats) -> tuple[Floats, Floats, Floats]:
     n = WGS84_A_M / np.sqrt(1 - _WGS84_E2 * sin_lat**2)
     height = p * np.cos(lat) + z * sin_lat - n * (1 - _WGS84_E2 * sin_lat**2)
     return np.degrees(lat), np.degrees(np.arctan2(y, x)), height
+
+
+@dataclass(frozen=True)
+class GroundTrack:
+    """Orbit samples, evenly spaced in time from ``start`` to ``end`` (minus any SGP4 dropped)."""
+
+    start: datetime
+    end: datetime
+    points: list[tuple[float, float]]  # (lon_deg, lat_deg)
+    alt_m: list[float]  # height above the WGS84 ellipsoid, per point
+    above_mask: list[bool]  # per point: above the observer's horizon mask (the in-view part)
+
+
+def ground_track(
+    elements: Elements,
+    center: datetime,
+    n_points: int,
+    observer: Observer,
+    mask_deg: float,
+    orbits_before: float = 0.5,
+    orbits_after: float = 1.0,
+) -> GroundTrack:
+    """Sample the orbit from ``orbits_before`` to ``orbits_after`` around ``center``: sub-point,
+    height and whether ``observer`` sees it above the mask, through the tick's vectorized chain."""
+    start = center - timedelta(seconds=elements.period_s * orbits_before)
+    end = center + timedelta(seconds=elements.period_s * orbits_after)
+    obs = observe(
+        SatrecArray([elements.satellite.model]), linspace_epochs(start, end, n_points), observer
+    )
+    lat, lon, alt = geodetic(obs.r_itrf_m[0])
+    points: list[tuple[float, float]] = []
+    alt_m: list[float] = []
+    above_mask: list[bool] = []
+    for i in np.flatnonzero(obs.ok[0]):  # SGP4 yields nothing past decay
+        points.append((round(float(lon[i]), 4), round(float(lat[i]), 4)))
+        alt_m.append(round(float(alt[i]), 1))
+        above_mask.append(bool(obs.elevation_deg[0, i] >= mask_deg))
+    return GroundTrack(start=start, end=end, points=points, alt_m=alt_m, above_mask=above_mask)

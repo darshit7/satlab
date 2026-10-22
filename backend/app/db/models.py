@@ -1,13 +1,24 @@
 """SQLAlchemy ORM models — the source of truth for the schema (AGENTS.md §8).
 
 Phase 1 tables: ground_station, satellite, mission_session. Phase 2: pass_window. Phase 3:
-link_profile.
+link_profile. Phase 4b: packet_template, command, telemetry_frame.
 """
 
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, UTCDateTime
@@ -83,6 +94,26 @@ class LinkProfile(Base):
     sources: Mapped[list[Any]] = mapped_column(JSON, nullable=False)  # [{title, url}, ...]
 
 
+class PacketTemplate(Base):
+    """One telemetry or command template of a satellite (seed: ``packet_templates.json``).
+
+    Synced by natural key (satellite, kind, name). A template the seed drops is marked inactive
+    rather than deleted, so commands that used it keep their foreign key.
+    """
+
+    __tablename__ = "packet_template"
+    __table_args__ = (UniqueConstraint("norad_id", "kind", "name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    norad_id: Mapped[int] = mapped_column(ForeignKey("satellite.norad_id"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)  # telemetry | command
+    framing: Mapped[str] = mapped_column(String(16), nullable=False)  # ax25 | ccsds
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    spec: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)  # the validated template
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+
+
 # ========== OPERATIONAL / SESSION ==========
 
 
@@ -127,3 +158,41 @@ class PassWindow(Base):
     max_elev_deg: Mapped[float] = mapped_column(Float, nullable=False)
     aos_az_deg: Mapped[float | None] = mapped_column(Float)
     los_az_deg: Mapped[float | None] = mapped_column(Float)
+
+
+class Command(Base):
+    """A command an operator sent in a session (simulated uplink: nothing is transmitted)."""
+
+    __tablename__ = "command"
+    __table_args__ = (Index("ix_command_session_status", "session_id", "status"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("mission_session.id"), nullable=False)
+    norad_id: Mapped[int] = mapped_column(ForeignKey("satellite.norad_id"), nullable=False)
+    template_id: Mapped[int | None] = mapped_column(ForeignKey("packet_template.id"))
+    params: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    scheduled_aos: Mapped[datetime | None] = mapped_column(UTCDateTime)  # Phase 5
+    # queued | sent | acked | failed | aborted
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    sim_time: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)  # when it was issued
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
+
+
+class TelemetryFrame(Base):
+    """A frame received in a session: simulated, or a real SatNOGS frame replayed."""
+
+    __tablename__ = "telemetry_frame"
+    __table_args__ = (Index("ix_tlm_session_simtime", "session_id", "sim_time"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("mission_session.id"), nullable=False)
+    norad_id: Mapped[int] = mapped_column(ForeignKey("satellite.norad_id"), nullable=False)
+    template_id: Mapped[int | None] = mapped_column(ForeignKey("packet_template.id"))
+    command_id: Mapped[int | None] = mapped_column(ForeignKey("command.id"))  # its response
+    sim_time: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    wall_time: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
+    raw: Mapped[bytes | None] = mapped_column(LargeBinary)  # the frame as received (≤ 512 bytes)
+    decoded: Mapped[list[Any] | None] = mapped_column(JSON)  # [{name, value, unit}], null if bad
+    source: Mapped[str] = mapped_column(String(16), nullable=False)  # satnogs | simulated
+    crc_ok: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    origin: Mapped[dict[str, Any] | None] = mapped_column(JSON)  # SatNOGS provenance

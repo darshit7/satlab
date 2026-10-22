@@ -3,6 +3,7 @@ import { formatLocal, formatUtc } from '../lib/time'
 import { useSimNow } from '../lib/useSimNow'
 import { useMission } from '../store/mission'
 import type { ConnectionStatus } from '../ws/sessionSocket'
+import { AboutData } from './AboutData'
 import { Button } from './ui/Button'
 import { cn } from './ui/cn'
 import { ThemeSwitcher } from './ui/ThemeSwitcher'
@@ -79,7 +80,11 @@ export function ClockBar() {
           <span className={cn('size-2 rounded-full', CONNECTION_DOT[connection])} aria-hidden />
           {connection}
         </span>
-        <ThemeSwitcher />
+        {/* positioned: the About popover aligns with this group's (the header's) right edge */}
+        <div className="relative flex items-center gap-1">
+          <AboutData />
+          <ThemeSwitcher />
+        </div>
       </div>
     </header>
   )

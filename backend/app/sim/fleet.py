@@ -1,8 +1,8 @@
 """The fleet: every catalogued satellite, ready for vectorized propagation.
 
-An immutable bundle of parallel arrays plus one ``SatrecArray``, and the link profiles aligned with
-its rows. The catalog service builds a new one after each ingest and swaps it in with a single
-assignment; the sim loop only ever reads it.
+An immutable bundle of parallel arrays plus one ``SatrecArray``, the link profiles aligned with its
+rows and the satellites' packet templates. The catalog service builds a new one after each ingest
+and swaps it in with a single assignment; the sim loop only ever reads it.
 """
 
 import itertools
@@ -15,6 +15,8 @@ from numpy.typing import NDArray
 from sgp4.api import Satrec, SatrecArray
 
 from app.models.ws import SATELLITE_TYPES, SatelliteType
+from app.packets.table import CommsTable
+from app.packets.templates import CommandTemplate, TelemetryTemplate
 from app.sim.linkbudget import LinkProfile, LinkTable
 from app.sim.propagate import jd_to_datetime
 
@@ -44,9 +46,15 @@ class Fleet:
     index: dict[int, int] = field(repr=False)
     array: SatrecArray | None = field(repr=False)
     links: LinkTable = field(repr=False)
+    comms: CommsTable = field(repr=False, default_factory=CommsTable)
 
     @classmethod
-    def build(cls, rows: Iterable[FleetRow], profiles: Iterable[LinkProfile] = ()) -> "Fleet":
+    def build(
+        cls,
+        rows: Iterable[FleetRow],
+        profiles: Iterable[LinkProfile] = (),
+        templates: Iterable[tuple[int, int, TelemetryTemplate | CommandTemplate]] = (),
+    ) -> "Fleet":
         kept: list[tuple[FleetRow, Satrec]] = []
         seen: set[int] = set()
         for row in rows:
@@ -73,6 +81,7 @@ class Fleet:
             index=index,
             array=SatrecArray(list(satrecs)) if satrecs else None,
             links=LinkTable.build(profiles, index, len(kept)),
+            comms=CommsTable.build(templates),
         )
 
     @classmethod

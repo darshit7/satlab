@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Self
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -81,6 +81,23 @@ class Settings(BaseSettings):
     # Subsystem health is integrated over this much sim time, on this grid, from a fixed start.
     subsystem_lookback_h: float = Field(default=24.0, ge=1.0, le=48.0)
     subsystem_step_s: float = Field(default=60.0, ge=5.0, le=300.0)
+
+    # Communications (simulated uplink; downlink simulated or replayed from SatNOGS).
+    comms_max_time_scale: float = Field(default=60.0, gt=0)  # above this the contact pauses
+    comms_max_packets_per_tick: int = Field(default=4, ge=1, le=20)
+    commands_per_min: int = Field(default=30, ge=1, le=600)  # per session
+    # Storage bounds on the public deploy: past the cap, frames still stream but aren't stored.
+    max_commands_per_session: int = Field(default=500, ge=1)
+    max_telemetry_frames_per_session: int = Field(default=5000, ge=0)
+    comms_retention_days: float = Field(default=7.0, gt=0)  # after the session ended
+
+    # SatNOGS DB (real archived frames). Without a token, replay is off and the UI says so.
+    satnogs_db_url: str = "https://db.satnogs.org/api/telemetry/"
+    satnogs_api_token: SecretStr | None = None
+    satnogs_refresh_hours: float = Field(default=6.0, ge=1.0)
+    satnogs_max_frames: int = Field(default=200, ge=1, le=1000)  # kept per satellite
+    satnogs_max_pages: int = Field(default=5, ge=1, le=20)  # per refresh and satellite
+    satnogs_requests_per_min: int = Field(default=6, ge=1, le=60)  # all satellites together
 
     @model_validator(mode="after")
     def _check_link_and_health(self) -> Self:

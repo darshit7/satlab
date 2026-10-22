@@ -1,8 +1,9 @@
 """SGP4 propagation.
 
-Wraps TLEs into skyfield ``EarthSatellite`` objects (TEME → GCRS handled by skyfield) and samples
-sub-satellite ground tracks. For many satellites at once, ``sgp4_teme`` runs the sgp4 library's
-vectorized ``SatrecArray`` over ``Epochs`` prepared with skyfield's time conventions.
+Wraps TLEs into skyfield ``EarthSatellite`` objects (TEME → GCRS handled by skyfield). For many
+satellites at once, ``sgp4_teme`` runs the sgp4 library's vectorized ``SatrecArray`` over
+``Epochs`` prepared with skyfield's time conventions. Ground tracks are sampled in
+``sim/geometry.py``, through the same vectorized chain as the tick.
 """
 
 import math
@@ -14,7 +15,7 @@ from functools import lru_cache
 import numpy as np
 from numpy.typing import NDArray
 from sgp4.api import Satrec, SatrecArray
-from skyfield.api import EarthSatellite, load, wgs84
+from skyfield.api import EarthSatellite, load
 from skyfield.sgp4lib import theta_GMST1982
 from skyfield.timelib import Time, Timescale
 
@@ -178,30 +179,3 @@ def sgp4_teme_pairs(
         i = j
     ok = (errors == 0) & np.isfinite(r).all(axis=-1)
     return r, v, ok
-
-
-@dataclass(frozen=True)
-class GroundTrack:
-    start: datetime
-    end: datetime
-    points: list[tuple[float, float]]  # (lon_deg, lat_deg)
-
-
-def ground_track(
-    elements: Elements,
-    center: datetime,
-    n_points: int,
-    orbits_before: float = 0.5,
-    orbits_after: float = 1.0,
-) -> GroundTrack:
-    """Sample sub-satellite points from `orbits_before` to `orbits_after` around `center`."""
-    start = center - timedelta(seconds=elements.period_s * orbits_before)
-    end = center + timedelta(seconds=elements.period_s * orbits_after)
-    times = TS.linspace(to_time(start), to_time(end), n_points)
-    lat, lon = wgs84.latlon_of(elements.satellite.at(times))
-    points = [
-        (round(float(lo), 4), round(float(la), 4))
-        for lo, la in zip(lon.degrees, lat.degrees, strict=True)
-        if math.isfinite(lo) and math.isfinite(la)  # SGP4 yields NaN past decay
-    ]
-    return GroundTrack(start=start, end=end, points=points)

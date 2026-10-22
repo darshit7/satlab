@@ -58,6 +58,12 @@ if [[ -n $asset ]]; then
 else
   fail "no JS asset referenced by index.html"
 fi
+# The 3D globe's Cesium workers and bundled imagery are served from our own origin.
+type=$(curl -s -o /dev/null -w '%{http_code} %{content_type}' --max-time 10 "$web/satlab/cesium/Workers/createCylinderOutlineGeometry.js")
+[[ $type == "200 text/javascript"* || $type == "200 application/javascript"* ]] \
+  && pass "Cesium worker served as JavaScript" || fail "Cesium worker: got '$type'"
+expect 200 "globe imagery (Natural Earth II)" "$web/satlab/cesium/Assets/Textures/NaturalEarthII/tilemapresource.xml"
+expect 404 "missing Cesium file is a 404, not the SPA" "$web/satlab/cesium/Workers/no-such-worker.js"
 
 # --- API through the proxy ---
 expect 200 "API health via proxy" "$web/satlab/api/health"

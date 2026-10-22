@@ -1,7 +1,7 @@
 """REST request/response schemas. Mirrored in frontend/src/types/api.ts."""
 
 from datetime import datetime
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
@@ -144,3 +144,47 @@ class LinkProfilesOut(BaseModel):
     green_margin_db: float  # green strictly above
     amber_margin_db: float  # amber from here up to green; red below (or below the mask)
     profiles: list[LinkProfileOut]
+
+
+class CommandParamOut(BaseModel):
+    name: str
+    label: str
+    type: Literal["int", "text"]
+    min: int | None
+    max: int | None
+    max_length: int
+    charset: Literal["printable", "callsign"]
+
+
+class TelemetryTemplateOut(BaseModel):
+    name: str
+    label: str
+    framing: Literal["ax25", "ccsds"]
+    interval_s: float | None  # null: sent only in answer to a command
+    downlink: Literal["simulated", "satnogs"]
+    layout_sourced: bool  # false: an illustrative layout
+    sources: list[LinkSourceOut]
+
+
+class CommandTemplateOut(BaseModel):
+    name: str
+    label: str
+    framing: Literal["ax25", "ccsds"]
+    params: list[CommandParamOut]
+    response: Literal["ack", "telemetry", "digipeat"]
+    layout_sourced: bool
+    sources: list[LinkSourceOut]
+
+
+class SatelliteCommsOut(BaseModel):
+    norad_id: int
+    satellite_name: str
+    telemetry: list[TelemetryTemplateOut]
+    commands: list[CommandTemplateOut]  # empty: receive-only (no published command set)
+
+
+class PacketTemplatesOut(BaseModel):
+    """Every satellite with packet templates (reference data, like the link profiles)."""
+
+    satnogs_configured: bool  # whether real frames can be replayed at all
+    satellites: list[SatelliteCommsOut]
