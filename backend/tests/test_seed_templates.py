@@ -2,6 +2,7 @@
 inactive, so commands that used them keep their foreign key; a bad seed changes nothing."""
 
 import json
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -81,3 +82,27 @@ def test_bad_seed_changes_nothing(client: TestClient, tmp_path: Path) -> None:
 
     assert _sync(_seed_copy(tmp_path, typo)) == 0
     assert all(r.active for r in _rows().values())
+
+
+def test_concurrent_syncs_dont_collide(client: TestClient) -> None:
+    """Two syncs at once (overlapping revisions in a deploy; two catalog services in a test)
+    both see an empty table, then both write: an upsert, not insert-if-absent, keeps that safe."""
+    _catalogue()
+    start = threading.Barrier(2)
+    errors: list[Exception] = []
+
+    def sync() -> None:
+        with get_sessionmaker()() as db:
+            start.wait()
+            try:
+                sync_packet_templates(db)
+            except Exception as exc:  # collected, asserted on below
+                errors.append(exc)
+
+    threads = [threading.Thread(target=sync) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert len(_rows()) == 7
