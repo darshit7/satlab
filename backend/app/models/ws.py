@@ -1,16 +1,16 @@
 """WebSocket contract. Mirrored in frontend/src/types/ws.ts — change both in lockstep.
 
-Server → client: ``snapshot`` (every tick; link state per satellite, subsystem health of the
-selection), ``ground_track`` and ``pass_arc`` (when (re)computed), ``upcoming`` (when the
-rising-soon list changes), ``error``.
+Server → client: ``snapshot`` (every tick; link state per satellite, subsystem health and comms
+contact of the selection), ``ground_track`` and ``pass_arc`` (when (re)computed), ``upcoming`` (when
+the rising-soon list changes), ``packet`` (each frame up or down), ``command_status``, ``error``.
 Client → server: ``auth`` (first message on every connection), then ``set_tracked``,
-``set_selected``, ``set_filter``, ``set_clock``.
+``set_selected``, ``set_filter``, ``set_clock``, ``send_command``.
 """
 
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, BaseModel, Field, TypeAdapter
+from pydantic import AwareDatetime, BaseModel, Field, StrictInt, StrictStr, TypeAdapter
 
 SatelliteType = Literal["station", "weather", "comms", "navigation", "sar", "other"]
 SATELLITE_TYPES: tuple[SatelliteType, ...] = (
@@ -139,6 +139,26 @@ class HealthState(BaseModel):
     rf: RfHealth
 
 
+ContactStatus = Literal["active", "below_mask", "no_template", "too_fast"]
+ArchiveStatus = Literal["ok", "empty", "not_configured", "unavailable"]
+
+
+class ContactState(BaseModel):
+    """The station's contact with the selected satellite: the antenna follows the selection.
+
+    ``active``: in view, with packet templates, at a clock rate comms can follow; frames flow and
+    commands can be sent. ``archive`` reports the SatNOGS replay for satellites whose downlink is
+    real archived frames (null otherwise).
+    """
+
+    norad_id: int
+    state: ContactStatus
+    downlink: Literal["simulated", "satnogs"] | None  # null without templates
+    channel_modelled: bool  # a published link budget drives bit errors
+    one_way_light_time_s: float | None  # null below the horizon
+    archive: ArchiveStatus | None = None
+
+
 class Snapshot(BaseModel):
     """Streamed satellites = (above the mask ∩ the session filter) + tracked + selected."""
 
@@ -152,6 +172,7 @@ class Snapshot(BaseModel):
     visible_count: int  # satellites above the mask before the session filter
     satellites: list[SatelliteState]
     health: HealthState | None = None  # of the selected satellite
+    contact: ContactState | None = None  # with the selected satellite
 
 
 class GroundTrackMessage(BaseModel):
@@ -212,13 +233,78 @@ class UpcomingMessage(BaseModel):
     passes: list[UpcomingPass]
 
 
+class DecodedFieldOut(BaseModel):
+    name: str
+    value: int | float | str | None
+    unit: str | None = None
+
+
+class SatnogsOrigin(BaseModel):
+    """Where a replayed frame really came from (ids for the public SatNOGS pages)."""
+
+    observation_id: int | None
+    station_id: int | None
+    received_at: datetime | None
+
+
+PacketKind = Literal["telemetry", "command", "ack", "response", "digipeat"]
+
+
+class PacketMessage(BaseModel):
+    """One frame on the simulated link. Uplink is never transmitted; downlink is a simulated frame
+    or a real SatNOGS frame replayed. ``delivered`` false: no line of sight, or too damaged to read.
+    """
+
+    type: Literal["packet"] = "packet"
+    seq: int  # per session
+    norad_id: int
+    direction: Literal["up", "down"]
+    kind: PacketKind
+    template: str
+    label: str
+    framing: Literal["ax25", "ccsds"]
+    source: Literal["simulated", "satnogs"]
+    sim_time: datetime
+    size_bytes: int
+    raw_hex: str  # the frame as sent (up) or received (down)
+    delivered: bool
+    crc_ok: bool | None  # null when nothing readable arrived
+    bit_errors: int | None  # null: channel not modelled
+    ber: float | None  # modelled bit error rate at this margin
+    margin_db: float | None
+    one_way_light_time_s: float | None
+    decoded: list[DecodedFieldOut] | None  # null when the check failed or nothing arrived
+    layout_sourced: bool
+    command_id: int | None = None
+    origin: SatnogsOrigin | None = None
+
+
+CommandStatus = Literal["queued", "sent", "acked", "failed", "aborted"]
+
+
+class CommandStatusMessage(BaseModel):
+    type: Literal["command_status"] = "command_status"
+    command_id: int
+    norad_id: int
+    command: str
+    status: CommandStatus
+    reason: str | None = None
+    sim_time: datetime
+
+
 class ErrorMessage(BaseModel):
     type: Literal["error"] = "error"
     message: str
 
 
 ServerMessage = Annotated[
-    Snapshot | GroundTrackMessage | PassArcMessage | UpcomingMessage | ErrorMessage,
+    Snapshot
+    | GroundTrackMessage
+    | PassArcMessage
+    | UpcomingMessage
+    | PacketMessage
+    | CommandStatusMessage
+    | ErrorMessage,
     Field(discriminator="type"),
 ]
 
@@ -277,9 +363,22 @@ class SetClock(BaseModel):
     sim_time: AwareDatetime | None = None
 
 
-ClientMessage = Annotated[
-    SetTracked | SetSelected | SetFilter | SetClock, Field(discriminator="type")
-]
-client_message_adapter: TypeAdapter[SetTracked | SetSelected | SetFilter | SetClock] = TypeAdapter(
-    ClientMessage
-)
+ParamName = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,31}$")]
+ParamValue = StrictInt | Annotated[StrictStr, Field(max_length=80)]
+
+
+class SendCommand(BaseModel):
+    """Send a command to the satellite in contact (simulated uplink: nothing is transmitted).
+
+    The shape is checked here; the parameters themselves against the command's template.
+    """
+
+    type: Literal["send_command"] = "send_command"
+    norad_id: NoradId
+    command: str = Field(pattern=r"^[A-Z][A-Z0-9_]{0,31}$")
+    params: dict[ParamName, ParamValue] = Field(default_factory=dict, max_length=8)
+
+
+ClientCommand = SetTracked | SetSelected | SetFilter | SetClock | SendCommand
+ClientMessage = Annotated[ClientCommand, Field(discriminator="type")]
+client_message_adapter: TypeAdapter[ClientCommand] = TypeAdapter(ClientMessage)

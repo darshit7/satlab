@@ -115,6 +115,23 @@ export interface HealthState {
   rf: RfHealth
 }
 
+export type ContactStatus = 'active' | 'below_mask' | 'no_template' | 'too_fast'
+export type ArchiveStatus = 'ok' | 'empty' | 'not_configured' | 'unavailable'
+
+/** The station's contact with the selected satellite: the antenna follows the selection. */
+export interface ContactState {
+  norad_id: number
+  state: ContactStatus
+  /** Null without packet templates. */
+  downlink: 'simulated' | 'satnogs' | null
+  /** A published link budget drives bit errors. */
+  channel_modelled: boolean
+  /** Null below the horizon. */
+  one_way_light_time_s: number | null
+  /** The SatNOGS replay, for satellites whose downlink is real archived frames. */
+  archive?: ArchiveStatus | null
+}
+
 /** Streamed satellites = (above the mask ∩ the session filter) ∪ tracked ∪ selected. */
 export interface Snapshot {
   type: 'snapshot'
@@ -129,6 +146,8 @@ export interface Snapshot {
   satellites: SatelliteState[]
   /** Of the selected satellite. */
   health?: HealthState | null
+  /** With the selected satellite (absent from an older server). */
+  contact?: ContactState | null
 }
 
 /** The orbit around the sim time, sampled evenly in time: drawn on the map and the globe. */
@@ -181,12 +200,77 @@ export interface UpcomingMessage {
   passes: UpcomingPass[]
 }
 
+export interface DecodedField {
+  name: string
+  value: number | string | null
+  unit?: string | null
+}
+
+/** Where a replayed frame really came from (ids for the public SatNOGS pages). */
+export interface SatnogsOrigin {
+  observation_id: number | null
+  station_id: number | null
+  received_at: string | null
+}
+
+export type PacketKind = 'telemetry' | 'command' | 'ack' | 'response' | 'digipeat'
+
+/** One frame on the simulated link. Uplink is never transmitted; downlink is simulated or a real
+ *  SatNOGS frame replayed. `delivered` false: no line of sight. */
+export interface PacketMessage {
+  type: 'packet'
+  seq: number
+  norad_id: number
+  direction: 'up' | 'down'
+  kind: PacketKind
+  template: string
+  label: string
+  framing: 'ax25' | 'ccsds'
+  source: 'simulated' | 'satnogs'
+  sim_time: string
+  size_bytes: number
+  raw_hex: string
+  delivered: boolean
+  /** Null when nothing readable arrived. */
+  crc_ok: boolean | null
+  /** Null: the channel isn't modelled (no published link budget). */
+  bit_errors: number | null
+  ber: number | null
+  margin_db: number | null
+  one_way_light_time_s: number | null
+  /** Null when the check failed or nothing arrived. */
+  decoded: DecodedField[] | null
+  /** False: an illustrative layout. */
+  layout_sourced: boolean
+  command_id?: number | null
+  origin?: SatnogsOrigin | null
+}
+
+export type CommandStatus = 'queued' | 'sent' | 'acked' | 'failed' | 'aborted'
+
+export interface CommandStatusMessage {
+  type: 'command_status'
+  command_id: number
+  norad_id: number
+  command: string
+  status: CommandStatus
+  reason?: string | null
+  sim_time: string
+}
+
 export interface ErrorMessage {
   type: 'error'
   message: string
 }
 
-export type ServerMessage = Snapshot | GroundTrackMessage | PassArcMessage | UpcomingMessage | ErrorMessage
+export type ServerMessage =
+  | Snapshot
+  | GroundTrackMessage
+  | PassArcMessage
+  | UpcomingMessage
+  | PacketMessage
+  | CommandStatusMessage
+  | ErrorMessage
 
 // ---------- client → server ----------
 
@@ -221,7 +305,15 @@ export interface SetClock {
   sim_time?: string
 }
 
-export type ClientMessage = SetTracked | SetSelected | SetFilter | SetClock
+/** A command for the satellite in contact (simulated uplink; checked against its template). */
+export interface SendCommand {
+  type: 'send_command'
+  norad_id: number
+  command: string
+  params: Record<string, number | string>
+}
+
+export type ClientMessage = SetTracked | SetSelected | SetFilter | SetClock | SendCommand
 
 /** First message on every connection: the session's token (MissionSessionCreated.token). */
 export interface AuthMessage {

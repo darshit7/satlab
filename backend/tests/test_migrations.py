@@ -21,9 +21,16 @@ def _tables() -> set[str]:
 def test_upgrade_downgrade_roundtrip(app_env: Path) -> None:
     cfg = _alembic()
     command.upgrade(cfg, "head")
-    assert {"ground_station", "satellite", "mission_session", "pass_window", "link_profile"} <= (
-        _tables()
-    )
+    assert {
+        "ground_station",
+        "satellite",
+        "mission_session",
+        "pass_window",
+        "link_profile",
+        "packet_template",
+        "command",
+        "telemetry_frame",
+    } <= _tables()
 
     command.downgrade(cfg, "base")
     assert _tables() <= {"alembic_version"}

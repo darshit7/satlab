@@ -1,0 +1,343 @@
+{
+  "_comment": [
+    "Per-satellite packet templates (AGENTS.md §14, Phase 4b). Synced to packet_template for catalogued satellites; validated by app/packets/templates.py.",
+    "Framing standards are real (AX.25 v2.2, CCSDS 133.0-B-2 space packets, CCSDS 301.0 CUC time). Field layouts are real where layout_sourced is true (CroCube's own amateur-radio document; UWE-4's layout from the decoder SatNOGS runs; APRS text) and illustrative where it is false.",
+    "ccsds_bus: the satellites with a published link budget get simulated housekeeping. The layout, APIDs and opcodes are illustrative (no public ICD for their housekeeping or commanding); the values come from the modelled subsystems (sim/subsystems.py). Corruption on the way down follows their real link margin.",
+    "satnogs downlink: frames really received by SatNOGS stations, replayed during this station's pass, one per interval_s per template. CroCube's 90 s cadence is from its document; the ISS digipeater (it relays whatever hams send) and UWE-4 replay cadences are modelled.",
+    "Commands are simulated (nothing is transmitted). CroCube and UWE-4 publish no command set, so they are receive-only. N0CALL is the conventional placeholder callsign; APZSLB is an APRS experimental destination (APZxxx)."
+  ],
+  "version": 1,
+  "verified_on": "2026-10-23",
+  "template_sets": {
+    "ccsds_bus": {
+      "telemetry": [
+        {
+          "name": "hk",
+          "label": "Housekeeping (illustrative layout, modelled values)",
+          "framing": { "type": "ccsds", "apid": 256, "time_code": true, "error_control": true },
+          "payload": {
+            "encoding": "binary",
+            "endian": "be",
+            "fields": [
+              { "name": "soc_pct", "label": "Battery state of charge", "type": "u8", "scale": 0.5, "unit": "%", "source": "power.soc_pct" },
+              { "name": "illumination", "type": "u8", "enum": { "0": "sunlit", "1": "penumbra", "2": "eclipse" }, "source": "power.illumination" },
+              { "name": "sunlit_fraction", "type": "u8", "scale": 0.004, "source": "power.sunlit_fraction" },
+              { "name": "temperature_c", "label": "Bus temperature", "type": "s16", "scale": 0.01, "unit": "°C", "source": "thermal.temperature_c" },
+              { "name": "storage_fill_pct", "type": "u8", "scale": 0.5, "unit": "%", "source": "storage.fill_pct" },
+              { "name": "off_nadir_deg", "label": "Station off nadir", "type": "u16", "scale": 0.01, "unit": "°", "source": "attitude.off_nadir_deg" },
+              { "name": "beacon_interval_s", "type": "u16", "unit": "s", "source": "comms.beacon_interval_s" },
+              { "name": "commands_received", "type": "u16", "source": "comms.commands_received" }
+            ]
+          },
+          "interval_s": 10,
+          "downlink": "simulated",
+          "layout_sourced": false,
+          "sources": [
+            { "title": "CCSDS 133.0-B-2, Space Packet Protocol (framing)", "url": "https://public.ccsds.org/Pubs/133x0b2e2.pdf" },
+            { "title": "CCSDS 301.0-B-4, Time Code Formats (CUC secondary header)", "url": "https://public.ccsds.org/Pubs/301x0b4e1.pdf" }
+          ]
+        },
+        {
+          "name": "ack",
+          "label": "Command acknowledgement (illustrative layout)",
+          "framing": { "type": "ccsds", "apid": 257, "time_code": true, "error_control": true },
+          "payload": {
+            "encoding": "binary",
+            "endian": "be",
+            "fields": [
+              { "name": "command_opcode", "type": "u8", "format": "hex", "source": "command.opcode" },
+              { "name": "command_sequence", "type": "u16", "source": "command.sequence" },
+              { "name": "status", "type": "u8", "enum": { "0": "accepted" }, "source": "command.status" }
+            ]
+          },
+          "downlink": "simulated",
+          "layout_sourced": false,
+          "sources": [
+            { "title": "CCSDS 133.0-B-2, Space Packet Protocol (framing)", "url": "https://public.ccsds.org/Pubs/133x0b2e2.pdf" }
+          ]
+        }
+      ],
+      "commands": [
+        {
+          "name": "PING",
+          "label": "Ping: the satellite acknowledges",
+          "framing": { "type": "ccsds", "apid": 384, "time_code": false, "error_control": true },
+          "opcode": 1,
+          "response": "ack",
+          "response_template": "ack",
+          "layout_sourced": false,
+          "sources": [{ "title": "CCSDS 133.0-B-2, Space Packet Protocol (framing)", "url": "https://public.ccsds.org/Pubs/133x0b2e2.pdf" }]
+        },
+        {
+          "name": "REQUEST_HK",
+          "label": "Request housekeeping now",
+          "framing": { "type": "ccsds", "apid": 384, "time_code": false, "error_control": true },
+          "opcode": 2,
+          "response": "telemetry",
+          "response_template": "hk",
+          "layout_sourced": false,
+          "sources": [{ "title": "CCSDS 133.0-B-2, Space Packet Protocol (framing)", "url": "https://public.ccsds.org/Pubs/133x0b2e2.pdf" }]
+        },
+        {
+          "name": "SET_BEACON_INTERVAL",
+          "label": "Set the housekeeping interval",
+          "framing": { "type": "ccsds", "apid": 384, "time_code": false, "error_control": true },
+          "opcode": 3,
+          "params": [{ "name": "interval_s", "label": "Interval (s)", "type": "int", "min": 10, "max": 120 }],
+          "response": "ack",
+          "response_template": "ack",
+          "effect": "beacon_interval",
+          "layout_sourced": false,
+          "sources": [{ "title": "CCSDS 133.0-B-2, Space Packet Protocol (framing)", "url": "https://public.ccsds.org/Pubs/133x0b2e2.pdf" }]
+        }
+      ]
+    },
+    "iss_aprs": {
+      "telemetry": [
+        {
+          "name": "aprs",
+          "label": "APRS packet relayed by the ISS digipeater (145.825 MHz, AFSK 1200 bps)",
+          "framing": { "type": "ax25", "fcs": false },
+          "payload": { "encoding": "aprs" },
+          "interval_s": 30,
+          "downlink": "satnogs",
+          "layout_sourced": true,
+          "sources": [
+            { "title": "ARRL: simultaneous APRS and voice repeater on the ISS (145.825 MHz; paths RS0ISS, ARISS, APRSAT)", "url": "https://www.arrl.org/news/simultaneous-aprs-and-voice-repeater-on-the-international-space-station" },
+            { "title": "AX.25 Link Access Protocol for Amateur Packet Radio, v2.2", "url": "https://www.ax25.net/AX25.2.2-Jul%2098-2.pdf" },
+            { "title": "APRS protocol specification (WB2OSZ's APRS 1.2 working edition)", "url": "https://github.com/wb2osz/aprsspec" }
+          ]
+        }
+      ],
+      "commands": [
+        {
+          "name": "APRS_MESSAGE",
+          "label": "Send an APRS message through the ISS digipeater",
+          "framing": {
+            "type": "ax25",
+            "source": { "callsign": "N0CALL" },
+            "destination": { "callsign": "APZSLB" },
+            "path": [{ "callsign": "ARISS" }]
+          },
+          "params": [
+            { "name": "addressee", "label": "To (callsign)", "type": "text", "max_length": 9, "charset": "callsign" },
+            { "name": "text", "label": "Message", "type": "text", "max_length": 67 }
+          ],
+          "response": "digipeat",
+          "response_delay_s": 0.0,
+          "layout_sourced": true,
+          "sources": [
+            { "title": "ARRL: simultaneous APRS and voice repeater on the ISS (145.825 MHz; paths RS0ISS, ARISS, APRSAT)", "url": "https://www.arrl.org/news/simultaneous-aprs-and-voice-repeater-on-the-international-space-station" },
+            { "title": "APRS protocol specification (WB2OSZ's APRS 1.2 working edition)", "url": "https://github.com/wb2osz/aprsspec" }
+          ]
+        }
+      ]
+    },
+    "crocube": {
+      "telemetry": [
+        {
+          "name": "trx",
+          "label": "TRX beacon (radio)",
+          "framing": { "type": "ax25", "source": { "callsign": "9A0CC" }, "fcs": false },
+          "payload": {
+            "encoding": "csv",
+            "tags": ["U", "V"],
+            "fields": [
+              { "name": "uptime_s", "kind": "int", "unit": "s" },
+              { "name": "uptime_total_s", "kind": "int", "unit": "s" },
+              { "name": "radio_boot_count", "kind": "int" },
+              { "name": "rf_reset_count", "kind": "int" },
+              { "name": "mcu_temp_c", "kind": "int", "scale": 0.01, "unit": "°C" },
+              { "name": "rf_chip_temp_c", "kind": "int", "scale": 0.01, "unit": "°C" },
+              { "name": "pa_temp_c", "label": "RF power amplifier temperature", "kind": "int", "scale": 0.01, "unit": "°C" },
+              { "name": "digipeated", "label": "Digipeater forwarded messages", "kind": "int" },
+              { "name": "last_digi_user", "label": "Last digipeater user", "kind": "text" },
+              { "name": "rx_packets", "kind": "int" },
+              { "name": "tx_packets", "kind": "int" },
+              { "name": "rssi_dbm", "kind": "int", "scale": 0.5, "offset": -134, "unit": "dBm" },
+              { "name": "rssi_carrier_dbm", "label": "RSSI when carrier detected", "kind": "int", "scale": 0.5, "offset": -134, "unit": "dBm" }
+            ]
+          },
+          "interval_s": 90,
+          "downlink": "satnogs",
+          "layout_sourced": true,
+          "sources": [{ "title": "CroCube amateur radio information (updated 2024-09-01)", "url": "https://crocube.hr/wp-content/uploads/2022/12/CroCube_AmateurRadioInfo_2024-09-15.pdf" }]
+        },
+        {
+          "name": "obc",
+          "label": "OBC beacon (on-board computer)",
+          "framing": { "type": "ax25", "source": { "callsign": "9A0CC" }, "fcs": false },
+          "payload": {
+            "encoding": "csv",
+            "tags": ["OBC"],
+            "fields": [
+              { "name": "boot_count", "kind": "int" },
+              { "name": "uptime_s", "kind": "int", "unit": "s" },
+              { "name": "uptime_total_s", "kind": "int", "unit": "s" },
+              { "name": "battery_mv", "kind": "int", "unit": "mV" },
+              { "name": "mcu_temp_c", "kind": "int", "scale": 0.01, "unit": "°C" },
+              { "name": "free_memory", "label": "Remaining storage", "kind": "int" }
+            ]
+          },
+          "interval_s": 90,
+          "downlink": "satnogs",
+          "layout_sourced": true,
+          "sources": [{ "title": "CroCube amateur radio information (updated 2024-09-01)", "url": "https://crocube.hr/wp-content/uploads/2022/12/CroCube_AmateurRadioInfo_2024-09-15.pdf" }]
+        },
+        {
+          "name": "psu",
+          "label": "PSU beacon (power)",
+          "framing": { "type": "ax25", "source": { "callsign": "9A0CC" }, "fcs": false },
+          "payload": {
+            "encoding": "csv",
+            "tags": ["PSU"],
+            "fields": [
+              { "name": "psu_resets", "kind": "int" },
+              { "name": "uptime_s", "kind": "int", "unit": "s" },
+              { "name": "uptime_total_s", "kind": "int", "unit": "s" },
+              { "name": "battery_mv", "kind": "int", "unit": "mV" },
+              { "name": "system_temp_c", "kind": "int", "scale": 0.01, "unit": "°C" },
+              { "name": "battery_temp_c", "kind": "int", "scale": 0.01, "unit": "°C" },
+              { "name": "current_in_ma", "kind": "int", "unit": "mA" },
+              { "name": "current_out_ma", "kind": "int", "unit": "mA" },
+              { "name": "channel_status", "kind": "hex" },
+              { "name": "system_state", "kind": "int", "enum": { "1": "okay", "2": "power saving", "3": "power critical" } },
+              { "name": "ground_watchdog_h", "label": "Ground watchdog remaining", "kind": "int", "unit": "h" }
+            ]
+          },
+          "interval_s": 90,
+          "downlink": "satnogs",
+          "layout_sourced": true,
+          "sources": [{ "title": "CroCube amateur radio information (updated 2024-09-01)", "url": "https://crocube.hr/wp-content/uploads/2022/12/CroCube_AmateurRadioInfo_2024-09-15.pdf" }]
+        },
+        {
+          "name": "mgs",
+          "label": "MGS beacon (magnetometers and gyroscopes)",
+          "framing": { "type": "ax25", "source": { "callsign": "9A0CC" }, "fcs": false },
+          "payload": {
+            "encoding": "csv",
+            "tags": ["MGS"],
+            "fields": [
+              { "name": "int_mag_temp_c", "kind": "int", "scale": 0.01, "unit": "°C" },
+              { "name": "int_gyro_temp_c", "kind": "int", "scale": 0.01, "unit": "°C" },
+              { "name": "int_mag_x", "kind": "int" },
+              { "name": "int_mag_y", "kind": "int" },
+              { "name": "int_mag_z", "kind": "int" },
+              { "name": "int_gyro_x", "kind": "int" },
+              { "name": "int_gyro_y", "kind": "int" },
+              { "name": "int_gyro_z", "kind": "int" },
+              { "name": "ext_mag_temp_c", "kind": "int", "scale": 0.01, "unit": "°C" },
+              { "name": "ext_gyro_temp_c", "kind": "int", "scale": 0.01, "unit": "°C" },
+              { "name": "ext_mag_x", "kind": "int" },
+              { "name": "ext_mag_y", "kind": "int" },
+              { "name": "ext_mag_z", "kind": "int" },
+              { "name": "ext_gyro_x", "kind": "int" },
+              { "name": "ext_gyro_y", "kind": "int" },
+              { "name": "ext_gyro_z", "kind": "int" }
+            ]
+          },
+          "interval_s": 90,
+          "downlink": "satnogs",
+          "layout_sourced": true,
+          "sources": [{ "title": "CroCube amateur radio information (updated 2024-09-01)", "url": "https://crocube.hr/wp-content/uploads/2022/12/CroCube_AmateurRadioInfo_2024-09-15.pdf" }]
+        },
+        {
+          "name": "sol",
+          "label": "SOL beacon (solar panels)",
+          "framing": { "type": "ax25", "source": { "callsign": "9A0CC" }, "fcs": false },
+          "payload": {
+            "encoding": "csv",
+            "tags": ["SOL"],
+            "fields": [
+              { "name": "temp_zp_c", "label": "Z+ panel temperature", "kind": "int", "scale": 0.01, "unit": "°C" },
+              { "name": "temp_xp_c", "label": "X+ panel temperature", "kind": "int", "scale": 0.01, "unit": "°C" },
+              { "name": "temp_yp_c", "label": "Y+ panel temperature", "kind": "int", "scale": 0.01, "unit": "°C" },
+              { "name": "temp_zn_c", "label": "Z- panel temperature", "kind": "int", "scale": 0.01, "unit": "°C" },
+              { "name": "temp_xn_c", "label": "X- panel temperature", "kind": "int", "scale": 0.01, "unit": "°C" },
+              { "name": "temp_yn_c", "label": "Y- panel temperature", "kind": "int", "scale": 0.01, "unit": "°C" },
+              { "name": "diode_zp", "label": "Z+ photodiode (ADC)", "kind": "int" },
+              { "name": "diode_xp", "label": "X+ photodiode (ADC)", "kind": "int" },
+              { "name": "diode_yp", "label": "Y+ photodiode (ADC)", "kind": "int" },
+              { "name": "diode_zn", "label": "Z- photodiode (ADC)", "kind": "int" },
+              { "name": "diode_xn", "label": "X- photodiode (ADC)", "kind": "int" },
+              { "name": "diode_yn", "label": "Y- photodiode (ADC)", "kind": "int" }
+            ]
+          },
+          "interval_s": 90,
+          "downlink": "satnogs",
+          "layout_sourced": true,
+          "sources": [{ "title": "CroCube amateur radio information (updated 2024-09-01)", "url": "https://crocube.hr/wp-content/uploads/2022/12/CroCube_AmateurRadioInfo_2024-09-15.pdf" }]
+        }
+      ],
+      "commands": []
+    },
+    "uwe4": {
+      "telemetry": [
+        {
+          "name": "hk",
+          "label": "Housekeeping beacon",
+          "framing": { "type": "ax25", "fcs": false },
+          "payload": {
+            "encoding": "binary",
+            "endian": "le",
+            "fields": [
+              { "name": "flags1", "type": "u8", "format": "hex" },
+              { "name": "flags2", "type": "u8", "format": "hex" },
+              { "name": "packet_id", "type": "u16" },
+              { "name": "from_system", "type": "u8", "match": 2 },
+              { "name": "from_subsystem", "type": "u8", "match": 1 },
+              { "name": "to_system", "type": "u8", "match": 1 },
+              { "name": "to_subsystem", "type": "u8", "match": 0 },
+              { "name": "api", "type": "u8", "match": 14 },
+              { "name": "payload_size", "type": "u8", "match": 46 },
+              { "name": "command", "type": "u8" },
+              { "name": "var_id", "type": "u16" },
+              { "name": "type_and_length", "type": "u16" },
+              { "name": "timestamp", "type": "u48", "format": "unix_time" },
+              { "name": "beacon_period_s", "type": "u32", "scale": 0.0009765625, "unit": "s" },
+              { "name": "values_out_of_range", "type": "u16" },
+              { "name": "uptime_s", "type": "u32", "unit": "s" },
+              { "name": "subsystem_status", "type": "u16", "format": "hex" },
+              { "name": "batt_a_temp_c", "type": "s8", "unit": "°C" },
+              { "name": "batt_a_soc_pct", "type": "s8", "unit": "%" },
+              { "name": "batt_b_temp_c", "type": "s8", "unit": "°C" },
+              { "name": "batt_b_soc_pct", "type": "s8", "unit": "%" },
+              { "name": "batt_a_current_ma", "type": "s16", "unit": "mA" },
+              { "name": "batt_a_voltage_mv", "type": "s16", "unit": "mV" },
+              { "name": "batt_b_current_ma", "type": "s16", "unit": "mA" },
+              { "name": "batt_b_voltage_mv", "type": "s16", "unit": "mV" },
+              { "name": "power_consumption_mw", "type": "s16", "unit": "mW" },
+              { "name": "obc_temp_c", "type": "s8", "unit": "°C" },
+              { "name": "panel_pos_x_temp_c", "type": "s8", "unit": "°C" },
+              { "name": "panel_neg_x_temp_c", "type": "s8", "unit": "°C" },
+              { "name": "panel_pos_y_temp_c", "type": "s8", "unit": "°C" },
+              { "name": "panel_neg_y_temp_c", "type": "s8", "unit": "°C" },
+              { "name": "panel_pos_z_temp_c", "type": "s8", "unit": "°C" },
+              { "name": "panel_neg_z_temp_c", "type": "s8", "unit": "°C" },
+              { "name": "frequency_khz", "type": "u16", "offset": 400000, "unit": "kHz" },
+              { "name": "checksum", "type": "u16", "format": "hex" }
+            ]
+          },
+          "interval_s": 30,
+          "downlink": "satnogs",
+          "layout_sourced": true,
+          "sources": [
+            { "title": "UWE-4 decoder used by SatNOGS (satnogs-decoders, uwe4.ksy)", "url": "https://gitlab.com/librespacefoundation/satnogs/satnogs-decoders/-/blob/master/ksy/uwe4.ksy" },
+            { "title": "UWE-4 in the SatNOGS DB", "url": "https://db.satnogs.org/satellite/WDIT-2736-3800-1720-7555" }
+          ]
+        }
+      ],
+      "commands": []
+    }
+  },
+  "satellites": [
+    { "norad_id": 43013, "satellite_name": "NOAA 20 (JPSS-1)", "template_set": "ccsds_bus" },
+    { "norad_id": 54234, "satellite_name": "NOAA 21 (JPSS-2)", "template_set": "ccsds_bus" },
+    { "norad_id": 43010, "satellite_name": "FENGYUN 3D", "template_set": "ccsds_bus" },
+    { "norad_id": 51850, "satellite_name": "GOES 18", "template_set": "ccsds_bus" },
+    { "norad_id": 60133, "satellite_name": "GOES 19", "template_set": "ccsds_bus" },
+    { "norad_id": 25544, "satellite_name": "ISS (ZARYA)", "template_set": "iss_aprs" },
+    { "norad_id": 62394, "satellite_name": "CROCUBE", "template_set": "crocube" },
+    { "norad_id": 43880, "satellite_name": "UWE-4", "template_set": "uwe4" }
+  ]
+}

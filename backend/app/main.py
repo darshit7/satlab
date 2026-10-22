@@ -31,6 +31,8 @@ from app.db.base import get_db, get_sessionmaker
 from app.db.models import GroundStation, LinkProfile, MissionSession, Satellite
 from app.models.api import (
     CatalogStatus,
+    CommandParamOut,
+    CommandTemplateOut,
     GroundStationOut,
     LinkProfileOut,
     LinkProfilesOut,
@@ -38,9 +40,12 @@ from app.models.api import (
     MissionSessionCreate,
     MissionSessionCreated,
     MissionSessionOut,
+    PacketTemplatesOut,
     PassPrediction,
+    SatelliteCommsOut,
     SatelliteOut,
     SatelliteSearchResult,
+    TelemetryTemplateOut,
 )
 from app.models.ws import (
     MAX_SESSION_TOKEN_LENGTH,
@@ -50,8 +55,10 @@ from app.models.ws import (
     client_message_adapter,
 )
 from app.services.catalog import CatalogService
+from app.services.comms import CommsWriter
 from app.services.passes import NotFound, PassService
 from app.services.ratelimit import TokenBucket
+from app.services.satnogs import SatnogsArchive
 from app.services.sessions import (
     ServerBusy,
     SessionManager,
@@ -94,15 +101,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await asyncio.to_thread(reclassify)  # before the fleet is built from these rows
 
     catalog = CatalogService(settings, session_factory)
-    sessions = SessionManager(settings, session_factory, catalog)
+    archive = SatnogsArchive(settings, catalog)
+    writer = CommsWriter(settings, session_factory)
+    sessions = SessionManager(settings, session_factory, catalog, archive, writer.offer)
     app.state.catalog = catalog
+    app.state.archive = archive
+    app.state.writer = writer
     app.state.sessions = sessions
     app.state.passes = PassService(settings, session_factory, catalog, sessions)
-    catalog.start()  # background: never blocks startup or the sim loop
+    # background: never block startup or the sim loop
+    catalog.start()
+    archive.start()
+    writer.start()
     try:
         yield
     finally:
         await sessions.shutdown()
+        await writer.stop()
+        await archive.stop()
         await catalog.stop()
 
 
@@ -192,6 +208,56 @@ def list_link_profiles(db: Db) -> LinkProfilesOut:
             )
             for profile, name in rows
         ],
+    )
+
+
+# ---------- packet templates ----------
+
+
+@app.get("/api/packet-templates", response_model=PacketTemplatesOut)
+def list_packet_templates(request: Request, catalog: Catalog) -> PacketTemplatesOut:
+    """Satellites with packet templates: what they send, and the commands they take."""
+    fleet = catalog.fleet
+    archive: SatnogsArchive = request.app.state.archive
+
+    def sources(items: list) -> list[LinkSourceOut]:
+        return [LinkSourceOut(title=s.title, url=s.url) for s in items]
+
+    satellites = []
+    for norad_id, sat in sorted(fleet.comms.by_norad.items()):
+        row = fleet.index.get(norad_id)
+        satellites.append(
+            SatelliteCommsOut(
+                norad_id=norad_id,
+                satellite_name=fleet.names[row] if row is not None else str(norad_id),
+                telemetry=[
+                    TelemetryTemplateOut(
+                        name=t.name,
+                        label=t.label,
+                        framing=t.framing.type,
+                        interval_s=t.interval_s,
+                        downlink=t.downlink,
+                        layout_sourced=t.layout_sourced,
+                        sources=sources(t.sources),
+                    )
+                    for _, t in sat.telemetry
+                ],
+                commands=[
+                    CommandTemplateOut(
+                        name=c.name,
+                        label=c.label,
+                        framing=c.framing.type,
+                        params=[CommandParamOut.model_validate(p.model_dump()) for p in c.params],
+                        response=c.response,
+                        layout_sourced=c.layout_sourced,
+                        sources=sources(c.sources),
+                    )
+                    for _, c in sat.commands
+                ],
+            )
+        )
+    return PacketTemplatesOut(
+        satnogs_configured=archive.status(0) != "not_configured", satellites=satellites
     )
 
 

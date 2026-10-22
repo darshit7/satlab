@@ -5,6 +5,7 @@ import { TiltedGridBackground } from './components/ui/TiltedGridBackground'
 import { useMission } from './store/mission'
 import { AllSky } from './views/AllSky/AllSky'
 import { CatalogSearch } from './views/Catalog/CatalogSearch'
+import { CommsPanel } from './views/Comms/CommsPanel'
 import { Indicators } from './views/Indicators/Indicators'
 import { LocationPanel } from './views/Location/LocationPanel'
 import { MapPanel } from './views/Map/MapPanel'
@@ -19,8 +20,9 @@ export default function App() {
   useEffect(() => {
     if (booted) return // StrictMode runs effects twice in dev
     booted = true
-    const { loadStations, loadLinkProfiles } = useMission.getState()
+    const { loadStations, loadLinkProfiles, loadPacketTemplates } = useMission.getState()
     void loadLinkProfiles()
+    void loadPacketTemplates()
     void loadStations().then(() => {
       // Resume where the last session observed from: a custom location, or a preset that still exists.
       const { stations, site, startSession } = useMission.getState()
@@ -36,6 +38,7 @@ export default function App() {
         <main className="order-first flex min-h-0 min-w-0 flex-col gap-4 lg:order-last lg:overflow-y-auto">
           <Readout />
           <Indicators />
+          <CommsPanel />
           {/* map + sky rail: side by side on xl, sky views paired under the map below that */}
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(17rem,22rem)]">
             <div className="grid h-[55vh] min-h-[22rem] xl:h-auto">
@@ -64,7 +67,9 @@ export default function App() {
         <p>
           Link margins use each satellite’s published RF budget and that source’s reference receiving station;
           satellites without one show “no RF data”. Power, thermal, storage and attitude are modelled from generic
-          parameters, driven by real eclipse and pass geometry. Nothing here commands a real satellite.
+          parameters, driven by real eclipse and pass geometry. Nothing here commands a real satellite: uplink is
+          simulated and never transmitted. Downlink is either simulated from those models or real frames received by
+          SatNOGS stations, replayed during your pass.
         </p>
       </footer>
       <Notices />

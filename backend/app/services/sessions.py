@@ -5,15 +5,28 @@ import hashlib
 import hmac
 import logging
 import secrets
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
-from app.db.models import MissionSession
-from app.models.ws import ObserverState, SetClock, SetFilter, SetSelected, SetTracked
+from app.db.models import Command, MissionSession
+from app.models.ws import (
+    ClientCommand,
+    ObserverState,
+    SendCommand,
+    SetClock,
+    SetFilter,
+    SetSelected,
+    SetTracked,
+)
+from app.packets.templates import CommandParams, validate_params
 from app.services.catalog import CatalogService
+from app.services.ratelimit import TokenBucket
 from app.sim.clock import SimClock
+from app.sim.comms import FrameArchive, OutgoingCommand, Record
 from app.sim.loop import RuntimeConfig, SessionRuntime, Subscriber
 from app.sim.propagate import Elements
 
@@ -51,13 +64,18 @@ class SessionManager:
         settings: Settings,
         session_factory: sessionmaker[Session],
         catalog: CatalogService,
+        archive: FrameArchive | None = None,
+        sink: Callable[[Record], None] = lambda record: None,
     ) -> None:
         self.settings = settings
         self._sessions = session_factory
         self._catalog = catalog
+        self._archive = archive
+        self._sink = sink
         self._runtime_config = RuntimeConfig.from_settings(settings)
         self._runtimes: dict[int, SessionRuntime] = {}
         self._idle_timers: dict[int, asyncio.Task[None]] = {}
+        self._command_budgets: dict[int, TokenBucket] = {}
         self._lock = asyncio.Lock()
 
     def _load(self, session_id: int) -> MissionSession | None:
@@ -108,6 +126,8 @@ class SessionManager:
             elements_lookup=self._catalog.registry.get,
             fleet_source=lambda: self._catalog.fleet,
             config=self._runtime_config,
+            archive=self._archive,
+            sink=self._sink,
         )
 
     def sim_now(self, session_id: int) -> datetime | None:
@@ -131,6 +151,7 @@ class SessionManager:
             await self.end(session_id)
 
     async def end(self, session_id: int) -> None:
+        self._command_budgets.pop(session_id, None)
         if (runtime := self._runtimes.pop(session_id, None)) is not None:
             await runtime.stop()
 
@@ -153,9 +174,7 @@ class SessionManager:
 
     # ----- client commands -----
 
-    async def handle(
-        self, runtime: SessionRuntime, message: SetTracked | SetSelected | SetFilter | SetClock
-    ) -> None:
+    async def handle(self, runtime: SessionRuntime, message: ClientCommand) -> None:
         match message:
             case SetTracked():
                 await self._set_tracked(runtime, message)
@@ -165,7 +184,81 @@ class SessionManager:
                 runtime.set_filter(message)
             case SetClock():
                 self._set_clock(runtime, message)
+            case SendCommand():
+                await self._send_command(runtime, message)
         runtime.step()  # reflect the change immediately rather than on the next tick
+
+    async def _send_command(self, runtime: SessionRuntime, message: SendCommand) -> None:
+        """Validate a command against its template and the contact, store it, queue it."""
+        per_min = self.settings.commands_per_min
+        budget = self._command_budgets.setdefault(
+            runtime.session_id, TokenBucket(rate=per_min / 60, burst=min(per_min, 10))
+        )
+        if not budget.take():
+            runtime.publish_error("Too many commands; wait a moment.")
+            return
+        sat = self._catalog.fleet.comms.by_norad.get(message.norad_id)
+        found = sat.command_named(message.command) if sat is not None else None
+        if found is None:
+            runtime.publish_error(f"{message.command} isn't a command this satellite takes.")
+            return
+        template_id, template = found
+        try:
+            params = validate_params(template, message.params)
+        except ValueError as exc:  # messages built from our own templates: safe to show
+            runtime.publish_error(f"{message.command}: {exc}.")
+            return
+        if not runtime.comms.can_command(message.norad_id):
+            fastest = self.settings.comms_max_time_scale
+            runtime.publish_error(
+                "No contact: commands go out while the selected satellite is in view "
+                f"(and the clock runs at most {fastest:g} times real time)."
+            )
+            return
+        sim_time = runtime.clock.now()
+        command_id = await asyncio.to_thread(
+            self._store_command, runtime.session_id, message.norad_id, template_id, params, sim_time
+        )
+        if command_id is None:
+            limit = self.settings.max_commands_per_session
+            runtime.publish_error(f"This session has sent its limit of {limit} commands.")
+            return
+        runtime.submit_command(
+            OutgoingCommand(
+                command_id=command_id,
+                norad_id=message.norad_id,
+                template=template,
+                params=params,
+                issued_at=sim_time,
+            )
+        )
+
+    def _store_command(
+        self,
+        session_id: int,
+        norad_id: int,
+        template_id: int,
+        params: CommandParams,
+        sim_time: datetime,
+    ) -> int | None:
+        """The new command's id, or None once the session has used its allowance."""
+        with self._sessions() as db:
+            sent = db.scalar(
+                select(func.count()).select_from(Command).where(Command.session_id == session_id)
+            )
+            if (sent or 0) >= self.settings.max_commands_per_session:
+                return None
+            row = Command(
+                session_id=session_id,
+                norad_id=norad_id,
+                template_id=template_id,
+                params=params,
+                status="queued",
+                sim_time=sim_time,
+            )
+            db.add(row)
+            db.commit()
+            return row.id
 
     async def _set_tracked(self, runtime: SessionRuntime, message: SetTracked) -> None:
         requested = list(dict.fromkeys(message.norad_ids))

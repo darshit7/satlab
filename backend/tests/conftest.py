@@ -105,6 +105,9 @@ def app_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
         monkeypatch.setenv("SATLAB_AUTO_MIGRATE", "true")
         monkeypatch.setenv("SATLAB_CACHE_DIR", str(tmp_path / "cache"))
         monkeypatch.setenv("SATLAB_CATALOG_AUTOLOAD", "false")
+        monkeypatch.setenv(
+            "SATLAB_SATNOGS_API_TOKEN", ""
+        )  # a developer's token never reaches tests
         monkeypatch.setenv("SATLAB_TICK_HZ", "20")
         _clear_caches()
         try:

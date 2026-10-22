@@ -21,7 +21,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import Settings
 from app.data.celestrak import CelestrakClient, CelestrakNotice, TleRecord, parse_tle_text
 from app.data.classify import classify
-from app.data.seed import load_link_profiles, sync_link_profiles
+from app.data.seed import (
+    load_link_profiles,
+    load_packet_templates,
+    sync_link_profiles,
+    sync_packet_templates,
+)
 from app.db.models import Satellite
 from app.models.ws import SATELLITE_TYPES
 from app.services.ratelimit import TokenBucket
@@ -255,24 +260,29 @@ class CatalogService:
         await self.rebuild_fleet()
 
     async def rebuild_fleet(self) -> None:
-        """Rebuild the fleet and its link profiles from the DB off the event loop; swap them in.
+        """Rebuild the fleet, its link profiles and packet templates from the DB off the event
+        loop; swap them in.
 
-        Link profiles are synced from the seed here first: a profile can only be stored once its
-        satellite is catalogued, and every ingest ends up here.
+        Link profiles and packet templates are synced from the seed here first: either can only be
+        stored once its satellite is catalogued, and every ingest ends up here.
         """
 
         def build() -> Fleet:
             with self._sessions() as db:
                 sync_link_profiles(db)
-                return Fleet.build(load_fleet_rows(db), load_link_profiles(db))
+                sync_packet_templates(db)
+                return Fleet.build(
+                    load_fleet_rows(db), load_link_profiles(db), load_packet_templates(db)
+                )
 
         async with self._fleet_lock:
             fleet = await asyncio.to_thread(build)
             self.fleet = fleet
         log.info(
-            "fleet: %d satellites ready for propagation, %d with a link profile",
+            "fleet: %d satellites ready for propagation, %d with a link profile, %d with comms",
             len(fleet),
             len(fleet.links.rows),
+            len(fleet.comms),
         )
 
     def _refresh_registry(self, records: Iterable[TleRecord]) -> None:

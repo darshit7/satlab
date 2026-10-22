@@ -34,12 +34,13 @@ import {
 } from '@cesium/engine'
 import { useEffect, useRef } from 'react'
 import { palette as skyPalette } from '../../components/skyDraw'
+import { PACKET_FLIGHT_MS, packetOutcome } from '../../lib/comms'
 import { altitudeOnTrack, inViewRuns, positionOnTrack, wrapLon, type TimedTrack } from '../../lib/geo'
 import { currentResolvedTheme, onThemeChange, type ResolvedTheme } from '../../lib/theme'
 import { estimateSimMs } from '../../lib/time'
 import { token } from '../../lib/tokens'
 import { useMission } from '../../store/mission'
-import type { GroundTrackMessage, Rag, SatelliteState, Snapshot } from '../../types/ws'
+import type { GroundTrackMessage, PacketMessage, Rag, SatelliteState, Snapshot } from '../../types/ws'
 import { coneShapes, type ConeShape } from './cone'
 
 const FRAME_INTERVAL_MS = 50
@@ -95,6 +96,20 @@ function timed(track: GroundTrackMessage): TimedTrack {
 }
 
 const linkColor = (sat: SatelliteState, c: Palette): Color => (sat.link ? c.rag[sat.link.rag] : c.noRf)
+
+/** A packet in flight on the line of sight: commands up in ink, frames down by what arrived. */
+function packetColor(packet: PacketMessage, c: Palette): Color {
+  switch (packetOutcome(packet)) {
+    case 'sent':
+      return c.ink
+    case 'ok':
+      return c.rag.green
+    case 'corrupted':
+      return c.rag.amber
+    case 'lost':
+      return c.rag.red
+  }
+}
 
 /**
  * The 3D globe: Earth, the station and its visibility cone, the satellites in view and the orbits
@@ -152,6 +167,10 @@ export function Globe({ onError }: { onError: () => void }) {
     let station: { position: Cartesian3; point: PointPrimitive; label: Label } | null = null
     const contactLine: Polyline = lines.add({ show: false, width: 1.5, positions: [Cartesian3.ZERO, Cartesian3.UNIT_X] })
     let contactColor: Color | null = null
+    // Packets travelling the line of sight (slowed down to be seen, like the comms panel's strip).
+    let lastPacketSeq: number | null = null
+    const flights: { startedAt: number; up: boolean; point: PointPrimitive }[] = []
+    const scratch = new Cartesian3()
 
     const applyTheme = () => {
       scene.backgroundColor = c.space
@@ -354,6 +373,30 @@ export function Globe({ onError }: { onError: () => void }) {
           }
           label.position = position
           label.fillColor = isSelected ? c.ink : c.label
+        }
+      }
+
+      // New packets of the selected satellite set off along the line of sight.
+      const { packets } = useMission.getState()
+      const newest = packets.at(-1)?.seq ?? 0
+      if (lastPacketSeq !== null && newest > lastPacketSeq) {
+        for (const p of packets) {
+          if (p.seq > lastPacketSeq && p.norad_id === selectedId) {
+            flights.push({ startedAt: now, up: p.direction === 'up', point: points.add({ pixelSize: 6, color: packetColor(p, c) }) })
+          }
+        }
+      }
+      lastPacketSeq = Math.max(newest, lastPacketSeq ?? 0)
+      for (let i = flights.length - 1; i >= 0; i--) {
+        const flight = flights[i]!
+        const t = (now - flight.startedAt) / PACKET_FLIGHT_MS
+        if (t >= 1 || !station || !selectedPosition) {
+          points.remove(flight.point)
+          flights.splice(i, 1)
+        } else {
+          const from = flight.up ? station.position : selectedPosition
+          const to = flight.up ? selectedPosition : station.position
+          flight.point.position = Cartesian3.lerp(from, to, t, scratch)
         }
       }
 

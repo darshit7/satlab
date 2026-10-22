@@ -120,3 +120,50 @@ export interface LinkProfiles {
   amber_margin_db: number
   profiles: LinkProfile[]
 }
+
+export interface CommandParam {
+  name: string
+  label: string
+  type: 'int' | 'text'
+  min: number | null
+  max: number | null
+  max_length: number
+  charset: 'printable' | 'callsign'
+}
+
+export interface TelemetryTemplate {
+  name: string
+  label: string
+  framing: 'ax25' | 'ccsds'
+  /** Null: sent only in answer to a command. */
+  interval_s: number | null
+  downlink: 'simulated' | 'satnogs'
+  /** False: an illustrative layout. */
+  layout_sourced: boolean
+  sources: LinkSource[]
+}
+
+export interface CommandTemplate {
+  name: string
+  label: string
+  framing: 'ax25' | 'ccsds'
+  params: CommandParam[]
+  response: 'ack' | 'telemetry' | 'digipeat'
+  layout_sourced: boolean
+  sources: LinkSource[]
+}
+
+export interface SatelliteComms {
+  norad_id: number
+  satellite_name: string
+  telemetry: TelemetryTemplate[]
+  /** Empty: receive-only (no published command set). */
+  commands: CommandTemplate[]
+}
+
+/** Every satellite with packet templates (reference data, like the link profiles). */
+export interface PacketTemplates {
+  /** Whether real frames can be replayed at all on this server. */
+  satnogs_configured: boolean
+  satellites: SatelliteComms[]
+}
