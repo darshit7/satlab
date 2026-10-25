@@ -1,10 +1,12 @@
 """WebSocket contract. Mirrored in frontend/src/types/ws.ts — change both in lockstep.
 
 Server → client: ``snapshot`` (every tick; link state per satellite, subsystem health and comms
-contact of the selection), ``ground_track`` and ``pass_arc`` (when (re)computed), ``upcoming`` (when
-the rising-soon list changes), ``packet`` (each frame up or down), ``command_status``, ``error``.
+contact of the selection, pass automation), ``ground_track`` and ``pass_arc`` (when (re)computed),
+``upcoming`` (when the rising-soon list changes), ``packet`` (each frame up or down),
+``command_status``, ``alarm``, ``error``.
 Client → server: ``auth`` (first message on every connection), then ``set_tracked``,
-``set_selected``, ``set_filter``, ``set_clock``, ``send_command``.
+``set_selected``, ``set_filter``, ``set_clock``, ``send_command``, ``schedule_command``,
+``cancel_command``, ``ack_alarm``.
 """
 
 from datetime import datetime
@@ -143,6 +145,23 @@ ContactStatus = Literal["active", "below_mask", "no_template", "too_fast"]
 ArchiveStatus = Literal["ok", "empty", "not_configured", "unavailable"]
 
 
+class AutomationState(BaseModel):
+    """Pass automation holds the antenna: from shortly before a booked pass's AOS until its LOS the
+    station follows that satellite (the server selects it), and at AOS it checks the systems.
+
+    ``commands``: booked for this pass (before the check) or released / held by it (after).
+    ``clock_slowed``: the clock ran faster than comms can follow and was dropped to real time.
+    """
+
+    norad_id: int
+    aos_time: datetime
+    los_time: datetime
+    max_elev_deg: float
+    commands: int
+    checked: bool
+    clock_slowed: bool = False
+
+
 class ContactState(BaseModel):
     """The station's contact with the selected satellite: the antenna follows the selection.
 
@@ -173,6 +192,7 @@ class Snapshot(BaseModel):
     satellites: list[SatelliteState]
     health: HealthState | None = None  # of the selected satellite
     contact: ContactState | None = None  # with the selected satellite
+    automation: AutomationState | None = None  # while a booked pass holds the antenna
 
 
 class GroundTrackMessage(BaseModel):
@@ -279,7 +299,30 @@ class PacketMessage(BaseModel):
     origin: SatnogsOrigin | None = None
 
 
-CommandStatus = Literal["queued", "sent", "acked", "failed", "aborted"]
+# scheduled: waiting for its pass; held: the system check at AOS found a subsystem red (not sent).
+CommandStatus = Literal["scheduled", "queued", "sent", "acked", "failed", "aborted", "held"]
+Subsystem = Literal["power", "thermal", "storage", "attitude", "rf"]
+SUBSYSTEMS: tuple[Subsystem, ...] = ("power", "thermal", "storage", "attitude", "rf")
+
+
+class ScheduledPass(BaseModel):
+    """The pass a command was booked for (predicted by the server)."""
+
+    aos_time: datetime
+    los_time: datetime
+    max_elev_deg: float
+
+
+class SystemCheck(BaseModel):
+    """The automatic check at AOS: the selected satellite's subsystem health, as the inspector
+    shows it. ``go``: no subsystem red (amber passes; null = no data, not checked). With no health
+    at all every subsystem is null and ``go`` is false."""
+
+    sim_time: datetime
+    norad_id: int
+    rollup: Rag | None
+    go: bool
+    subsystems: dict[Subsystem, Rag | None]
 
 
 class CommandStatusMessage(BaseModel):
@@ -290,6 +333,25 @@ class CommandStatusMessage(BaseModel):
     status: CommandStatus
     reason: str | None = None
     sim_time: datetime
+    scheduled_pass: ScheduledPass | None = None  # booked for a pass (not sent live)
+    check: SystemCheck | None = None  # the check at AOS that released or held it
+
+
+AlarmSeverity = Literal["info", "warning", "critical"]
+
+
+class AlarmMessage(BaseModel):
+    """An alarm raised by pass automation (sent again when acknowledged). ``alarm_id`` numbers the
+    session's alarms from 1."""
+
+    type: Literal["alarm"] = "alarm"
+    alarm_id: int
+    severity: AlarmSeverity
+    subsystem: Subsystem | None
+    norad_id: int | None
+    message: str
+    sim_time: datetime
+    acknowledged: bool = False
 
 
 class ErrorMessage(BaseModel):
@@ -304,6 +366,7 @@ ServerMessage = Annotated[
     | UpcomingMessage
     | PacketMessage
     | CommandStatusMessage
+    | AlarmMessage
     | ErrorMessage,
     Field(discriminator="type"),
 ]
@@ -348,6 +411,8 @@ class SetFilter(BaseModel):
     sar_only: bool = False
     # Only satellites with a link profile; of those in view, only with margin ≥ the amber threshold.
     link_ok_only: bool = False
+    # Only satellites with packet templates: the ones comms works with (some are receive-only).
+    comms_only: bool = False
     # Effective threshold is max(horizon mask, this). For rising-soon passes it applies to the
     # pass's (approximate) maximum elevation.
     min_elevation_deg: float = Field(default=0.0, ge=0.0, le=90.0)
@@ -367,18 +432,50 @@ ParamName = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,31}$")]
 ParamValue = StrictInt | Annotated[StrictStr, Field(max_length=80)]
 
 
-class SendCommand(BaseModel):
-    """Send a command to the satellite in contact (simulated uplink: nothing is transmitted).
+class _CommandFields(BaseModel):
+    """A command and its parameters: the shape is checked here, the parameters themselves against
+    the command's template."""
 
-    The shape is checked here; the parameters themselves against the command's template.
-    """
-
-    type: Literal["send_command"] = "send_command"
     norad_id: NoradId
     command: str = Field(pattern=r"^[A-Z][A-Z0-9_]{0,31}$")
     params: dict[ParamName, ParamValue] = Field(default_factory=dict, max_length=8)
 
 
-ClientCommand = SetTracked | SetSelected | SetFilter | SetClock | SendCommand
+class SendCommand(_CommandFields):
+    """Send a command to the satellite in contact (simulated uplink: nothing is transmitted)."""
+
+    type: Literal["send_command"] = "send_command"
+
+
+class ScheduleCommand(_CommandFields):
+    """Book a command for a future pass of the satellite: ``aos_time`` names the pass, as the
+    server's pass schedule listed it. At AOS the system check sends it unless a subsystem is red."""
+
+    type: Literal["schedule_command"] = "schedule_command"
+    aos_time: AwareDatetime
+
+
+class CancelCommand(BaseModel):
+    """Cancel a command still waiting for its pass."""
+
+    type: Literal["cancel_command"] = "cancel_command"
+    command_id: int = Field(ge=1)
+
+
+class AckAlarm(BaseModel):
+    type: Literal["ack_alarm"] = "ack_alarm"
+    alarm_id: int = Field(ge=1)
+
+
+ClientCommand = (
+    SetTracked
+    | SetSelected
+    | SetFilter
+    | SetClock
+    | SendCommand
+    | ScheduleCommand
+    | CancelCommand
+    | AckAlarm
+)
 ClientMessage = Annotated[ClientCommand, Field(discriminator="type")]
 client_message_adapter: TypeAdapter[ClientCommand] = TypeAdapter(ClientMessage)

@@ -7,6 +7,7 @@ from sqlalchemy import update
 
 from app.data.celestrak import parse_tle_text
 from app.data.classify import classify, reclassify_all
+from app.data.seed import packet_template_specs
 from app.db.base import get_sessionmaker
 from app.db.models import Satellite
 from app.services.catalog import upsert_tle_records
@@ -77,3 +78,16 @@ def test_fleet_build_skips_bad_and_duplicate_rows() -> None:
     assert fleet.type_of(0) == "station"
     assert fleet.tle_epochs[0].year == 2026
     assert Fleet.empty().array is None
+
+
+def test_fleet_comms_mask_marks_satellites_with_templates() -> None:
+    records = parse_tle_text(FLEET_2026_TLE)
+    templated = packet_template_specs().templates()
+    rows = [FleetRow(r.norad_id, r.name, "other", False, r.line1, r.line2) for r in records[:2]]
+    assert rows[0].norad_id in templated and rows[1].norad_id not in templated  # ISS, then not
+    templates = [
+        (i, rows[0].norad_id, t) for i, t in enumerate(templated[rows[0].norad_id], start=1)
+    ]
+    assert Fleet.build(rows, templates=templates).comms_mask().tolist() == [True, False]
+    assert Fleet.build(rows).comms_mask().tolist() == [False, False]
+    assert Fleet.empty().comms_mask().tolist() == []

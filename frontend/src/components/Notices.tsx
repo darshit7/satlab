@@ -1,4 +1,4 @@
-import { CircleAlert, X } from 'lucide-react'
+import { CalendarClock, CircleAlert, X } from 'lucide-react'
 import { useMission } from '../store/mission'
 
 export function Notices() {
@@ -11,7 +11,11 @@ export function Notices() {
           key={n.id}
           className="flex items-start gap-3 rounded-lg bg-white p-3 text-sm shadow-sm ring-1 ring-gray-900/10 dark:bg-gray-800 dark:ring-white/10"
         >
-          <CircleAlert size={18} strokeWidth={1.5} className="mt-0.5 shrink-0 text-red-700 dark:text-red-400" aria-hidden />
+          {n.tone === 'info' ? (
+            <CalendarClock size={18} strokeWidth={1.5} className="mt-0.5 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden />
+          ) : (
+            <CircleAlert size={18} strokeWidth={1.5} className="mt-0.5 shrink-0 text-red-700 dark:text-red-400" aria-hidden />
+          )}
           <span className="flex-1">{n.message}</span>
           <button
             type="button"

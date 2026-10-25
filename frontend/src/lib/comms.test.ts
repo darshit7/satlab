@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import type { CommandParam } from '../types/api'
+import type { CommandParam, LinkProfiles, PacketTemplates, SatelliteComms } from '../types/api'
 import type { CommandStatusMessage, PacketMessage } from '../types/ws'
 import {
   appendPackets,
+  commsCapabilities,
+  commsSatellites,
   formatLightTime,
   latestDecoded,
   mergeStatuses,
@@ -99,5 +101,48 @@ describe('formatLightTime', () => {
     expect(formatLightTime(0.0042)).toBe('4.2 ms')
     expect(formatLightTime(0.1194)).toBe('119.4 ms')
     expect(formatLightTime(null)).toBe('—')
+  })
+})
+
+describe('commsCapabilities', () => {
+  const sat = (norad_id: number, commands: number): SatelliteComms => ({
+    norad_id,
+    satellite_name: `#${norad_id}`,
+    telemetry: [],
+    commands: Array.from({ length: commands }, (_, i) => ({
+      name: `C${i}`,
+      label: `C${i}`,
+      framing: 'ccsds' as const,
+      params: [],
+      response: 'ack' as const,
+      layout_sourced: false,
+      sources: [],
+    })),
+  })
+
+  it('tells commandable satellites from receive-only ones, and knows nothing without templates', () => {
+    const templates: PacketTemplates = { satnogs_configured: false, satellites: [sat(43013, 3), sat(62394, 0)] }
+    const caps = commsCapabilities(templates)
+    expect(caps.get(43013)).toBe('command')
+    expect(caps.get(62394)).toBe('receive')
+    expect(caps.get(44713)).toBeUndefined() // a Starlink: no templates
+    expect(commsCapabilities(null).size).toBe(0)
+  })
+
+  it('lists them commandable first, then by name, with or without a link budget', () => {
+    const named = (norad: number, name: string, commands: number) => ({ ...sat(norad, commands), satellite_name: name })
+    const templates: PacketTemplates = {
+      satnogs_configured: true,
+      satellites: [named(62394, 'CROCUBE', 0), named(43013, 'NOAA 20', 3), named(25544, 'ISS (ZARYA)', 1)],
+    }
+    const profiles = { profiles: [{ norad_id: 43013 }] } as unknown as LinkProfiles
+    expect(commsSatellites(templates, profiles)).toEqual([
+      { noradId: 25544, name: 'ISS (ZARYA)', capability: 'command', linkBudget: false },
+      { noradId: 43013, name: 'NOAA 20', capability: 'command', linkBudget: true },
+      { noradId: 62394, name: 'CROCUBE', capability: 'receive', linkBudget: false },
+    ])
+    // without the link profiles, don't claim "no RF data"
+    expect(commsSatellites(templates, null).map((s) => s.linkBudget)).toEqual([null, null, null])
+    expect(commsSatellites(null, profiles)).toEqual([])
   })
 })

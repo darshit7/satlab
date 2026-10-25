@@ -4,10 +4,12 @@ A real-time satellite mission control simulator. Positions and geometry come fro
 with **SGP4** for **your real location**. Nothing is faked. See [AGENTS.md](AGENTS.md) for the architecture,
 conventions, database design, and phase plan.
 
-**Status: Phase 3 (systems & link).** Pick a ground station (a preset, your geolocation, a map click,
+**Status: Phase 5 (scheduling & alarms).** Pick a ground station (a preset, your geolocation, a map click,
 or typed lat/lon; a custom location is used for that session only, never saved) and every satellite above the horizon mask appears at once, with no search needed: on
-the 2D map, a polar sky plot and an all-sky (looking-up) view, all linked by selection. Filter by type,
-minimum elevation, SAR capability and "rising within N minutes" (computed across the whole catalog). Any
+a 3D globe with the station's visibility cone (or the 2D map), a polar sky plot and an all-sky
+(looking-up) view, all linked by selection. Filter by type,
+minimum elevation, SAR capability, link quality, communications (the satellites you can talk to) and "rising
+within N minutes" (computed across the whole catalog). Any
 satellite gets a 24-hour pass schedule (AOS / LOS / max elevation / azimuths) with a jump-to-AOS button.
 Search the full catalog and track satellites to keep them on screen with ground tracks and live
 azimuth / elevation / range / range-rate readouts. The sim clock can be paused or accelerated up to 3600×.
@@ -17,6 +19,13 @@ link margin (dB), Eb/N0 and Doppler at your station, mapped to green / amber / r
 their sky-plot dots and pass arcs and draws the "strong-link" region of the sky. The selected satellite's
 systems show a worst-of rollup over power, thermal, storage, attitude and RF, which change truthfully
 as it rises, peaks, sets and crosses the Earth's shadow.
+
+In contact, satellites with **packet templates** exchange framed packets (CCSDS or AX.25): commands go
+up (simulated; nothing is transmitted) and telemetry comes down, either simulated from the modelled
+systems through a channel whose bit errors follow the real link margin, or real frames received by
+SatNOGS stations, replayed. Commands can also be **booked for a future pass**: a minute before AOS the
+antenna turns to the satellite (a clock faster than 60× drops to real time), and at AOS an automatic
+system check sends them unless a subsystem is red; otherwise they're held and an alarm is raised.
 
 ## Quick start
 
@@ -101,7 +110,7 @@ browser ──REST──▶ FastAPI ── stations / sessions / pass schedule  
 - Elevation is **geometric**: "in view" (above the horizon mask, 5° by default) does not mean visible
   to the naked eye; most satellites shown are too small or unlit to see.
 - TLE accuracy degrades with age; each satellite's TLE age is shown.
-- Commanding real satellites is impossible. Uplink in later phases is **simulated**.
+- Commanding real satellites is impossible. Uplink is **simulated**: nothing is ever transmitted.
 - Link margins use each satellite's **published** RF budget and that source's reference receiving
   station; a satellite without one shows "no RF data" rather than a guessed margin
   ([`link_profiles.json`](backend/app/data/seed/link_profiles.json) cites every value).

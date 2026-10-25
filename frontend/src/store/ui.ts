@@ -3,7 +3,7 @@ import { createJSONStorage, persist } from 'zustand/middleware'
 import { DEFAULT_SECTIONS, sanitizeSections, type SectionId } from '../lib/sections'
 
 /** The mission bar's floating panels: one is open at a time. */
-export type PanelId = 'station' | 'catalog' | 'overhead'
+export type PanelId = 'station' | 'catalog' | 'overhead' | 'schedule'
 export type SkyView = 'polar' | 'allsky'
 
 interface UiState {

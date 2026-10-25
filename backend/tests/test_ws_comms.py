@@ -126,6 +126,24 @@ def test_bad_commands(client: TestClient, wallops: dict, message: dict, error: s
         assert error in _error(ws)
 
 
+def test_comms_filter_keeps_satellites_with_templates(client: TestClient, wallops: dict) -> None:
+    with_comms = {NOAA_20, ISS}  # the catalogued ones with templates
+    with open_stream(client, wallops) as ws:
+        ws.send(type="set_clock", paused=True, sim_time=DURING_PASS.isoformat())
+        everything = ws.until("snapshot", lambda m: paused(m) and m["satellites"], LIMIT)
+        assert {s["norad_id"] for s in everything["satellites"]} - with_comms  # others in view
+
+        ws.send(type="set_filter", comms_only=True, rising_within_min=60)
+        snap = ws.until(
+            "snapshot",
+            lambda m: {s["norad_id"] for s in m["satellites"]} <= with_comms,
+            LIMIT,
+        )
+        assert NOAA_20 in {s["norad_id"] for s in snap["satellites"]}  # in its pass
+        upcoming = ws.until("upcoming", lambda m: m["status"] == "ready", LIMIT)
+        assert {p["norad_id"] for p in upcoming["passes"]} <= with_comms
+
+
 def test_packet_templates_endpoint(client: TestClient, wallops: dict) -> None:
     body = client.get("/api/packet-templates").json()
     assert body["satnogs_configured"] is False  # tests never carry a token

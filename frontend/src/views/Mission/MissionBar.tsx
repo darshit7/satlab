@@ -1,16 +1,29 @@
-import { MapPin, Search, SlidersHorizontal } from 'lucide-react'
+import { CalendarClock, MapPin, OctagonAlert, Search, SlidersHorizontal } from 'lucide-react'
 import { useCallback, useEffect, type ReactNode } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Panel } from '../../components/ui/Panel'
 import { Pill } from '../../components/ui/Pill'
 import { filterSummary } from '../../lib/filters'
+import { scheduledCommands, unacknowledgedCount } from '../../lib/schedule'
 import { useMission } from '../../store/mission'
 import { dialogOpen, useUi, type PanelId } from '../../store/ui'
 import { CATALOG_SEARCH_ID, CatalogSearch } from '../Catalog/CatalogSearch'
 import { LocationPanel } from '../Location/LocationPanel'
+import { SchedulerPanel } from '../Scheduler/SchedulerPanel'
 import { VisibleList } from '../Visible/VisibleList'
 
-const TITLES: Record<PanelId, string> = { station: 'Ground station', catalog: 'Satellite catalog', overhead: 'Overhead' }
+const TITLES: Record<PanelId, string> = {
+  station: 'Ground station',
+  catalog: 'Satellite catalog',
+  overhead: 'Overhead',
+  schedule: 'Schedule',
+}
+const PANELS: Record<PanelId, () => ReactNode> = {
+  station: () => <LocationPanel />,
+  catalog: () => <CatalogSearch />,
+  overhead: () => <VisibleList />,
+  schedule: () => <SchedulerPanel />,
+}
 const panelId = (id: PanelId) => `panel-${id}`
 
 // The bar's buttons, so a panel closed with Escape or × hands focus back to the one that opened it.
@@ -83,10 +96,37 @@ function FilterSummary() {
   )
 }
 
+/** Pass automation: commands waiting for a pass and alarms not yet acknowledged (icon + number). */
+function ScheduleSummary() {
+  const waiting = useMission((s) => scheduledCommands(s.commands).length)
+  const alarms = useMission((s) => unacknowledgedCount(s.alarms))
+  return (
+    <>
+      <CalendarClock size={16} strokeWidth={1.5} className="shrink-0" aria-hidden />
+      Schedule
+      {waiting > 0 && (
+        <span className="font-mono text-xs font-normal text-gray-500 tabular-nums dark:text-gray-400" title={`${waiting} waiting for a pass`}>
+          <span className="sr-only">, </span>
+          {waiting}
+          <span className="sr-only"> waiting for a pass</span>
+        </span>
+      )}
+      {alarms > 0 && (
+        <span className="flex items-center gap-0.5 text-xs text-red-700 tabular-nums dark:text-red-400" title={`${alarms} unacknowledged alarms`}>
+          <OctagonAlert size={14} strokeWidth={1.75} aria-hidden />
+          <span className="sr-only">, </span>
+          {alarms}
+          <span className="sr-only"> unacknowledged alarms</span>
+        </span>
+      )}
+    </>
+  )
+}
+
 /**
- * The mission's context, one row above the map: where you observe from, the catalog, and what is
- * shown (the filter summary, which opens the Overhead list). Each opens a floating panel over the
- * map. `/` opens the catalog search from anywhere but a text field.
+ * The mission's context, one row above the map: where you observe from, the catalog, what is shown
+ * (the filter summary, which opens the Overhead list) and pass automation (the Schedule). Each opens
+ * a floating panel over the map. `/` opens the catalog search from anywhere but a text field.
  */
 export function MissionBar() {
   const session = useMission((s) => s.session)
@@ -134,6 +174,9 @@ export function MissionBar() {
         <SlidersHorizontal size={16} strokeWidth={1.5} className="shrink-0" aria-hidden />
         <FilterSummary />
       </BarButton>
+      <BarButton id="schedule" title="Commands booked for a pass, and alarms">
+        <ScheduleSummary />
+      </BarButton>
     </nav>
   )
 }
@@ -158,7 +201,7 @@ export function MissionPanels() {
       aside={panel === 'overhead' && visibleCount !== null && <Pill size="sm">{visibleCount.toLocaleString()} in view</Pill>}
       onClose={close}
     >
-      {panel === 'station' ? <LocationPanel /> : panel === 'catalog' ? <CatalogSearch /> : <VisibleList />}
+      {PANELS[panel]()}
     </Panel>
   )
 }

@@ -9,6 +9,8 @@ interface Props {
   title?: ReactNode
   /** Right-aligned header content (counts, actions). Stays visible while collapsed. */
   aside?: ReactNode
+  /** Beside the title, outside its disclosure button (e.g. an info button). Stays visible too. */
+  titleAction?: ReactNode
   className?: string
   children: ReactNode
   as?: 'section' | 'div'
@@ -19,11 +21,60 @@ interface Props {
   onToggle?: () => void
 }
 
+function CardTitle({
+  title,
+  dense,
+  open,
+  onToggle,
+  bodyId,
+}: {
+  title: ReactNode
+  dense: boolean
+  open: boolean
+  onToggle?: () => void
+  bodyId: string
+}) {
+  return (
+    <h2 className={cn('font-semibold', dense ? 'text-lg' : 'text-xl')}>
+      {onToggle !== undefined ? (
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={bodyId}
+          onClick={onToggle}
+          className={cn('-ml-1 flex items-center gap-1 rounded pr-1', focusRing)}
+        >
+          <ChevronDown
+            size={18}
+            strokeWidth={1.5}
+            aria-hidden
+            className={cn('shrink-0 text-gray-500 transition-transform duration-150 dark:text-gray-400', !open && '-rotate-90')}
+          />
+          {title}
+        </button>
+      ) : (
+        title
+      )}
+    </h2>
+  )
+}
+
 /** Rounded-2xl card: hairline frame, faint tilted grid inside, accent gradient border. */
-export function Card({ title, aside, className, children, as: Tag = 'section', dense = false, open = true, onToggle }: Props) {
+export function Card({
+  title,
+  aside,
+  titleAction,
+  className,
+  children,
+  as: Tag = 'section',
+  dense = false,
+  open = true,
+  onToggle,
+}: Props) {
   const bodyId = useId()
   const collapsible = onToggle !== undefined
   const shown = !collapsible || open
+  const heading = title && <CardTitle title={title} dense={dense} open={open} onToggle={onToggle} bodyId={bodyId} />
   return (
     <Tag
       className={cn(
@@ -36,28 +87,13 @@ export function Card({ title, aside, className, children, as: Tag = 'section', d
       <GradientBorder />
       {(title || aside) && (
         <div className={cn('flex items-baseline justify-between gap-3', shown && (dense ? 'mb-2' : 'mb-3'))}>
-          {title && (
-            <h2 className={cn('font-semibold', dense ? 'text-lg' : 'text-xl')}>
-              {collapsible ? (
-                <button
-                  type="button"
-                  aria-expanded={open}
-                  aria-controls={bodyId}
-                  onClick={onToggle}
-                  className={cn('-ml-1 flex items-center gap-1 rounded pr-1', focusRing)}
-                >
-                  <ChevronDown
-                    size={18}
-                    strokeWidth={1.5}
-                    aria-hidden
-                    className={cn('shrink-0 text-gray-500 transition-transform duration-150 dark:text-gray-400', !open && '-rotate-90')}
-                  />
-                  {title}
-                </button>
-              ) : (
-                title
-              )}
-            </h2>
+          {heading && titleAction ? (
+            <div className="flex items-center gap-1.5">
+              {heading}
+              {titleAction}
+            </div>
+          ) : (
+            heading
           )}
           {aside}
         </div>

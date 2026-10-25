@@ -1,9 +1,10 @@
-import { ArrowDown, ArrowUp, Radio, Send } from 'lucide-react'
+import { ArrowDown, ArrowUp, CalendarClock, Radio, Send } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { cn } from '../../components/ui/cn'
 import { inputClass } from '../../components/ui/Field'
+import { InfoPopover } from '../../components/ui/InfoPopover'
 import { RagIcon } from '../../components/ui/Rag'
 import { RAG_TEXT } from '../../components/ui/ragClasses'
 import { Select } from '../../components/ui/Select'
@@ -19,10 +20,13 @@ import {
   type PacketOutcome,
 } from '../../lib/comms'
 import { safeHttpsUrl } from '../../lib/rag'
+import { checkSummary, passLabel, schedulablePasses, utcWhen } from '../../lib/schedule'
+import { useSimNow } from '../../lib/useSimNow'
 import { useMission } from '../../store/mission'
 import { useUi } from '../../store/ui'
 import type { CommandTemplate } from '../../types/api'
 import type { CommandStatus, ContactState, PacketMessage, Rag } from '../../types/ws'
+import { CommsSatellites } from './CommsSatellites'
 import { PacketFlow } from './PacketFlow'
 
 const LOG_ROWS = 20
@@ -30,12 +34,15 @@ const muted = 'text-gray-500 dark:text-gray-400'
 
 const OUTCOME_RAG: Record<PacketOutcome, Rag | null> = { sent: null, ok: 'green', corrupted: 'amber', lost: 'red' }
 const STATUS_RAG: Record<CommandStatus, Rag | null> = {
+  scheduled: null,
   queued: null,
   sent: null,
   acked: 'green',
   failed: 'red',
   aborted: 'amber',
+  held: 'red',
 }
+const NOW = 'now'
 
 const hms = (iso: string) => new Date(iso).toISOString().slice(11, 19)
 
@@ -46,9 +53,9 @@ function contactWords(contact: ContactState): { title: string; active: boolean }
     case 'below_mask':
       return { title: 'Not in view: contact starts at AOS', active: false }
     case 'too_fast':
-      return { title: 'Clock too fast for comms: slow it down', active: false }
+      return { title: 'Clock too fast for communications: slow it down', active: false }
     case 'no_template':
-      return { title: 'No comms for this satellite', active: false }
+      return { title: 'No communications with this satellite', active: false }
   }
 }
 
@@ -74,19 +81,38 @@ function downlinkLine(contact: ContactState): string | null {
   return null
 }
 
+/**
+ * Compose a command and send it now (in contact) or book it for one of the satellite's passes from
+ * the server's 24-hour schedule (pass automation sends it at AOS unless a subsystem is red).
+ */
 function Composer({ noradId, commands, enabled }: { noradId: number; commands: CommandTemplate[]; enabled: boolean }) {
   const sendCommand = useMission((s) => s.sendCommand)
+  const scheduleCommand = useMission((s) => s.scheduleCommand)
+  const prediction = useMission((s) => s.passes?.data)
+  const simMs = useSimNow(5000)
   const [name, setName] = useState(commands[0]?.name ?? '')
   const [raw, setRaw] = useState<Record<string, string>>({})
+  const [chosen, setChosen] = useState<string | null>(null)
   const template = commands.find((c) => c.name === name) ?? commands[0]
   if (!template) return null
+
+  const passes = simMs !== null ? schedulablePasses(prediction, noradId, simMs) : []
+  const whenOptions = [
+    { value: NOW, label: enabled ? 'Now' : 'Now (needs contact)' },
+    ...passes.map((p, i) => ({ value: p.aos_time, label: passLabel(p, simMs ?? 0, i === 0) })),
+  ]
+  // A pass that has started drops out of the list: fall back to the default.
+  const fallback = enabled || passes.length === 0 ? NOW : passes[0]!.aos_time
+  const when = chosen !== null && whenOptions.some((o) => o.value === chosen) ? chosen : fallback
+  const booking = when !== NOW
 
   const parsed = template.params.map((p) => [p, parseParam(p, raw[p.name] ?? '')] as const)
   const valid = parsed.every(([, r]) => 'value' in r)
   const send = () => {
-    if (!valid) return
+    if (!valid || (!booking && !enabled)) return
     const params = Object.fromEntries(parsed.map(([p, r]) => [p.name, 'value' in r ? r.value : '']))
-    sendCommand(noradId, template.name, params)
+    if (booking) scheduleCommand(noradId, template.name, params, when)
+    else sendCommand(noradId, template.name, params)
   }
 
   return (
@@ -121,9 +147,21 @@ function Composer({ noradId, commands, enabled }: { noradId: number; commands: C
           )}
         </label>
       ))}
-      <Button type="submit" variant="primary" disabled={!enabled || !valid} title={enabled ? undefined : 'Commands go out during a pass'}>
-        <Send size={16} strokeWidth={1.5} />
-        Send
+      <Select
+        label="When"
+        value={when}
+        options={whenOptions}
+        onChange={(value) => setChosen(value)}
+        className="min-w-[14rem] flex-1"
+      />
+      <Button
+        type="submit"
+        variant="primary"
+        disabled={!valid || (!booking && !enabled)}
+        title={booking ? 'Sent at AOS unless a subsystem is red' : enabled ? undefined : 'Commands go out during a pass: pick one under When'}
+      >
+        {booking ? <CalendarClock size={16} strokeWidth={1.5} /> : <Send size={16} strokeWidth={1.5} />}
+        {booking ? 'Schedule' : 'Send'}
       </Button>
     </form>
   )
@@ -196,6 +234,7 @@ function Telemetry({ packet }: { packet: PacketMessage }) {
  */
 export function CommsPanel() {
   const selectedId = useMission((s) => s.selectedId)
+  const simMs = useMission((s) => (s.snapshot ? Date.parse(s.snapshot.sim_time) : null))
   const contact = useMission((s) => s.snapshot?.contact ?? null)
   const templates = useMission((s) => s.packetTemplates)
   const allPackets = useMission((s) => s.packets)
@@ -217,10 +256,9 @@ export function CommsPanel() {
   if (selectedId === null || !contact || contact.norad_id !== selectedId) return null
   if (contact.state === 'no_template') {
     return (
-      <Card as="div" dense title="Comms">
-        <p className={cn('text-sm', muted)}>
-          No packet templates for this satellite. Comms is modelled for satellites with a published frame format or link budget.
-        </p>
+      <Card as="div" dense title="Communications">
+        <p className={cn('mb-2 text-sm', muted)}>No packet templates for this satellite, so the station can’t communicate with it.</p>
+        <CommsSatellites />
       </Card>
     )
   }
@@ -235,7 +273,18 @@ export function CommsPanel() {
     <Card
       as="div"
       dense
-      title="Comms"
+      title="Communications"
+      titleAction={
+        <InfoPopover
+          label="Satellites you can communicate with"
+          iconSize={16}
+          buttonClassName="p-0.5"
+          panelClassName="inset-x-3 top-11 max-h-[min(28rem,60vh)] origin-top-left"
+          closeOnPick
+        >
+          <CommsSatellites />
+        </InfoPopover>
+      }
       open={open}
       onToggle={() => toggleSection('comms')}
       aside={
@@ -257,15 +306,27 @@ export function CommsPanel() {
           <ul className="mt-2 space-y-0.5 text-sm" aria-label="Recent commands">
             {recentCommands.map((c) => {
               const rag = STATUS_RAG[c.status]
+              const booked = c.scheduled_pass
+              const detail =
+                c.status === 'scheduled' && booked && simMs !== null
+                  ? `for the ${utcWhen(Date.parse(booked.aos_time), simMs)} pass`
+                  : c.check && c.status !== 'aborted'
+                    ? checkSummary(c.check)
+                    : c.reason
               return (
                 <li key={c.command_id} className="flex items-center gap-2">
                   <span className="font-mono text-xs tabular-nums">{hms(c.sim_time)}</span>
+                  {booked && <CalendarClock size={12} strokeWidth={1.75} className={muted} aria-label="booked for a pass" />}
                   <span className="font-semibold">{c.command}</span>
                   <span className={cn('flex items-center gap-1 text-xs', rag ? RAG_TEXT[rag] : muted)}>
                     {rag && <RagIcon rag={rag} size={12} />}
                     {c.status}
                   </span>
-                  {c.reason && <span className={cn('truncate text-xs', muted)}>{c.reason}</span>}
+                  {detail && (
+                    <span className={cn('truncate text-xs', muted)} title={detail}>
+                      {detail}
+                    </span>
+                  )}
                 </li>
               )
             })}

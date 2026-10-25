@@ -1,4 +1,4 @@
-import { Crosshair, Radio, X } from 'lucide-react'
+import { CalendarClock, Crosshair, Radio, X } from 'lucide-react'
 import { Metric } from '../../components/Metric'
 import { Button } from '../../components/ui/Button'
 import { cn } from '../../components/ui/cn'
@@ -59,6 +59,38 @@ function PassCountdown({ noradId }: { noradId: number }) {
         ? `LOS in ${formatCountdown(los - simMs)}`
         : null
   return text && <span className="font-mono text-xs text-gray-600 tabular-nums dark:text-gray-400">{text}</span>
+}
+
+/** While pass automation holds the antenna for this satellite: its booked pass, in a line. */
+function AutomationLine({ noradId }: { noradId: number }) {
+  const automation = useMission((s) => (s.snapshot?.automation?.norad_id === noradId ? s.snapshot.automation : null))
+  const simMs = useSimNow(1000)
+  if (!automation || simMs === null) return null
+  const aos = Date.parse(automation.aos_time)
+  const n = automation.commands
+  const commands = `${n} command${n === 1 ? '' : 's'}`
+  return (
+    <p
+      className="mt-1.5 flex items-center gap-1.5 text-xs text-primary-700 dark:text-primary-400"
+      title={
+        automation.checked
+          ? 'Pass automation holds the antenna until LOS.'
+          : 'Pass automation holds the antenna until LOS: selecting another satellite before AOS cancels the commands waiting for this pass.'
+      }
+    >
+      <CalendarClock size={14} strokeWidth={1.5} className="shrink-0" aria-hidden />
+      <span className="font-semibold">Pass automation</span>
+      <span className="text-gray-600 dark:text-gray-400">
+        {automation.checked ? (
+          <>· checked at AOS · {commands}</>
+        ) : (
+          <>
+            · system check at AOS in <span className="font-mono tabular-nums">{formatCountdown(aos - simMs)}</span> · {commands}
+          </>
+        )}
+      </span>
+    </p>
+  )
 }
 
 /**
@@ -125,9 +157,9 @@ export function SelectionHeader({ sat }: { sat: SatelliteState }) {
           </span>
         )}
         {contact === 'too_fast' && (
-          <span className={cn('flex items-center gap-1', muted)} title="Comms run at 60× or slower">
+          <span className={cn('flex items-center gap-1', muted)} title="Communications run at 60× or slower">
             <Radio size={14} strokeWidth={1.5} aria-hidden />
-            Too fast for comms
+            Too fast for communications
           </span>
         )}
         {rollup !== undefined && (
@@ -140,6 +172,7 @@ export function SelectionHeader({ sat }: { sat: SatelliteState }) {
           </span>
         )}
       </div>
+      <AutomationLine noradId={sat.norad_id} />
     </div>
   )
 }

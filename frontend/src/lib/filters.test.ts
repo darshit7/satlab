@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_FILTERS, filterSummary, sanitizeFilters } from './filters'
+import { DEFAULT_FILTERS, filterSummary, sanitizeFilters, TYPE_LABELS } from './filters'
 
 describe('sanitizeFilters', () => {
   it('falls back to defaults for junk', () => {
@@ -21,11 +21,14 @@ describe('sanitizeFilters', () => {
       types: ['weather', 'sar'],
       sar_only: false,
       link_ok_only: false,
+      comms_only: false,
       min_elevation_deg: 90,
       rising_within_min: 18,
     })
     expect(sanitizeFilters({ link_ok_only: true }).link_ok_only).toBe(true)
     expect(sanitizeFilters({ link_ok_only: 1 }).link_ok_only).toBe(false)
+    expect(sanitizeFilters({ comms_only: true }).comms_only).toBe(true)
+    expect(sanitizeFilters({ comms_only: 'true' }).comms_only).toBe(false)
     expect(sanitizeFilters({ rising_within_min: 1e9, min_elevation_deg: -5 })).toMatchObject({
       rising_within_min: 60,
       min_elevation_deg: 0,
@@ -49,10 +52,18 @@ describe('filterSummary', () => {
     expect(filterSummary({ ...DEFAULT_FILTERS, types: [] }, 5)[0]).toBe('No types')
   })
 
+  it('calls communications satellites Telecom, apart from the Communications filter and section', () => {
+    expect(TYPE_LABELS.comms).toBe('Telecom')
+    expect(filterSummary({ ...DEFAULT_FILTERS, types: ['comms'] }, 5)[0]).toBe('Telecom')
+  })
+
   it('lists the toggles, the effective elevation and the rising window', () => {
     expect(
-      filterSummary({ ...DEFAULT_FILTERS, sar_only: true, link_ok_only: true, min_elevation_deg: 20, rising_within_min: 0 }, 5),
-    ).toEqual(['All types', 'SAR-capable', 'Link OK', 'El ≥ 20°', 'Up now only'])
+      filterSummary(
+        { ...DEFAULT_FILTERS, sar_only: true, comms_only: true, link_ok_only: true, min_elevation_deg: 20, rising_within_min: 0 },
+        5,
+      ),
+    ).toEqual(['All types', 'SAR-capable', 'Communications', 'Link OK', 'El ≥ 20°', 'Up now only'])
     // at or under the mask, the mask is what applies
     expect(filterSummary({ ...DEFAULT_FILTERS, min_elevation_deg: 10 }, 10)[1]).toBe('El ≥ mask (10°)')
   })
