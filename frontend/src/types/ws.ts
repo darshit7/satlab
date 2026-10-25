@@ -132,6 +132,20 @@ export interface ContactState {
   archive?: ArchiveStatus | null
 }
 
+/** Pass automation holds the antenna: from shortly before a booked pass's AOS until its LOS the
+ *  station follows that satellite (the server selects it), and at AOS it checks the systems. */
+export interface AutomationState {
+  norad_id: number
+  aos_time: string
+  los_time: string
+  max_elev_deg: number
+  /** Booked for this pass (before the check), or released / held by it (after). */
+  commands: number
+  checked: boolean
+  /** The clock ran faster than comms can follow and was dropped to real time. */
+  clock_slowed?: boolean
+}
+
 /** Streamed satellites = (above the mask ∩ the session filter) ∪ tracked ∪ selected. */
 export interface Snapshot {
   type: 'snapshot'
@@ -148,6 +162,8 @@ export interface Snapshot {
   health?: HealthState | null
   /** With the selected satellite (absent from an older server). */
   contact?: ContactState | null
+  /** While a booked pass holds the antenna (absent from an older server). */
+  automation?: AutomationState | null
 }
 
 /** The orbit around the sim time, sampled evenly in time: drawn on the map and the globe. */
@@ -246,7 +262,26 @@ export interface PacketMessage {
   origin?: SatnogsOrigin | null
 }
 
-export type CommandStatus = 'queued' | 'sent' | 'acked' | 'failed' | 'aborted'
+/** scheduled: waiting for its pass · held: the system check at AOS found a subsystem red. */
+export type CommandStatus = 'scheduled' | 'queued' | 'sent' | 'acked' | 'failed' | 'aborted' | 'held'
+export type Subsystem = 'power' | 'thermal' | 'storage' | 'attitude' | 'rf'
+
+/** The pass a command was booked for (predicted by the server). */
+export interface ScheduledPass {
+  aos_time: string
+  los_time: string
+  max_elev_deg: number
+}
+
+/** The automatic check at AOS: the satellite's subsystem health as the inspector shows it. `go`: no
+ *  subsystem red (amber passes; null = no data, not checked). */
+export interface SystemCheck {
+  sim_time: string
+  norad_id: number
+  rollup: Rag | null
+  go: boolean
+  subsystems: Record<Subsystem, Rag | null>
+}
 
 export interface CommandStatusMessage {
   type: 'command_status'
@@ -256,6 +291,25 @@ export interface CommandStatusMessage {
   status: CommandStatus
   reason?: string | null
   sim_time: string
+  /** Booked for a pass rather than sent live. */
+  scheduled_pass?: ScheduledPass | null
+  /** The check at AOS that released or held it. */
+  check?: SystemCheck | null
+}
+
+export type AlarmSeverity = 'info' | 'warning' | 'critical'
+
+/** An alarm raised by pass automation (sent again when acknowledged). */
+export interface AlarmMessage {
+  type: 'alarm'
+  /** Numbers the session's alarms from 1. */
+  alarm_id: number
+  severity: AlarmSeverity
+  subsystem: Subsystem | null
+  norad_id: number | null
+  message: string
+  sim_time: string
+  acknowledged: boolean
 }
 
 export interface ErrorMessage {
@@ -270,6 +324,7 @@ export type ServerMessage =
   | UpcomingMessage
   | PacketMessage
   | CommandStatusMessage
+  | AlarmMessage
   | ErrorMessage
 
 // ---------- client → server ----------
@@ -289,6 +344,8 @@ export interface VisibilityFilter {
   sar_only: boolean
   /** Only satellites with a link profile; of those in view, only with a usable margin. */
   link_ok_only: boolean
+  /** Only satellites with packet templates: the ones comms works with (some are receive-only). */
+  comms_only: boolean
   /** Effective threshold is max(horizon mask, this). */
   min_elevation_deg: number
   rising_within_min: number
@@ -313,7 +370,36 @@ export interface SendCommand {
   params: Record<string, number | string>
 }
 
-export type ClientMessage = SetTracked | SetSelected | SetFilter | SetClock | SendCommand
+/** Book a command for a future pass; `aos_time` names the pass as the server's schedule listed it.
+ *  At AOS the system check sends it unless a subsystem is red. */
+export interface ScheduleCommand {
+  type: 'schedule_command'
+  norad_id: number
+  command: string
+  params: Record<string, number | string>
+  aos_time: string
+}
+
+/** Cancel a command still waiting for its pass. */
+export interface CancelCommand {
+  type: 'cancel_command'
+  command_id: number
+}
+
+export interface AckAlarm {
+  type: 'ack_alarm'
+  alarm_id: number
+}
+
+export type ClientMessage =
+  | SetTracked
+  | SetSelected
+  | SetFilter
+  | SetClock
+  | SendCommand
+  | ScheduleCommand
+  | CancelCommand
+  | AckAlarm
 
 /** First message on every connection: the session's token (MissionSessionCreated.token). */
 export interface AuthMessage {

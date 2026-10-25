@@ -148,8 +148,18 @@ def test_filter_hides_unless_tracked_or_selected(client: TestClient, session: di
         {"type": "set_filter", "min_elevation_deg": 120},
         {"type": "set_filter", "types": ["spaceship"]},
         {"type": "set_filter", "rising_within_min": 61},
+        {"type": "set_filter", "comms_only": "maybe"},
         {"type": "set_selected", "norad_id": 0},
         {"type": "set_tracked", "norad_ids": list(range(1, 102))},
+        {"type": "schedule_command", "norad_id": 43013, "command": "PING"},  # which pass?
+        {
+            "type": "schedule_command",
+            "norad_id": 43013,
+            "command": "PING",
+            "aos_time": "2026-10-10T19:31:50",  # no time zone
+        },
+        {"type": "cancel_command", "command_id": 0},
+        {"type": "ack_alarm", "alarm_id": 0},
         {"type": "no_such_message"},
     ],
 )

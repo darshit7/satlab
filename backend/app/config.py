@@ -91,6 +91,11 @@ class Settings(BaseSettings):
     max_telemetry_frames_per_session: int = Field(default=5000, ge=0)
     comms_retention_days: float = Field(default=7.0, gt=0)  # after the session ended
 
+    # Pass automation: commands booked for a future pass, sent at AOS if no subsystem is red.
+    schedule_lead_s: float = Field(default=60.0, ge=10.0, le=600.0)  # antenna moves before AOS
+    schedule_horizon_h: float = Field(default=24.0, gt=0, le=72.0)  # how far ahead a pass is booked
+    max_scheduled_commands: int = Field(default=20, ge=1, le=200)  # waiting, per session
+
     # SatNOGS DB (real archived frames). Without a token, replay is off and the UI says so.
     satnogs_db_url: str = "https://db.satnogs.org/api/telemetry/"
     satnogs_api_token: SecretStr | None = None

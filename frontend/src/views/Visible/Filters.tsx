@@ -43,10 +43,19 @@ export function Filters() {
           active={filters.link_ok_only}
           aria-pressed={filters.link_ok_only}
           className={toggle}
-          title="Only satellites with a published link budget; of those in view, only with a usable margin (0 dB or better)"
+          title="Only satellites with a published link budget (5); of those in view, only with a usable margin (0 dB or better)"
           onClick={() => setFilters({ link_ok_only: !filters.link_ok_only })}
         >
           Link OK
+        </Button>
+        <Button
+          active={filters.comms_only}
+          aria-pressed={filters.comms_only}
+          className={toggle}
+          title="Only satellites you can communicate with (8): the link-budget ones plus the ISS, CroCube and UWE-4, which work without a modelled channel"
+          onClick={() => setFilters({ comms_only: !filters.comms_only })}
+        >
+          Communications
         </Button>
       </div>
       <div className="grid grid-cols-2 gap-2">

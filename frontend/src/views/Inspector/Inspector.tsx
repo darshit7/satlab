@@ -12,7 +12,7 @@ const strong = 'font-semibold text-gray-900 dark:text-gray-100'
 
 /**
  * The right-hand column: the sky over the station, then the selected satellite — a sticky header
- * with its go/no-go, its live readout and next pass, then Systems and Comms. Each section is a
+ * with its go/no-go, its live readout and next pass, then Systems and Communications. Each section is a
  * direct child of the scrolling column, so the header stays stuck however far it scrolls.
  */
 export function Inspector() {

@@ -100,3 +100,7 @@ class Fleet:
     def type_mask(self, types: Iterable[SatelliteType]) -> NDArray[np.bool_]:
         codes = [TYPE_CODE[t] for t in types]
         return np.isin(self.type_codes, codes)
+
+    def comms_mask(self) -> NDArray[np.bool_]:
+        """Per row: the satellite has packet templates (comms can talk to it)."""
+        return np.isin(self.norad_ids, np.fromiter(self.comms.by_norad, dtype=np.int64))

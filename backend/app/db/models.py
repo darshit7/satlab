@@ -1,7 +1,8 @@
 """SQLAlchemy ORM models — the source of truth for the schema (AGENTS.md §8).
 
 Phase 1 tables: ground_station, satellite, mission_session. Phase 2: pass_window. Phase 3:
-link_profile. Phase 4b: packet_template, command, telemetry_frame.
+link_profile. Phase 4b: packet_template, command, telemetry_frame. Phase 5: alarm (and
+command.check_result).
 """
 
 from datetime import UTC, datetime
@@ -161,7 +162,8 @@ class PassWindow(Base):
 
 
 class Command(Base):
-    """A command an operator sent in a session (simulated uplink: nothing is transmitted)."""
+    """A command an operator sent in a session (simulated uplink: nothing is transmitted), live or
+    booked for a pass (``scheduled_aos``)."""
 
     __tablename__ = "command"
     __table_args__ = (Index("ix_command_session_status", "session_id", "status"),)
@@ -171,11 +173,13 @@ class Command(Base):
     norad_id: Mapped[int] = mapped_column(ForeignKey("satellite.norad_id"), nullable=False)
     template_id: Mapped[int | None] = mapped_column(ForeignKey("packet_template.id"))
     params: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    scheduled_aos: Mapped[datetime | None] = mapped_column(UTCDateTime)  # Phase 5
-    # queued | sent | acked | failed | aborted
+    scheduled_aos: Mapped[datetime | None] = mapped_column(UTCDateTime)  # the booked pass's AOS
+    # scheduled | queued | sent | acked | failed | aborted | held
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     sim_time: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)  # when it was issued
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
+    # the system check at AOS that released or held a booked command (a ``SystemCheck``)
+    check_result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
 
 class TelemetryFrame(Base):
@@ -196,3 +200,25 @@ class TelemetryFrame(Base):
     source: Mapped[str] = mapped_column(String(16), nullable=False)  # satnogs | simulated
     crc_ok: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
     origin: Mapped[dict[str, Any] | None] = mapped_column(JSON)  # SatNOGS provenance
+
+
+class Alarm(Base):
+    """An alarm raised by pass automation in a session. ``seq`` numbers the session's alarms from 1
+    (the client acknowledges by it)."""
+
+    __tablename__ = "alarm"
+    __table_args__ = (UniqueConstraint("session_id", "seq"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("mission_session.id"), nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    norad_id: Mapped[int | None] = mapped_column(ForeignKey("satellite.norad_id"))
+    sim_time: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    wall_time: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)  # info | warning | critical
+    # power | thermal | storage | attitude | rf
+    subsystem: Mapped[str | None] = mapped_column(String(16))
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    acknowledged: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )

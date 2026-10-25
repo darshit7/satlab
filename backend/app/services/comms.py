@@ -1,9 +1,10 @@
-"""Comms persistence, off the sim loop: received frames and command status changes are queued by
-the session runtimes (``offer`` never blocks) and written in batches on a worker thread.
+"""Comms persistence, off the sim loop: received frames, command status changes (with the system
+check at AOS for booked commands) and pass-automation alarms are queued by the session runtimes
+(``offer`` never blocks) and written in batches on a worker thread.
 
 Bounded for a public deploy: the queue drops (and logs once) when full, each session stores at most
-``max_telemetry_frames_per_session`` frames, and the comms rows of sessions that ended more than
-``comms_retention_days`` ago are purged hourly.
+``max_telemetry_frames_per_session`` frames, and the comms rows (frames, commands, alarms) of
+sessions that ended more than ``comms_retention_days`` ago are purged hourly.
 """
 
 import asyncio
@@ -15,8 +16,9 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
-from app.db.models import Command, MissionSession, TelemetryFrame
+from app.db.models import Alarm, Command, MissionSession, TelemetryFrame
 from app.sim.comms import FrameRecord, Record, StatusRecord
+from app.sim.scheduler import AlarmAckRecord, AlarmRecord, AutomationRecord
 
 log = logging.getLogger(__name__)
 
@@ -29,7 +31,7 @@ class CommsWriter:
     def __init__(self, settings: Settings, session_factory: sessionmaker[Session]) -> None:
         self.settings = settings
         self._sessions = session_factory
-        self._queue: asyncio.Queue[Record] = asyncio.Queue(maxsize=_QUEUE_SIZE)
+        self._queue: asyncio.Queue[Record | AutomationRecord] = asyncio.Queue(maxsize=_QUEUE_SIZE)
         self._stored: dict[int, int] = {}  # frames stored per session (counted from the DB once)
         self._capped: set[int] = set()
         self._dropping = False
@@ -37,10 +39,13 @@ class CommsWriter:
         # One batch at a time: a flush waits for the batch in flight, so after it returns every
         # record offered before it is committed.
         self._writing = asyncio.Lock()
+        # A record the worker took off the queue but hasn't written yet: whoever writes next
+        # (the worker, or a flush that got the lock first) writes it.
+        self._taken: list[Record | AutomationRecord] = []
 
     # ----- producer side (the sim loop) -----
 
-    def offer(self, record: Record) -> None:
+    def offer(self, record: Record | AutomationRecord) -> None:
         try:
             self._queue.put_nowait(record)
             self._dropping = False
@@ -75,10 +80,11 @@ class CommsWriter:
             try:
                 timeout = max(0.0, next_purge - loop.time())
                 try:
-                    first = await asyncio.wait_for(self._queue.get(), timeout)
+                    self._taken.append(await asyncio.wait_for(self._queue.get(), timeout))
                     async with self._writing:
-                        batch = [first, *self._take_all(_BATCH - 1)]
-                        await asyncio.to_thread(self._write, batch)
+                        batch = self._take_all(_BATCH)
+                        if batch:
+                            await asyncio.to_thread(self._write, batch)
                 except TimeoutError:
                     pass
                 if loop.time() >= next_purge:
@@ -89,8 +95,8 @@ class CommsWriter:
             except Exception:  # never let the writer die; the next batch may succeed
                 log.exception("comms writer: batch failed")
 
-    def _take_all(self, limit: int = _QUEUE_SIZE) -> list[Record]:
-        batch: list[Record] = []
+    def _take_all(self, limit: int = _QUEUE_SIZE) -> list[Record | AutomationRecord]:
+        batch, self._taken = self._taken[:limit], self._taken[limit:]
         while len(batch) < limit:
             try:
                 batch.append(self._queue.get_nowait())
@@ -100,16 +106,36 @@ class CommsWriter:
 
     # ----- worker thread -----
 
-    def _write(self, records: list[Record]) -> None:
+    def _write(self, records: list[Record | AutomationRecord]) -> None:
         cap = self.settings.max_telemetry_frames_per_session
         with self._sessions() as db:
             for record in records:
                 match record:
                     case StatusRecord():
+                        values: dict[str, object] = {"status": record.status}
+                        if record.check is not None:
+                            values["check_result"] = record.check
                         db.execute(
-                            update(Command)
-                            .where(Command.id == record.command_id)
-                            .values(status=record.status)
+                            update(Command).where(Command.id == record.command_id).values(**values)
+                        )
+                    case AlarmRecord():
+                        db.add(
+                            Alarm(
+                                session_id=record.session_id,
+                                seq=record.seq,
+                                norad_id=record.norad_id,
+                                sim_time=record.sim_time,
+                                severity=record.severity,
+                                subsystem=record.subsystem,
+                                message=record.message,
+                            )
+                        )
+                        db.flush()  # before an acknowledgement in the same batch
+                    case AlarmAckRecord():
+                        db.execute(
+                            update(Alarm)
+                            .where(Alarm.session_id == record.session_id, Alarm.seq == record.seq)
+                            .values(acknowledged=True)
                         )
                     case FrameRecord():
                         stored = self._stored_count(db, record.session_id)
@@ -158,8 +184,9 @@ class CommsWriter:
         with self._sessions() as db:
             frames = db.execute(delete(TelemetryFrame).where(TelemetryFrame.session_id.in_(ended)))
             commands = db.execute(delete(Command).where(Command.session_id.in_(ended)))
+            alarms = db.execute(delete(Alarm).where(Alarm.session_id.in_(ended)))
             db.commit()
-        removed = (frames.rowcount or 0) + (commands.rowcount or 0)  # type: ignore[attr-defined]
+        removed = sum(r.rowcount or 0 for r in (frames, commands, alarms))  # type: ignore[attr-defined]
         if removed:
             log.info("comms retention: removed %d rows of ended sessions", removed)
         return removed

@@ -102,7 +102,7 @@ satellite-mission-control/
 │     │  ├─ sun.py           # Sun position + Earth shadow (eclipse), no ephemeris file
 │     │  ├─ channel.py       # downlink channel: light time, bit errors from the link margin
 │     │  ├─ comms.py         # contact, beacons, replayed frames, command lifecycle (per session)
-│     │  ├─ scheduler.py     # command queue, AOS trigger, alarms (Phase 5)
+│     │  ├─ scheduler.py     # pass automation: booked commands, antenna, AOS check, alarms
 │     │  └─ loop.py          # the tick; emits snapshots + events
 │     ├─ packets/            # AX.25 / CCSDS codecs (bounds-checked), CRCs, packet templates
 │     ├─ data/               # TLE (Celestrak), SatNOGS client, catalog ingestion; seed/ JSON
@@ -358,10 +358,11 @@ CREATE TABLE command (
     norad_id      INTEGER NOT NULL REFERENCES satellite(norad_id),
     template_id   INTEGER REFERENCES packet_template(id),
     params        JSON NOT NULL,
-    scheduled_aos TEXT,                   -- target pass AOS (sim time; Phase 5)
-    status        TEXT NOT NULL,          -- queued|sent|acked|failed|aborted
+    scheduled_aos TEXT,                   -- the booked pass's AOS (sim time); NULL = sent live
+    status        TEXT NOT NULL,          -- scheduled|queued|sent|acked|failed|aborted|held
     sim_time      TEXT NOT NULL,          -- when it was issued
-    created_at    TEXT NOT NULL
+    created_at    TEXT NOT NULL,
+    check_result  JSON                    -- the system check at AOS that released or held it
 );
 CREATE INDEX ix_command_session_status ON command(session_id, status);
 
@@ -397,11 +398,15 @@ CREATE INDEX ix_pass_sat_aos ON pass_window(norad_id, aos_time);
 CREATE TABLE alarm (
     id           INTEGER PRIMARY KEY,
     session_id   INTEGER NOT NULL REFERENCES mission_session(id),
+    seq          INTEGER NOT NULL,        -- per session, from 1: the client acknowledges by it
+    norad_id     INTEGER REFERENCES satellite(norad_id),
     sim_time     TEXT NOT NULL,
+    wall_time    TEXT NOT NULL,
     severity     TEXT NOT NULL,           -- info | warning | critical
     subsystem    TEXT,                    -- power|thermal|storage|attitude|rf
     message      TEXT NOT NULL,
-    acknowledged INTEGER NOT NULL DEFAULT 0
+    acknowledged INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (session_id, seq)
 );
 
 -- ========== SAR ==========
@@ -455,6 +460,7 @@ CREATE TABLE change_result (
   - `tlm_rx` → `{ norad_id, frame_id, crc_ok, source }`
   - `alarm` → `{ alarm_id, severity, subsystem, message }`
   - `sar_status` → `{ task_id, from, to }`
+- Pass automation (Phase 5) already records its decisions in `command` (status, `check_result`) and `alarm`; Phase 6 emits them as events from the same points in `sim/scheduler.py`: `cmd_scheduled` `{ command_id, norad_id, aos, los }`, `antenna` `{ norad_id, aos, clock_slowed }`, `system_check` `{ norad_id, go, subsystems }`, `cmd_status` `{ command_id, from, to, reason }`, `alarm`, `alarm_ack` `{ alarm_id }`.
 - Replaying a session = reading `event` for a `session_id` ordered by `seq` and re-emitting through the same renderer. Nothing else is needed for playback.
 
 ### 8.5 SQLite ↔ Postgres notes
@@ -475,7 +481,7 @@ Still to do, when the feature arrives:
 
 Each phase is a **vertical slice** (backend + WebSocket + UI) that runs on its own. Mark the current phase here as you go.
 
-> **Current phase: _Phase 4b — Comms._** Phases 1, 2, 2b, 2c and 3 are done and deployed; 4a (globe, cone, 2D/3D toggle) is done. Phase 4 ships in two parts: 4a, then 4b (communications).
+> **Current phase: _Phase 5 — Scheduling & alarms._** Phases 1–4b are done and deployed (4b merged in PR #10). Phase 5 (pass automation) is implemented on `dev` and awaiting its merge; Phase 6 (record & playback) is next.
 >
 > Phase numbers are for this plan and the docs only: the UI never shows "Phase N" (`frontend/src/lib/copy.test.ts` guards it).
 
@@ -647,3 +653,10 @@ When you close a gap, delete its line here.
 - **Phase 4b — persistence and SatNOGS** (2026-10-23). The runtime hands frames and status changes to `services/comms.py` `CommsWriter` (non-blocking queue, batches on a worker thread; ≤ `SATLAB_MAX_TELEMETRY_FRAMES_PER_SESSION` stored, more still stream; hourly purge of comms rows of sessions ended > `SATLAB_COMMS_RETENTION_DAYS` ago). `services/satnogs.py` `SatnogsArchive` fetches each replayed satellite's recent frames from the SatNOGS DB at most every `SATLAB_SATNOGS_REFRESH_HOURS` within one global budget (429 → back off for Retry-After, clamped 1 min–6 h), keeps only frames that decode cleanly with a template, caches raw frames on disk (validated on load) and swaps them in per satellite. The client (`data/satnogs.py`) sends the token only as `Authorization: Token`, streams with a 2 MB cap, follows `next` only to the configured endpoint and never follows redirects. Without `SATLAB_SATNOGS_API_TOKEN` the archive reads `not_configured` and the UI says so; tests blank the token. Production: ACA secret `satnogs-api-token` (deploy/azure.md).
 - **Phase 4b — UI** (2026-10-23). `views/Comms/CommsPanel.tsx` under the Systems strip, for the selection: contact state, a packet-flow strip (`PacketFlow.tsx`: commands up in ink, frames down coloured intact / corrupted / lost; slowed down, the real light time beside it), a command composer from the templates (params checked as the server will), recent command statuses, the packet log and the latest decoded frame (SatNOGS origin linked by observation id). Honesty lines: "Uplink is simulated: nothing is transmitted" and what the downlink is. The globe flies the same packets along its line of sight. Packets and statuses merge into the store once per snapshot, like arcs.
 - **UI layout: map stage + inspector** (2026-10-25). Selecting a satellite used to stack the readout, systems and comms above the map, squeezing it mid-column; the map now takes the full height under a mission bar (ground station, catalog, and Overhead with an always-visible filter summary), each opening a non-modal floating panel over the map. The right-hand inspector holds the two sky views (small, each enlargeable in a dialog) and the selection: a sticky go/no-go header, a metric grid, the next pass (the 24 h schedule in a dialog), and collapsible Systems and Comms. Map clicks place a custom location only while the station panel is open. Frontend only: no contract, schema or physics change. View chrome lives in its own store (`store/ui.ts`; only the collapsed sections persist, as `satlab.ui`). Layout rules: design-system.md §6.
+- **Phase 5 — pass automation** (2026-10-25). `sim/scheduler.py` (`PassAutomation`, one per session, stepped by the tick, no I/O). A command is booked for a pass the server predicts (`search_passes` / `nearest_pass` over `find_spans`; the client names it by its AOS, matched within 120 s); geostationary / always-visible satellites have no AOS and aren't bookable. **Automation takes the antenna**: from `SATLAB_SCHEDULE_LEAD_S` (60 s) before AOS until LOS the session's selection is the booked satellite, so the check reads the same `HealthState` the inspector shows. **A fast clock drops to real time**: above `SATLAB_COMMS_MAX_TIME_SCALE`, when the next tick (twice its nominal advance) would cross AOS − lead, the clock jumps forward to that instant and runs at 1× (inside the window it only slows). **Go/no-go = no red, once**, at the first tick in contact after AOS: amber passes, a subsystem with no data isn't checked, no health at all holds; the pass's commands go to `CommsRuntime` (sent next tick, answered through the channel as in 4b) or are `held` with one critical alarm naming each red subsystem and its value. With the real models NOAA 20/21 go (RF amber all pass), FY-3D goes (green), the ISS is held (its modelled ±62° beam doesn't reach the station below ~11°): accepted, it covers the alarm path. Missed pass (the clock jumped past it) or no contact during it → `aborted` + warning alarm; the operator selecting another satellite before the check → `aborted` ("took the antenna"), no alarm; clock moved back before a booking → `aborted`. One antenna: passes of different satellites can't overlap including the lead (refused with the booking in the way). Limits: `SATLAB_SCHEDULE_HORIZON_H` (24) ahead, `SATLAB_MAX_SCHEDULED_COMMANDS` (20) waiting, and the 4b command budget and cap. Event log deferred to Phase 6 (§8.4).
+- **Phase 5 — contract** (2026-10-25). `CommandStatus` += `scheduled`, `held`. `CommandStatusMessage.scheduled_pass` (`ScheduledPass {aos_time, los_time, max_elev_deg}`) and `.check` (`SystemCheck {sim_time, norad_id, rollup, go, subsystems}`), carried on every later status of a booked command. Server message `alarm` (`alarm_id` = per-session seq, `severity`, `subsystem`, `norad_id`, `message`, `sim_time`, `acknowledged`; re-sent when acknowledged). `Snapshot.automation: AutomationState | null` (`norad_id`, `aos_time`, `los_time`, `max_elev_deg`, `commands`, `checked`, `clock_slowed`) while a booked pass holds the antenna: the client follows it (selects the satellite once per pass without echoing `set_selected`, one info notice), so a reconnect can't miss it. Client messages `schedule_command {norad_id, command, params, aos_time}` (same bounds as `send_command`, shared base), `cancel_command {command_id}`, `ack_alarm {alarm_id}`. A (re)connecting client gets the waiting commands' statuses and the last 50 alarms. Every new field has a default; the TS mirror marks them optional.
+- **Phase 5 — persistence** (2026-10-25). Migration `2e2299af7ee7` (expand-only): `alarm` (+ `seq` unique per session, `norad_id`, `wall_time` beyond the original DDL) and `command.check_result`. Rows go through the 4b `CommsWriter` (`StatusRecord.check`, `AlarmRecord`, `AlarmAckRecord`); the hourly purge also removes alarms of sessions ended > `SATLAB_COMMS_RETENTION_DAYS` ago. Fixed in passing: the writer's worker could take a record off the queue while a `flush()` waited for the lock, so `flush()` returned before it was written; the taken record now waits where `flush()` also looks (`tests/test_comms_writer.py`). After a restart, attaching rebuilds the session's automation from the DB (waiting commands re-booked around their `scheduled_aos`, those that can't be are aborted and reported; alarms and their numbering restored). Ending a session aborts its waiting commands.
+- **Phase 5 — UI** (2026-10-25). The Comms composer gains **When** ("Now", or a pass from the selection's 24 h schedule: "Next pass · 19:31 UTC · max 62°"); the button reads Send / Schedule. Mission bar: a fourth button, **Schedule** (`CalendarClock`, the waiting count, a red alarm count with icon), opening a panel (`views/Scheduler/SchedulerPanel.tsx`): alarms (severity icon + word, Acknowledge), commands waiting for a pass (AOS UTC and local, countdown, Cancel), recent booked outcomes with the check in words ("Go · amber: RF", "Held · attitude red"). The selection header shows "Pass automation · system check at AOS in m:ss · N commands" while it holds the antenna. Notices gain an `info` tone (automation) beside `alert`. Presentation helpers in `lib/schedule.ts`; no decision is made in the client.
+- **Overhead comms filter + "Telecom" label** (2026-10-25). Only satellites with packet templates can be talked to, so Overhead gains a **Comms** toggle: `SetFilter.comms_only` (default false), applied server-side in `_allowed_rows` through `Fleet.comms_mask()` (rows whose satellite is in the `CommsTable`, receive-only ones included), so the map, both sky views, Up now and the rising-soon sweep agree. The satellite *type* `comms` (Starlink, OneWeb, Iridium…) is labelled **Telecom** on screen (the chip, rows, the selection header, the summary), so "Comms" means one thing in the UI: what the Comms section works with. The API value `comms` and the classification rules are unchanged. Overhead rows mark satellites with comms by a radio icon ("Comms: commands and telemetry" / "receive-only"), taken from the `GET /api/packet-templates` reference data (`commsCapabilities` in `lib/comms.ts`).
+- **Comms satellites list; Link OK ≠ Comms** (2026-10-25). The two Overhead toggles stay distinct: **Link OK** = a published link budget (5 satellites) with a usable margin in view (RF quality); **Comms** = packet templates (8: those 5 plus the ISS, which takes commands, and the receive-only CroCube and UWE-4, which work without a modelled channel). The Comms section names them: an (i) beside its title (`InfoPopover`, extracted from "About the data", which now uses it too) lists every satellite comms works with, what each supports and whether it has a link budget, from the reference data (`commsSatellites` in `lib/comms.ts`); picking one selects it. A selected satellite without templates gets the same list inline. Frontend only.
+- **"Communications", spelled out** (2026-10-25). The UI never abbreviates it: the inspector section, the Overhead toggle, the filter summary, the row marker's hover, "Too fast for communications" and the alarm text say "Communications". `comms` stays the name in code, the API (`comms_only`, the `comms` satellite type, which the UI labels Telecom) and file names.

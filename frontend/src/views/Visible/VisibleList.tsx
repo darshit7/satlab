@@ -1,9 +1,10 @@
-import { Crosshair } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { Crosshair, Radio } from 'lucide-react'
+import { useMemo, type ReactNode } from 'react'
 import { cn } from '../../components/ui/cn'
 import { Emoji } from '../../components/ui/Emoji'
 import { RagDot } from '../../components/ui/Rag'
 import { focusRing } from '../../components/ui/Button'
+import { COMMS_CAPABILITY_WORDS, commsCapabilities, type CommsCapability } from '../../lib/comms'
 import { TYPE_LABELS } from '../../lib/filters'
 import { formatMarginDb, ragWord } from '../../lib/rag'
 import { formatCountdown } from '../../lib/time'
@@ -23,6 +24,7 @@ function Row({
   detail,
   pinned,
   link,
+  comms,
 }: {
   noradId: number
   name: string
@@ -31,6 +33,8 @@ function Row({
   pinned: boolean
   /** The link state, for satellites with a published RF profile. */
   link?: LinkState | null
+  /** What comms can do with it, for satellites with packet templates. */
+  comms?: CommsCapability
 }) {
   const selected = useMission((s) => s.selectedId === noradId)
   const select = useMission((s) => s.select)
@@ -50,6 +54,11 @@ function Row({
           <span className={cn('flex items-center gap-1.5 truncate text-sm font-semibold', selected && 'text-primary-700 dark:text-primary-400')}>
             {pinned && <Crosshair size={14} strokeWidth={1.5} className="shrink-0" aria-label="tracked" />}
             {link && <RagDot rag={link.rag} label={`Link ${ragWord(link.rag)}, ${formatMarginDb(link.margin_db)} dB`} />}
+            {comms && (
+              <span className="shrink-0 text-gray-500 dark:text-gray-400" title={COMMS_CAPABILITY_WORDS[comms]} role="img" aria-label={COMMS_CAPABILITY_WORDS[comms]}>
+                <Radio size={14} strokeWidth={1.5} aria-hidden />
+              </span>
+            )}
             <span className="truncate">{name}</span>
           </span>
           <span className="text-xs text-gray-500 dark:text-gray-400">
@@ -62,8 +71,15 @@ function Row({
   )
 }
 
+/** Satellites comms can talk to, from the packet templates (reference data). */
+function useCommsCapabilities(): Map<number, CommsCapability> {
+  const templates = useMission((s) => s.packetTemplates)
+  return useMemo(() => commsCapabilities(templates), [templates])
+}
+
 function UpNow({ sats, simMs }: { sats: SatelliteState[]; simMs: number }) {
   const arcs = useMission((s) => s.arcs)
+  const comms = useCommsCapabilities()
   const tracked = useMission((s) => s.tracked)
   const trackedIds = new Set(tracked.map((t) => t.norad_id))
   return (
@@ -79,6 +95,7 @@ function UpNow({ sats, simMs }: { sats: SatelliteState[]; simMs: number }) {
             type={sat.type}
             pinned={trackedIds.has(sat.norad_id)}
             link={sat.link}
+            comms={comms.get(sat.norad_id)}
             detail={
               <>
                 <span>{sat.elevation_deg.toFixed(0)}°</span>
@@ -100,6 +117,7 @@ function UpNow({ sats, simMs }: { sats: SatelliteState[]; simMs: number }) {
 }
 
 function RisingSoon({ passes, simMs }: { passes: UpcomingPass[]; simMs: number }) {
+  const comms = useCommsCapabilities()
   return (
     <ul className="-mx-2">
       {passes.map((p) => (
@@ -109,6 +127,7 @@ function RisingSoon({ passes, simMs }: { passes: UpcomingPass[]; simMs: number }
           name={p.name}
           type={p.type}
           pinned={false}
+          comms={comms.get(p.norad_id)}
           detail={
             <>
               <span>AOS {formatCountdown(Date.parse(p.aos_time) - simMs)}</span>

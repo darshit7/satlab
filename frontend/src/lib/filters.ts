@@ -3,7 +3,7 @@ import { MAX_RISING_WITHIN_MIN, SATELLITE_TYPES, type SatelliteType, type Visibi
 export const TYPE_LABELS: Record<SatelliteType, string> = {
   station: 'Stations',
   weather: 'Weather',
-  comms: 'Comms',
+  comms: 'Telecom', // communications satellites (Starlink, OneWeb…): not the Communications section
   navigation: 'Navigation',
   sar: 'SAR',
   other: 'Other',
@@ -17,6 +17,7 @@ export const DEFAULT_FILTERS: VisibilityFilter = {
   types: [...SATELLITE_TYPES],
   sar_only: false,
   link_ok_only: false,
+  comms_only: false,
   min_elevation_deg: 0,
   rising_within_min: 30,
 }
@@ -34,6 +35,7 @@ export function sanitizeFilters(raw: unknown): VisibilityFilter {
     types,
     sar_only: r.sar_only === true,
     link_ok_only: r.link_ok_only === true,
+    comms_only: r.comms_only === true,
     min_elevation_deg: num(r.min_elevation_deg, DEFAULT_FILTERS.min_elevation_deg, 0, 90),
     rising_within_min: Math.round(num(r.rising_within_min, DEFAULT_FILTERS.rising_within_min, 0, MAX_RISING_WITHIN_MIN)),
   }
@@ -56,6 +58,7 @@ export function filterSummary(filters: VisibilityFilter, maskDeg: number | null)
           : `${types.length} types`,
   ]
   if (filters.sar_only) parts.push('SAR-capable')
+  if (filters.comms_only) parts.push('Communications')
   if (filters.link_ok_only) parts.push('Link OK')
   parts.push(
     filters.min_elevation_deg > (maskDeg ?? 0)

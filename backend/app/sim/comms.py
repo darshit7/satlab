@@ -10,9 +10,10 @@ Unix epoch, like the subsystem model), at most ``max_packets_per_tick`` per tick
   through the channel (bit errors from the real link margin) and the station decodes what arrives;
 * SatNOGS-fed satellites replay real archived frames, cycling through the archive.
 
-Commands: queued by the session manager (already validated and stored), sent on the next tick in
-contact, answered after twice the light time plus the template's on-board delay. The answer comes
-down through the same channel, so a weak link can lose an acknowledgement.
+Commands: queued by the session manager (already validated and stored) or released by pass
+automation at AOS, sent on the next tick in contact, answered after twice the light time plus the
+template's on-board delay. The answer comes down through the same channel, so a weak link can lose
+an acknowledgement.
 
 Everything worth keeping goes to ``sink`` (frames, status changes), which must not block.
 """
@@ -36,6 +37,8 @@ from app.models.ws import (
     PacketKind,
     PacketMessage,
     SatnogsOrigin,
+    ScheduledPass,
+    SystemCheck,
 )
 from app.packets.errors import DecodeError
 from app.packets.table import CommsTable, SatelliteTemplates
@@ -116,6 +119,7 @@ class FrameRecord:
 class StatusRecord:
     command_id: int
     status: CommandStatus
+    check: dict[str, object] | None = None  # the system check at AOS, for a booked command
 
 
 Record = FrameRecord | StatusRecord
@@ -134,6 +138,9 @@ class OutgoingCommand:
     sent_at: datetime | None = None
     uplink: bytes | None = None
     response_due: datetime | None = None
+    # released by pass automation: the pass it was booked for and the check that let it go
+    scheduled_pass: ScheduledPass | None = None
+    check: SystemCheck | None = None
 
 
 @dataclass(frozen=True)
@@ -406,6 +413,8 @@ class CommsRuntime:
             status=status,
             reason=reason,
             sim_time=sim_time,
+            scheduled_pass=command.scheduled_pass,
+            check=command.check,
         )
 
     # ----- downlink -----

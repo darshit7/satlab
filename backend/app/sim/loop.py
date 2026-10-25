@@ -9,7 +9,9 @@ data only (no I/O):
    its link budget when it has a published profile, plus the selection's subsystem health;
 3. computes a sky arc (``pass_arc``) for satellites newly in view, within a per-tick budget, and a
    ground track for tracked/selected satellites — each recomputed only when it runs out;
-4. advances the rising-soon sweep by one chunk and republishes ``upcoming`` when it changes.
+4. advances the rising-soon sweep by one chunk and republishes ``upcoming`` when it changes;
+5. steps the selection's comms and pass automation (``sim/scheduler.py``), which can turn the
+   antenna (the selection) to a booked pass and slow a fast clock before its AOS.
 """
 
 import asyncio
@@ -31,6 +33,7 @@ from app.config import Settings
 from app.data.classify import classify
 from app.models.ws import (
     MAX_RISING_WITHIN_MIN,
+    AlarmMessage,
     ClockState,
     CommandStatusMessage,
     ErrorMessage,
@@ -70,6 +73,7 @@ from app.sim.geometry import (
 from app.sim.linkbudget import RAG_NAMES, RED, LinkTable, RagThresholds, strong_link_bands
 from app.sim.passes import Arc, UpcomingSweep, pass_arcs
 from app.sim.propagate import Elements, Epochs, epochs
+from app.sim.scheduler import AutomationRecord, PassAutomation, ScheduledCommand
 from app.sim.subsystems import HealthTracker
 
 log = logging.getLogger(__name__)
@@ -111,6 +115,7 @@ class RuntimeConfig:
     subsystem_step_s: float = 60.0
     comms_max_time_scale: float = 60.0
     comms_max_packets_per_tick: int = 4
+    schedule_lead_s: float = 60.0
 
     @classmethod
     def from_settings(cls, s: Settings) -> "RuntimeConfig":
@@ -121,8 +126,9 @@ class Subscriber:
     """Latest-value mailbox for one client.
 
     Snapshots and the rising-soon list coalesce; ground tracks and pass arcs coalesce per
-    satellite but are never dropped; errors queue; packets and command statuses queue in order,
-    up to ``MAX_EVENTS`` (a client that stops reading loses the oldest, not the server's memory).
+    satellite but are never dropped; errors queue; packets, command statuses and alarms queue in
+    order, up to ``MAX_EVENTS`` (a client that stops reading loses the oldest, not the server's
+    memory).
     """
 
     MAX_EVENTS = 200
@@ -133,7 +139,9 @@ class Subscriber:
         self._tracks: dict[int, GroundTrackMessage] = {}
         self._arcs: dict[int, PassArcMessage] = {}
         self._errors: list[ErrorMessage] = []
-        self._events: deque[PacketMessage | CommandStatusMessage] = deque(maxlen=self.MAX_EVENTS)
+        self._events: deque[PacketMessage | CommandStatusMessage | AlarmMessage] = deque(
+            maxlen=self.MAX_EVENTS
+        )
         self._ready = asyncio.Event()
 
     def offer(self, message: BaseModel) -> None:
@@ -146,7 +154,7 @@ class Subscriber:
                 self._tracks[message.norad_id] = message
             case PassArcMessage():
                 self._arcs[message.norad_id] = message
-            case PacketMessage() | CommandStatusMessage():
+            case PacketMessage() | CommandStatusMessage() | AlarmMessage():
                 self._events.append(message)
             case ErrorMessage():
                 self._errors.append(message)
@@ -226,7 +234,7 @@ class SessionRuntime:
         fleet_source: Callable[[], Fleet],
         config: RuntimeConfig,
         archive: FrameArchive | None = None,
-        sink: Callable[[Record], None] = lambda record: None,
+        sink: Callable[[Record | AutomationRecord], None] = lambda record: None,
     ) -> None:
         self.session_id = session_id
         self.observer = observer
@@ -278,6 +286,12 @@ class SessionRuntime:
             archive or NoArchive(),
             sink,
         )
+        self.automation = PassAutomation(
+            session_id,
+            sink,
+            lead_s=config.schedule_lead_s,
+            max_time_scale=config.comms_max_time_scale,
+        )
 
     # ----- subscribers -----
 
@@ -292,6 +306,8 @@ class SessionRuntime:
             sub.offer(self._upcoming)
         for packet in self.comms.recent:  # the packet log, for a client that (re)connects
             sub.offer(packet)
+        for message in [*self.automation.pending_statuses(), *self.automation.alarms]:
+            sub.offer(message)
         self._subscribers.add(sub)
         return sub
 
@@ -309,9 +325,29 @@ class SessionRuntime:
     def publish_error(self, message: str) -> None:
         self._publish(ErrorMessage(message=message))
 
+    @property
+    def station(self) -> Observer:
+        return self._station
+
     def submit_command(self, command: OutgoingCommand) -> None:
         """Queue a stored, validated command for the satellite in contact."""
         self._publish(self.comms.submit(command))
+
+    def schedule_command(self, command: ScheduledCommand) -> None:
+        """Book a stored, validated command for its (server-predicted) pass."""
+        self._publish(self.automation.book(command))
+
+    def cancel_command(self, command_id: int) -> bool:
+        message = self.automation.cancel(command_id, self.clock.now())
+        if message is not None:
+            self._publish(message)
+        return message is not None
+
+    def ack_alarm(self, alarm_id: int) -> bool:
+        message = self.automation.ack(alarm_id)
+        if message is not None:
+            self._publish(message)
+        return message is not None
 
     # ----- control -----
 
@@ -333,6 +369,12 @@ class SessionRuntime:
         self._forget_unpinned_tracks()
 
     def set_selected(self, norad_id: int | None) -> None:
+        """The operator's selection: away from a booked pass in progress, it takes the antenna."""
+        for message in self.automation.operator_selected(norad_id, self.clock.now()):
+            self._publish(message)
+        self._select(norad_id)
+
+    def _select(self, norad_id: int | None) -> None:
         self.selected = norad_id
         self._forget_unpinned_tracks()
 
@@ -369,7 +411,13 @@ class SessionRuntime:
 
     def step(self) -> Snapshot:
         started = time.perf_counter()
-        sim_time = self.clock.now()
+        # 0. Pass automation: slow a fast clock before a booked pass, turn the antenna to it.
+        sim_time = self._automate_clock(self.clock.now())
+        antenna, messages = self.automation.prepare(sim_time)
+        for message in messages:
+            self._publish(message)
+        if antenna is not None and antenna != self.selected:
+            self._select(antenna)
         fleet = self._fleet()
         now_epoch = epochs(sim_time)
 
@@ -411,7 +459,7 @@ class SessionRuntime:
         busy = time.perf_counter() - started > _SWEEP_BUDGET_SHARE * self._tick_period_s
         self._update_upcoming(fleet, sim_time, above, advance=not busy)
 
-        # 5. The selection's systems, and the link with it.
+        # 5. The selection's systems, the link with it, and the check at a booked pass's AOS.
         health = self._selected_health(fleet.links, sim_time)
         for message in self.comms.step(
             sim_time,
@@ -422,6 +470,11 @@ class SessionRuntime:
             paused=self.clock.paused,
         ):
             self._publish(message)
+        messages, released = self.automation.step(sim_time, health, self.comms.contact)
+        for message in messages:
+            self._publish(message)
+        for command in released:  # sent on the next tick in contact
+            self._publish(self.comms.submit(command))
 
         snapshot = Snapshot(
             session_id=self.session_id,
@@ -434,11 +487,26 @@ class SessionRuntime:
             satellites=states,
             health=health,
             contact=self.comms.contact,
+            automation=self.automation.state(sim_time),
         )
         self.tick += 1
         self._publish(snapshot)
         self._log_if_slow(time.perf_counter() - started, len(fleet))
         return snapshot
+
+    def _automate_clock(self, sim_time: datetime) -> datetime:
+        catch = self.automation.clock_catch(
+            sim_time,
+            time_scale=self.clock.time_scale,
+            paused=self.clock.paused,
+            tick_s=self._tick_period_s,
+        )
+        if catch is None:
+            return sim_time
+        if catch.jump_to is not None:
+            self.clock.jump_to(catch.jump_to)
+        self.clock.set_time_scale(1.0)
+        return self.clock.now()
 
     def _allowed_rows(self, fleet: Fleet) -> NDArray[np.bool_]:
         cached = self._allowed
@@ -449,6 +517,8 @@ class SessionRuntime:
             allowed &= fleet.sar
         if self.filter.link_ok_only:
             allowed &= fleet.links.has_profile
+        if self.filter.comms_only:
+            allowed &= fleet.comms_mask()
         self._allowed = (fleet.version, self.filter, allowed)
         return allowed
 

@@ -3,7 +3,8 @@ import { createJSONStorage, persist } from 'zustand/middleware'
 import { api } from '../api/client'
 import { appendPackets, mergeStatuses } from '../lib/comms'
 import { DEFAULT_FILTERS, sanitizeFilters } from '../lib/filters'
-import type { ClockSample } from '../lib/time'
+import { followAutomation, mergeAlarms, shouldAnnounce } from '../lib/schedule'
+import { formatUtcTime, type ClockSample } from '../lib/time'
 import type {
   GroundStation,
   LinkProfiles,
@@ -15,6 +16,7 @@ import type {
   SessionSite,
 } from '../types/api'
 import type {
+  AlarmMessage,
   CommandStatusMessage,
   GroundTrackMessage,
   PacketMessage,
@@ -33,6 +35,8 @@ export type DraftLocation = LocationInput
 export interface Notice {
   id: number
   message: string
+  /** alert: something went wrong or needs attention · info: something happened, e.g. automation. */
+  tone: 'alert' | 'info'
 }
 
 export interface PassSchedule {
@@ -64,6 +68,8 @@ interface MissionState {
   packets: PacketMessage[]
   /** The latest status of each recent command, by command id. */
   commands: Record<number, CommandStatusMessage>
+  /** Pass-automation alarms, by alarm id (the newest only). */
+  alarms: Record<number, AlarmMessage>
   tracked: SatelliteSummary[]
   selectedId: number | null
   filters: VisibilityFilter
@@ -75,6 +81,9 @@ interface MissionState {
   loadLinkProfiles: () => Promise<void>
   loadPacketTemplates: () => Promise<void>
   sendCommand: (noradId: number, command: string, params: Record<string, number | string>) => void
+  scheduleCommand: (noradId: number, command: string, params: Record<string, number | string>, aosTime: string) => void
+  cancelCommand: (commandId: number) => void
+  ackAlarm: (alarmId: number) => void
   startSession: (site: SessionSite) => Promise<void>
   track: (sat: SatelliteSummary) => void
   untrack: (noradId: number) => void
@@ -83,7 +92,7 @@ interface MissionState {
   loadPasses: (noradId: number, startIso: string) => Promise<void>
   setDraft: (draft: DraftLocation | null) => void
   setClock: (change: Omit<SetClock, 'type'>) => void
-  notify: (message: string) => void
+  notify: (message: string, tone?: Notice['tone']) => void
   dismiss: (id: number) => void
 }
 
@@ -106,6 +115,8 @@ let passesRequest: AbortController | null = null
 let pendingArcs: PassArcMessage[] = []
 let pendingPackets: PacketMessage[] = []
 let pendingStatuses: CommandStatusMessage[] = []
+// The booked pass the client last followed (pass automation turns the antenna, and the selection).
+let lastAutomationKey: string | null = null
 
 const inRange = (v: unknown, min: number, max: number): v is number =>
   typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max
@@ -172,12 +183,27 @@ export const useMission = create<MissionState>()(
             : {}
         pendingPackets = []
         pendingStatuses = []
+        const follow = followAutomation(message.automation, lastAutomationKey, get().selectedId)
+        lastAutomationKey = follow.key
         set({
           snapshot: message,
           arcs,
           clockSample: { simMs: Date.parse(message.sim_time), receivedAt: performance.now(), clock: message.clock },
           ...comms,
+          // the server already selected it: no set_selected back
+          ...(follow.select !== null ? { selectedId: follow.select } : {}),
         })
+        const automation = message.automation
+        if (follow.announce && automation) {
+          const name = message.satellites.find((s) => s.norad_id === automation.norad_id)?.name ?? `#${automation.norad_id}`
+          const aos = formatUtcTime(Date.parse(automation.aos_time)).slice(0, 5)
+          get().notify(
+            `Pass automation: the antenna is on ${name} for its ${aos} UTC pass${
+              automation.clock_slowed ? ', and the clock dropped to real time for it' : ''
+            }.`,
+            'info',
+          )
+        }
       }
 
       const onMessage = (message: ServerMessage) => {
@@ -200,6 +226,12 @@ export const useMission = create<MissionState>()(
           case 'command_status':
             pendingStatuses.push(message)
             break
+          case 'alarm': {
+            const announce = shouldAnnounce(message, get().alarms)
+            set((s) => ({ alarms: mergeAlarms(s.alarms, [message]) }))
+            if (announce) get().notify(`Alarm: ${message.message}`)
+            break
+          }
           case 'error':
             get().notify(message.message)
             break
@@ -220,6 +252,7 @@ export const useMission = create<MissionState>()(
         upcoming: null,
         packets: [],
         commands: {},
+        alarms: {},
         tracked: [],
         selectedId: null,
         filters: DEFAULT_FILTERS,
@@ -255,6 +288,18 @@ export const useMission = create<MissionState>()(
           socket?.send({ type: 'send_command', norad_id: noradId, command, params })
         },
 
+        scheduleCommand: (noradId, command, params, aosTime) => {
+          socket?.send({ type: 'schedule_command', norad_id: noradId, command, params, aos_time: aosTime })
+        },
+
+        cancelCommand: (commandId) => {
+          socket?.send({ type: 'cancel_command', command_id: commandId })
+        },
+
+        ackAlarm: (alarmId) => {
+          socket?.send({ type: 'ack_alarm', alarm_id: alarmId })
+        },
+
         startSession: async (site) => {
           const generation = ++sessionGeneration
           const previous = get().session
@@ -263,6 +308,7 @@ export const useMission = create<MissionState>()(
           pendingArcs = []
           pendingPackets = []
           pendingStatuses = []
+          lastAutomationKey = null
           if (previous && !previous.ended_at) void api.endSession(previous).catch(() => {})
           set({
             site,
@@ -275,6 +321,7 @@ export const useMission = create<MissionState>()(
             passes: null,
             packets: [],
             commands: {},
+            alarms: {},
           })
 
           let session: MissionSessionCreated
@@ -363,9 +410,9 @@ export const useMission = create<MissionState>()(
           socket?.send({ type: 'set_clock', ...change })
         },
 
-        notify: (message) => {
+        notify: (message, tone = 'alert') => {
           const id = ++noticeSeq
-          set((s) => ({ notices: [...s.notices.slice(-4), { id, message }] }))
+          set((s) => ({ notices: [...s.notices.slice(-4), { id, message, tone }] }))
           setTimeout(() => get().dismiss(id), 8000)
         },
         dismiss: (id) => set((s) => ({ notices: s.notices.filter((n) => n.id !== id) })),

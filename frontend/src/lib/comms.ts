@@ -1,7 +1,7 @@
 // Presentation of the comms link. Every packet, status and decoded value comes from the server;
 // nothing here frames, corrupts or decodes anything.
 
-import type { CommandParam } from '../types/api'
+import type { CommandParam, LinkProfiles, PacketTemplates } from '../types/api'
 import type { CommandStatusMessage, PacketMessage } from '../types/ws'
 
 export const MAX_PACKETS = 100
@@ -9,6 +9,46 @@ export const MAX_COMMANDS = 50
 /** How long a packet takes to cross between station and satellite in the views: slowed down to be
  *  seen (a LEO one-way light time is ~5 ms; the real value is printed beside it). */
 export const PACKET_FLIGHT_MS = 1400
+
+/** What comms can do with a satellite: command it (and hear it), or only hear it. */
+export type CommsCapability = 'command' | 'receive'
+
+export const COMMS_CAPABILITY_WORDS: Record<CommsCapability, string> = {
+  command: 'Communications: commands and telemetry',
+  receive: 'Communications: receive-only',
+}
+
+/** Satellites with packet templates, from the reference data (absent: comms can't talk to it). */
+export function commsCapabilities(templates: PacketTemplates | null): Map<number, CommsCapability> {
+  return new Map((templates?.satellites ?? []).map((s) => [s.norad_id, s.commands.length > 0 ? 'command' : 'receive']))
+}
+
+export const COMMS_CAPABILITY_DETAIL: Record<CommsCapability, string> = {
+  command: 'Commands and telemetry',
+  receive: 'Receive-only',
+}
+
+export interface CommsSatellite {
+  noradId: number
+  name: string
+  capability: CommsCapability
+  /** A published link budget (the Link OK filter's satellites); null when that's not known. */
+  linkBudget: boolean | null
+}
+
+/** Every satellite comms works with, commandable ones first, then by name (reference data). */
+export function commsSatellites(templates: PacketTemplates | null, linkProfiles: LinkProfiles | null): CommsSatellite[] {
+  const capabilities = commsCapabilities(templates)
+  const budgets = linkProfiles ? new Set(linkProfiles.profiles.map((p) => p.norad_id)) : null
+  return (templates?.satellites ?? [])
+    .map((s) => ({
+      noradId: s.norad_id,
+      name: s.satellite_name,
+      capability: capabilities.get(s.norad_id)!,
+      linkBudget: budgets ? budgets.has(s.norad_id) : null,
+    }))
+    .sort((a, b) => Number(a.capability !== 'command') - Number(b.capability !== 'command') || a.name.localeCompare(b.name))
+}
 
 /** Keep the newest `max` packets (the server numbers them per session). */
 export function appendPackets(previous: PacketMessage[], incoming: PacketMessage[], max = MAX_PACKETS): PacketMessage[] {
