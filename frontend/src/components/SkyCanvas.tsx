@@ -13,14 +13,23 @@ interface Props {
   label: string
   kind: SkyProjection['kind']
   eastLeft: boolean
-  /** Label the 30° / 60° elevation rings. */
+  /** Label the 30° / 60° elevation rings (never in a compact view). */
   ringLabels: boolean
+  /** A small view: no ring labels and no name tags. */
+  compact?: boolean
   /** Draws the view's satellites; keep it stable (module-level) — it restarts the frame loop. */
   draw: (frame: SkyFrame) => void
 }
 
+/** One sky view: its canvas settings plus the words around it. */
+export interface SkyViewSpec extends Omit<Props, 'compact'> {
+  title: string
+  /** Orientation, e.g. "az / el · E right". */
+  caption: string
+}
+
 /** A square canvas showing the sky over the station: grid, horizon mask and the view's satellites. */
-export function SkyCanvas({ label, kind, eastLeft, ringLabels, draw }: Props) {
+export function SkyCanvas({ label, kind, eastLeft, ringLabels, compact = false, draw }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const visible = useMission((s) => s.snapshot?.satellites.filter((sat) => sat.above_mask).length ?? null)
@@ -57,10 +66,10 @@ export function SkyCanvas({ label, kind, eastLeft, ringLabels, draw }: Props) {
       lastFrameAt = now
       const { snapshot, clockSample, arcs, selectedId, tracked } = useMission.getState()
       ctx.clearRect(0, 0, size, size)
-      const margin = 18
+      const margin = compact ? 14 : 18
       const p: SkyProjection = { cx: size / 2, cy: size / 2, radius: size / 2 - margin, eastLeft, kind }
       const mask_deg = snapshot?.observer.horizon_mask_deg ?? 0
-      drawGrid(ctx, p, c, mask_deg, ringLabels, font)
+      drawGrid(ctx, p, c, mask_deg, ringLabels && !compact, font)
       hits = []
       if (!snapshot || !clockSample) return
       draw({
@@ -78,6 +87,7 @@ export function SkyCanvas({ label, kind, eastLeft, ringLabels, draw }: Props) {
         },
         hits,
         font,
+        compact,
       })
     }
     frame = requestAnimationFrame(render)
@@ -106,7 +116,7 @@ export function SkyCanvas({ label, kind, eastLeft, ringLabels, draw }: Props) {
       canvas.removeEventListener('mousemove', onMove)
       offTheme()
     }
-  }, [draw, eastLeft, kind, ringLabels])
+  }, [draw, eastLeft, kind, ringLabels, compact])
 
   const description =
     visible === null

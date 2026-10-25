@@ -38,3 +38,32 @@ export function sanitizeFilters(raw: unknown): VisibilityFilter {
     rising_within_min: Math.round(num(r.rising_within_min, DEFAULT_FILTERS.rising_within_min, 0, MAX_RISING_WITHIN_MIN)),
   }
 }
+
+/**
+ * The active filters in words, for the summary that is always on screen: what the map, the sky
+ * views and the Overhead lists show. The server applies max(mask, min elevation), so a value at or
+ * under the mask reads as the mask.
+ */
+export function filterSummary(filters: VisibilityFilter, maskDeg: number | null): string[] {
+  const types = SATELLITE_TYPES.filter((t) => filters.types.includes(t))
+  const parts = [
+    types.length === SATELLITE_TYPES.length
+      ? 'All types'
+      : types.length === 0
+        ? 'No types'
+        : types.length <= 2
+          ? types.map((t) => TYPE_LABELS[t]).join(', ')
+          : `${types.length} types`,
+  ]
+  if (filters.sar_only) parts.push('SAR-capable')
+  if (filters.link_ok_only) parts.push('Link OK')
+  parts.push(
+    filters.min_elevation_deg > (maskDeg ?? 0)
+      ? `El ≥ ${filters.min_elevation_deg}°`
+      : maskDeg !== null
+        ? `El ≥ mask (${maskDeg}°)`
+        : 'El ≥ mask',
+  )
+  parts.push(filters.rising_within_min > 0 ? `Rising ≤ ${filters.rising_within_min} min` : 'Up now only')
+  return parts
+}

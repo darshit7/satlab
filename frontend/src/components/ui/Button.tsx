@@ -1,9 +1,9 @@
-import type { ButtonHTMLAttributes } from 'react'
+import type { ComponentProps } from 'react'
 import { cn } from './cn'
 
 type Variant = 'primary' | 'secondary' | 'icon'
 
-interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
+interface Props extends ComponentProps<'button'> {
   variant?: Variant
   /** Secondary only: marks the currently active option (e.g. the running clock rate). */
   active?: boolean

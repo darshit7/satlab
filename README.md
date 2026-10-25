@@ -14,8 +14,8 @@ azimuth / elevation / range / range-rate readouts. The sim clock can be paused o
 
 Satellites with a **published downlink budget** (NOAA 20 and 21, FengYun-3D, GOES 18 and 19) get a real
 link margin (dB), Eb/N0 and Doppler at your station, mapped to green / amber / red; the same state colours
-their sky-plot dots and pass arcs and draws the "strong-link" region of the sky. The selected satellite has
-a systems strip: a worst-of rollup over power, thermal, storage, attitude and RF, which change truthfully
+their sky-plot dots and pass arcs and draws the "strong-link" region of the sky. The selected satellite's
+systems show a worst-of rollup over power, thermal, storage, attitude and RF, which change truthfully
 as it rises, peaks, sets and crosses the Earth's shadow.
 
 ## Quick start

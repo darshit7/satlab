@@ -40,6 +40,7 @@ import { currentResolvedTheme, onThemeChange, type ResolvedTheme } from '../../l
 import { estimateSimMs } from '../../lib/time'
 import { token } from '../../lib/tokens'
 import { useMission } from '../../store/mission'
+import { useUi } from '../../store/ui'
 import type { GroundTrackMessage, PacketMessage, Rag, SatelliteState, Snapshot } from '../../types/ws'
 import { coneShapes, type ConeShape } from './cone'
 
@@ -69,6 +70,8 @@ function palette(theme: ResolvedTheme) {
     label: css(sky.label),
     noRf: css(sky.sat),
     track: css(token(light ? 'gray-500' : 'gray-400')),
+    /** A custom location being placed, as the 2D map rings it. */
+    draft: css(token(light ? 'gray-500' : 'gray-400')),
     mask: css(sky.mask),
     rag: {
       green: css(sky.rag.green),
@@ -165,6 +168,7 @@ export function Globe({ onError }: { onError: () => void }) {
     let cone: Primitive | null = null
     let coneKey = ''
     let station: { position: Cartesian3; point: PointPrimitive; label: Label } | null = null
+    let draftPoint: PointPrimitive | null = null
     const contactLine: Polyline = lines.add({ show: false, width: 1.5, positions: [Cartesian3.ZERO, Cartesian3.UNIT_X] })
     let contactColor: Color | null = null
     // Packets travelling the line of sight (slowed down to be seen, like the comms panel's strip).
@@ -236,6 +240,22 @@ export function Globe({ onError }: { onError: () => void }) {
         }
       }
       coneKey = '' // the cone stands on the station
+      scene.requestRender()
+    }
+
+    /** A custom location being placed (station panel open), as a ring like the 2D map's. */
+    const renderDraft = () => {
+      const { draft } = useMission.getState()
+      if (draftPoint) points.remove(draftPoint)
+      draftPoint = draft
+        ? points.add({
+            position: Cartesian3.fromDegrees(draft.lon_deg, draft.lat_deg, draft.alt_m),
+            pixelSize: 12,
+            color: Color.TRANSPARENT,
+            outlineColor: c.draft,
+            outlineWidth: 2,
+          })
+        : null
       scene.requestRender()
     }
 
@@ -437,11 +457,13 @@ export function Globe({ onError }: { onError: () => void }) {
       for (const l of satLabels.values()) labels.remove(l)
       satLabels.clear()
       renderStation()
+      renderDraft()
       renderTracks()
       renderedSnapshot = null // recolour everything on the next frame
     }
 
     renderStation()
+    renderDraft()
     renderTracks()
     flyToStation(0)
     frame = requestAnimationFrame(renderSatellites)
@@ -449,6 +471,7 @@ export function Globe({ onError }: { onError: () => void }) {
     unsubscribers.push(
       useMission.subscribe((s, prev) => {
         if (s.tracks !== prev.tracks || s.tracked !== prev.tracked || s.selectedId !== prev.selectedId) renderTracks()
+        if (s.draft !== prev.draft) renderDraft()
         if (s.session !== prev.session) {
           renderStation()
           if (s.session && (s.session.lat_deg !== prev.session?.lat_deg || s.session.lon_deg !== prev.session?.lon_deg)) {
@@ -471,7 +494,8 @@ export function Globe({ onError }: { onError: () => void }) {
         select(hit)
         return
       }
-      const ground = scene.camera.pickEllipsoid(e.position, scene.globe.ellipsoid)
+      // empty ground places the station, only while its panel is open
+      const ground = useUi.getState().panel === 'station' ? scene.camera.pickEllipsoid(e.position, scene.globe.ellipsoid) : undefined
       if (ground) {
         const where = Cartographic.fromCartesian(ground)
         setDraft({
@@ -486,7 +510,8 @@ export function Globe({ onError }: { onError: () => void }) {
       const now = performance.now()
       if (now - lastHoverAt < HOVER_INTERVAL_MS) return
       lastHoverAt = now
-      widget.canvas.style.cursor = pickedId(e.endPosition) !== null ? 'pointer' : ''
+      widget.canvas.style.cursor =
+        pickedId(e.endPosition) !== null ? 'pointer' : useUi.getState().panel === 'station' ? 'crosshair' : ''
     }, ScreenSpaceEventType.MOUSE_MOVE)
 
     return () => {

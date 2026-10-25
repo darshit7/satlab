@@ -20,6 +20,7 @@ import {
 } from '../../lib/comms'
 import { safeHttpsUrl } from '../../lib/rag'
 import { useMission } from '../../store/mission'
+import { useUi } from '../../store/ui'
 import type { CommandTemplate } from '../../types/api'
 import type { CommandStatus, ContactState, PacketMessage, Rag } from '../../types/ws'
 import { PacketFlow } from './PacketFlow'
@@ -199,6 +200,8 @@ export function CommsPanel() {
   const templates = useMission((s) => s.packetTemplates)
   const allPackets = useMission((s) => s.packets)
   const commandStatuses = useMission((s) => s.commands)
+  const open = useUi((s) => s.sections.comms)
+  const toggleSection = useUi((s) => s.toggleSection)
 
   const packets = useMemo(() => allPackets.filter((p) => p.norad_id === selectedId), [allPackets, selectedId])
   const sat = templates?.satellites.find((s) => s.norad_id === selectedId)
@@ -233,9 +236,11 @@ export function CommsPanel() {
       as="div"
       dense
       title="Comms"
+      open={open}
+      onToggle={() => toggleSection('comms')}
       aside={
-        <span className={cn('flex items-center gap-1.5 text-sm font-semibold', words.active ? 'text-primary-700 dark:text-primary-400' : muted)}>
-          <Radio size={16} strokeWidth={1.5} aria-hidden />
+        <span className={cn('flex items-center gap-1.5 text-right text-sm font-semibold', words.active ? 'text-primary-700 dark:text-primary-400' : muted)}>
+          <Radio size={16} strokeWidth={1.5} className="shrink-0" aria-hidden />
           {words.title}
         </span>
       }
@@ -268,7 +273,8 @@ export function CommsPanel() {
         )}
       </div>
 
-      <div className="mt-3 grid gap-4 md:grid-cols-2">
+      {/* columns by the inspector's width (its container), not the viewport's */}
+      <div className="mt-3 grid gap-4 @xl:grid-cols-2">
         <div className="min-w-0">
           <h3 className="mb-1 text-sm font-semibold">Packets</h3>
           {packets.length > 0 ? (

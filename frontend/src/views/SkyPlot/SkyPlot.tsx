@@ -1,4 +1,4 @@
-import { SkyCanvas } from '../../components/SkyCanvas'
+import type { SkyViewSpec } from '../../components/SkyCanvas'
 import {
   dot,
   inSky,
@@ -10,10 +10,7 @@ import {
   strongLinkRegion,
   type SkyFrame,
 } from '../../components/skyDraw'
-import { Card } from '../../components/ui/Card'
-import { RagDot } from '../../components/ui/Rag'
 import { arcRuns, arcSegment, project } from '../../lib/sky'
-import { useMission } from '../../store/mission'
 
 /** With this few satellites shown, every remaining-pass arc is drawn (faintly). */
 const ALL_ARCS_MAX = 50
@@ -100,44 +97,23 @@ function drawPolar(f: SkyFrame) {
     ctx.globalAlpha = sat.above_mask ? 1 : 0.45
     dot(ctx, at, tracked || sat.link ? 3.5 : 2.5, linkColor(c, sat, tracked ? c.tracked : c.sat))
     ctx.globalAlpha = 1
-    if (tracked) nameTag(f, at, sat.name, c.tracked)
+    if (tracked && !f.compact) nameTag(f, at, sat.name, c.tracked)
   }
   if (selectedAt && selectedSat) {
     dot(ctx, selectedAt, 4.5, linkColor(c, selectedSat, c.ink))
     selectionRing(ctx, selectedAt, 4.5, c)
-    nameTag(f, selectedAt, selectedSat.name, c.ink)
+    if (!f.compact) nameTag(f, selectedAt, selectedSat.name, c.ink)
   }
   ctx.restore()
 }
 
-/** What the dot colours mean, with the server's thresholds. */
-function LinkLegend() {
-  const thresholds = useMission((s) => s.linkProfiles)
-  const green = thresholds?.green_margin_db ?? 6
-  const amber = thresholds?.amber_margin_db ?? 0
-  const items = [
-    ['green', `> ${green} dB`],
-    ['amber', `${amber}–${green} dB`],
-    ['red', `< ${amber} dB or below mask`],
-    [null, 'no RF data'],
-  ] as const
-  return (
-    <ul className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-600 dark:text-gray-400" aria-label="Link margin legend">
-      {items.map(([rag, text]) => (
-        <li key={text} className="flex items-center gap-1.5">
-          <RagDot rag={rag} />
-          {text}
-        </li>
-      ))}
-    </ul>
-  )
-}
-
-export function SkyPlot() {
-  return (
-    <Card as="div" title="Sky plot" aside={<span className="text-sm text-gray-600 dark:text-gray-400">az / el · E right</span>}>
-      <SkyCanvas label="Polar sky plot" kind="equidistant" eastLeft={false} ringLabels draw={drawPolar} />
-      <LinkLegend />
-    </Card>
-  )
+/** The polar plot, as the sky dock and the sky dialog show it. */
+export const POLAR_VIEW: SkyViewSpec = {
+  title: 'Sky plot',
+  caption: 'az / el · E right',
+  label: 'Polar sky plot',
+  kind: 'equidistant',
+  eastLeft: false,
+  ringLabels: true,
+  draw: drawPolar,
 }

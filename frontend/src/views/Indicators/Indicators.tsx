@@ -4,6 +4,7 @@ import { RagIcon } from '../../components/ui/Rag'
 import { RAG_BG, RAG_TEXT, ragKey } from '../../components/ui/ragClasses'
 import { formatDb, formatFrequency, formatMarginDb, formatRate, ragWord, safeHttpsUrl } from '../../lib/rag'
 import { useMission } from '../../store/mission'
+import { useUi } from '../../store/ui'
 import type { HealthState, Rag, SatelliteState } from '../../types/ws'
 
 interface Segment {
@@ -11,6 +12,8 @@ interface Segment {
   rag: Rag | null
   value: string
   detail: string
+  /** What the subsystem means, on hover. */
+  hint?: string
 }
 
 const ACTIVITY: Record<NonNullable<HealthState['storage']['activity']>, string> = {
@@ -41,10 +44,13 @@ function segments(h: HealthState, sat: SatelliteState | undefined): Segment[] {
       detail: h.storage.activity ? ACTIVITY[h.storage.activity] : 'no downlink',
     },
     {
+      // attitude = orientation (pointing), not altitude: the height is in the readout
       label: 'Attitude',
       rag: h.attitude.rag,
       value: h.attitude.off_nadir_deg !== null ? `${h.attitude.off_nadir_deg.toFixed(1)}°` : '—',
-      detail: h.attitude.off_nadir_deg !== null ? `off nadir · beam ±${h.attitude.half_beamwidth_deg}°` : 'station not in view',
+      detail:
+        h.attitude.off_nadir_deg !== null ? `station off nadir · beam ±${h.attitude.half_beamwidth_deg}°` : 'station not in view',
+      hint: 'Attitude (pointing): nadir pointing assumed; is the station inside the antenna beam?',
     },
     {
       label: 'RF',
@@ -88,21 +94,26 @@ function RfSource({ noradId }: { noradId: number }) {
 
 /**
  * The selected satellite's systems: a worst-of rollup over a segmented bar whose segments are the
- * subsystem indicators. Every state comes from the server; power, thermal, storage and attitude
- * are modelled, RF is the published link budget.
+ * subsystem indicators, then one row per subsystem. Every state comes from the server; power,
+ * thermal, storage and attitude are modelled, RF is the published link budget.
  */
 export function Indicators() {
   const selectedId = useMission((s) => s.selectedId)
   const health = useMission((s) => s.snapshot?.health ?? null)
   const sat = useMission((s) => s.snapshot?.satellites.find((x) => x.norad_id === s.selectedId))
+  const open = useUi((s) => s.sections.systems)
+  const toggleSection = useUi((s) => s.toggleSection)
   if (selectedId === null || !health || health.norad_id !== selectedId) return null
 
   const rollup = health.rollup
+  const segs = segments(health, sat)
   return (
     <Card
       as="div"
       dense
       title="Systems"
+      open={open}
+      onToggle={() => toggleSection('systems')}
       aside={
         <span className={cn('flex items-center gap-1.5 text-sm font-semibold', RAG_TEXT[ragKey(rollup)])} title="Worst of the subsystems">
           <RagIcon rag={rollup} size={16} />
@@ -110,26 +121,27 @@ export function Indicators() {
         </span>
       }
     >
-      <div className="relative -mx-4 overflow-x-auto px-4">
-        <ol className="grid min-w-[30rem] grid-cols-5 gap-2" aria-label="Subsystems">
-          {segments(health, sat).map((seg) => (
-            <li key={seg.label} className="min-w-0">
-              <div className={cn('h-1.5 rounded-full', RAG_BG[ragKey(seg.rag)])} aria-hidden />
-              <div className="mt-1.5 flex items-center gap-1 text-xs text-gray-600 dark:text-gray-400">
-                <RagIcon rag={seg.rag} size={12} />
-                {seg.label}
-                <span className="sr-only">: {ragWord(seg.rag)}</span>
-              </div>
-              <div className={cn('font-mono text-sm tabular-nums', seg.rag === null && 'text-gray-500 dark:text-gray-400')}>
-                {seg.value}
-              </div>
-              <div className="truncate text-xs text-gray-500 dark:text-gray-400" title={seg.detail}>
-                {seg.detail}
-              </div>
-            </li>
-          ))}
-        </ol>
+      {/* the rollup bar: one segment per subsystem, in the rows' order */}
+      <div className="grid grid-cols-5 gap-1.5" aria-hidden>
+        {segs.map((seg) => (
+          <div key={seg.label} className={cn('h-1.5 rounded-full', RAG_BG[ragKey(seg.rag)])} title={`${seg.label}: ${ragWord(seg.rag)}`} />
+        ))}
       </div>
+      <ol className="mt-1.5 divide-y divide-gray-200 dark:divide-gray-800" aria-label="Subsystems">
+        {segs.map((seg) => (
+          <li key={seg.label} className="flex items-baseline gap-2 py-1" title={seg.hint}>
+            <span className="flex w-24 shrink-0 items-center gap-1.5 self-center text-sm text-gray-600 dark:text-gray-400">
+              <RagIcon rag={seg.rag} size={14} />
+              {seg.label}
+              <span className="sr-only">: {ragWord(seg.rag)}</span>
+            </span>
+            <span className={cn('w-20 shrink-0 font-mono text-sm tabular-nums', seg.rag === null && 'text-gray-500 dark:text-gray-400')}>
+              {seg.value}
+            </span>
+            <span className="min-w-0 flex-1 text-xs text-gray-500 dark:text-gray-400">{seg.detail}</span>
+          </li>
+        ))}
+      </ol>
       <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
         Power, thermal, storage and attitude are modelled (v{health.model_version}).{' '}
         {sat?.link ? <RfSource noradId={selectedId} /> : 'No published RF parameters for this satellite.'}

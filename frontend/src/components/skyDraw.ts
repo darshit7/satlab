@@ -57,6 +57,8 @@ export interface SkyFrame {
   /** Renderers push every dot they draw, so clicks can select it. */
   hits: Hit[]
   font: string
+  /** A small view: no name tags (they'd clip at its edge; the inspector names the selection). */
+  compact: boolean
 }
 
 /** An arc plus whether its ends are the pass's real AOS / LOS (not the window's clip). */

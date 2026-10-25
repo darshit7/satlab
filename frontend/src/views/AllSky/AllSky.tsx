@@ -1,4 +1,4 @@
-import { SkyCanvas } from '../../components/SkyCanvas'
+import type { SkyViewSpec } from '../../components/SkyCanvas'
 import {
   dot,
   inSky,
@@ -10,7 +10,6 @@ import {
   strongLinkRegion,
   type SkyFrame,
 } from '../../components/skyDraw'
-import { Card } from '../../components/ui/Card'
 import { arcRuns, arcSegment, proximityRadius } from '../../lib/sky'
 
 /** Length of the motion trail behind each satellite, in sim time. */
@@ -82,20 +81,23 @@ function drawAllSky(f: SkyFrame) {
     ctx.globalAlpha = sat.above_mask ? 1 : 0.45
     dot(ctx, at, r, linkColor(c, sat, tracked ? c.tracked : c.sat))
     ctx.globalAlpha = 1
-    if (tracked) nameTag(f, at, sat.name, c.tracked)
+    if (tracked && !f.compact) nameTag(f, at, sat.name, c.tracked)
   }
   if (selected && selectedSat) {
     dot(ctx, selected.at, selected.r + 1, linkColor(c, selectedSat, c.ink))
     selectionRing(ctx, selected.at, selected.r + 1, c)
-    nameTag(f, selected.at, selectedSat.name, c.ink)
+    if (!f.compact) nameTag(f, selected.at, selectedSat.name, c.ink)
   }
   ctx.restore()
 }
 
-export function AllSky() {
-  return (
-    <Card as="div" title="All-sky" aside={<span className="text-sm text-gray-600 dark:text-gray-400">looking up · E left</span>}>
-      <SkyCanvas label="All-sky view" kind="equisolid" eastLeft ringLabels={false} draw={drawAllSky} />
-    </Card>
-  )
+/** The all-sky view, as the sky dock and the sky dialog show it. */
+export const ALL_SKY_VIEW: SkyViewSpec = {
+  title: 'All-sky',
+  caption: 'looking up · E left',
+  label: 'All-sky view',
+  kind: 'equisolid',
+  eastLeft: true,
+  ringLabels: false,
+  draw: drawAllSky,
 }
