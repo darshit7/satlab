@@ -66,7 +66,8 @@ export function MapPanel() {
       <div
         role="group"
         aria-label="Map view"
-        className="absolute top-3 left-3 z-10 flex gap-1 rounded-lg bg-white/75 p-1 backdrop-blur dark:bg-dark/75"
+        // top-right: the mission panels open over the top-left corner
+        className="absolute top-3 right-3 z-10 flex gap-1 rounded-lg bg-white/75 p-1 backdrop-blur dark:bg-dark/75"
       >
         {OPTIONS.map(({ mode: option, label, Icon }) => {
           const unavailable = option === '3d' && !can3d

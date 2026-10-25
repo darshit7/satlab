@@ -1,9 +1,10 @@
+import { Crosshair, Radio, X } from 'lucide-react'
 import { Metric } from '../../components/Metric'
-import { Card } from '../../components/ui/Card'
-import { Emoji } from '../../components/ui/Emoji'
+import { Button } from '../../components/ui/Button'
+import { cn } from '../../components/ui/cn'
 import { Pill, StatusText } from '../../components/ui/Pill'
 import { RagIcon } from '../../components/ui/Rag'
-import { RAG_TEXT } from '../../components/ui/ragClasses'
+import { RAG_TEXT, ragKey } from '../../components/ui/ragClasses'
 import { TYPE_LABELS } from '../../lib/filters'
 import { formatDb, formatDopplerKHz, formatFrequency, formatMarginDb, ragWord } from '../../lib/rag'
 import { formatAge, formatCountdown } from '../../lib/time'
@@ -23,7 +24,9 @@ const elevationTone = (sat: SatelliteState) => (sat.above_mask ? undefined : 'te
 /** Margin and Doppler from the published link budget, or a plain "no RF data". */
 function LinkMetrics({ sat }: { sat: SatelliteState }) {
   const link = sat.link
-  if (!link) return <Metric label="Link" value="no RF data" className="text-gray-500 dark:text-gray-400" title="No published RF parameters for this satellite" />
+  if (!link) {
+    return <Metric wide label="Link" value="no RF data" className="text-gray-500 dark:text-gray-400" title="No published RF parameters for this satellite" />
+  }
   return (
     <>
       <Metric
@@ -58,71 +61,104 @@ function PassCountdown({ noradId }: { noradId: number }) {
   return text && <span className="font-mono text-xs text-gray-600 tabular-nums dark:text-gray-400">{text}</span>
 }
 
-function SelectedSatellite({ sat, simMs, mask }: { sat: SatelliteState; simMs: number; mask: number }) {
+/**
+ * The inspector's sticky header for the selection: who it is, whether it's in view, the go/no-go
+ * rollup and the contact, so they stay on screen while the details scroll under it.
+ */
+export function SelectionHeader({ sat }: { sat: SatelliteState }) {
+  const mask = useMission((s) => s.snapshot?.observer.horizon_mask_deg ?? 0)
+  const simMs = useMission((s) => (s.snapshot ? Date.parse(s.snapshot.sim_time) : null))
+  const rollup = useMission((s) => (s.snapshot?.health?.norad_id === sat.norad_id ? s.snapshot.health.rollup : undefined))
+  const contact = useMission((s) => (s.snapshot?.contact?.norad_id === sat.norad_id ? s.snapshot.contact.state : null))
+  const isTracked = useMission((s) => s.tracked.some((t) => t.norad_id === sat.norad_id))
+  const track = useMission((s) => s.track)
+  const untrack = useMission((s) => s.untrack)
+  const select = useMission((s) => s.select)
+
   return (
-    <>
-      <div className="flex max-w-44 shrink-0 flex-col leading-tight">
-        <h2 className="truncate font-semibold" title={sat.name}>
-          {sat.name}
-        </h2>
-        <span className={muted}>
-          <span className="font-mono">#{sat.norad_id}</span> · {TYPE_LABELS[sat.type]}
-        </span>
+    <div className="z-10 rounded-2xl border border-gray-200 bg-white/75 px-4 py-2.5 backdrop-blur lg:sticky lg:top-0 dark:border-gray-800 dark:bg-dark/75">
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1 leading-tight">
+          <h2 className="truncate text-xl font-semibold" title={sat.name}>
+            {sat.name}
+          </h2>
+          <p className={muted}>
+            <span className="font-mono">#{sat.norad_id}</span> · {TYPE_LABELS[sat.type]}
+            {simMs !== null && <span title="TLE age at sim time"> · TLE {formatAge(simMs - Date.parse(sat.tle_epoch))} old</span>}
+          </p>
+        </div>
+        <Button
+          active={isTracked}
+          aria-pressed={isTracked}
+          title={isTracked ? 'Stop tracking (also clears the selection)' : 'Track: keep its orbit and name on every view'}
+          onClick={() =>
+            isTracked
+              ? untrack(sat.norad_id)
+              : track({
+                  norad_id: sat.norad_id,
+                  name: sat.name,
+                  type: sat.type,
+                  is_sar_capable: sat.is_sar_capable,
+                  tle_epoch: sat.tle_epoch,
+                  fetched_at: null,
+                })
+          }
+        >
+          <Crosshair size={16} strokeWidth={1.5} aria-hidden />
+          {isTracked ? 'Tracking' : 'Track'}
+        </Button>
+        <Button variant="icon" className="mt-1" aria-label="Clear the selection" title="Clear the selection" onClick={() => select(null)}>
+          <X size={18} strokeWidth={1.5} />
+        </Button>
       </div>
-      <div className="flex shrink-0 flex-col items-start gap-0.5">
+      <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
         {sat.above_mask ? (
           <StatusText>in view</StatusText>
         ) : (
           <Pill size="sm">{sat.elevation_deg > 0 ? `below the ${mask}° mask` : 'below horizon'}</Pill>
         )}
         <PassCountdown noradId={sat.norad_id} />
+        {contact === 'active' && (
+          <span className="flex items-center gap-1 text-xs font-semibold text-primary-700 dark:text-primary-400">
+            <Radio size={14} strokeWidth={1.5} aria-hidden />
+            In contact
+          </span>
+        )}
+        {contact === 'too_fast' && (
+          <span className={cn('flex items-center gap-1', muted)} title="Comms run at 60× or slower">
+            <Radio size={14} strokeWidth={1.5} aria-hidden />
+            Too fast for comms
+          </span>
+        )}
+        {rollup !== undefined && (
+          <span
+            className={cn('ml-auto flex items-center gap-1 text-sm font-semibold', RAG_TEXT[ragKey(rollup)])}
+            title="Systems: worst of the subsystems"
+          >
+            <RagIcon rag={rollup} size={16} />
+            {ragWord(rollup)}
+          </span>
+        )}
       </div>
-      <dl className="flex shrink-0 gap-x-1">
-        <Metric label="Az" value={`${deg(sat.azimuth_deg)}°`} />
-        <Metric label="El" value={`${deg(sat.elevation_deg)}°`} className={elevationTone(sat)} />
-        <Metric label="Range km" value={km(sat.range_m)} />
-        <Metric
-          label="Rate"
-          value={`${sat.range_rate_m_s >= 0 ? '+' : ''}${kmPerS(sat.range_rate_m_s)} km/s`}
-          title={sat.range_rate_m_s < 0 ? 'Approaching' : 'Receding'}
-        />
-        <LinkMetrics sat={sat} />
-        <Metric label="Lat, lon" value={`${deg(sat.lat_deg, 2)}°, ${deg(sat.lon_deg, 2)}°`} title="Sub-satellite point" />
-        <Metric label="Alt km" value={km(sat.alt_m)} />
-        <Metric label="TLE" value={formatAge(simMs - Date.parse(sat.tle_epoch))} title="TLE age at sim time" />
-      </dl>
-    </>
+    </div>
   )
 }
 
-/** One row over the map: the selected satellite's live geometry. Tracked chips live in the catalog. */
-export function Readout() {
-  const snapshot = useMission((s) => s.snapshot)
-  const selectedId = useMission((s) => s.selectedId)
-
-  const simMs = snapshot ? Date.parse(snapshot.sim_time) : 0
-  const mask = snapshot?.observer.horizon_mask_deg ?? 0
-  const selected = selectedId !== null ? snapshot?.satellites.find((s) => s.norad_id === selectedId) : undefined
-
+/** The selection's live geometry and link, as a grid of metric tiles. */
+export function ReadoutMetrics({ sat }: { sat: SatelliteState }) {
   return (
-    <Card as="div" dense>
-      <div className="relative -mx-4 -my-3 flex min-h-14 items-center gap-x-3 overflow-x-auto rounded-2xl px-4 py-2 whitespace-nowrap">
-        {selected ? (
-          <SelectedSatellite sat={selected} simMs={simMs} mask={mask} />
-        ) : (
-          <p className="text-sm whitespace-normal text-gray-600 dark:text-gray-400">
-            {selectedId !== null ? (
-              'Waiting for data…'
-            ) : (
-              <>
-                Nothing selected <Emoji name="satellite" label="satellite" /> — pick a dot on the map or in the sky
-                views, a row in Overhead, or <span className="font-semibold text-gray-900 dark:text-gray-100">Track</span>{' '}
-                a satellite from the catalog.
-              </>
-            )}
-          </p>
-        )}
-      </div>
-    </Card>
+    <dl className="grid grid-cols-3 gap-1.5">
+      <Metric label="Az" value={`${deg(sat.azimuth_deg)}°`} />
+      <Metric label="El" value={`${deg(sat.elevation_deg)}°`} className={elevationTone(sat)} />
+      <Metric label="Range km" value={km(sat.range_m)} />
+      <Metric
+        label="Rate"
+        value={`${sat.range_rate_m_s >= 0 ? '+' : ''}${kmPerS(sat.range_rate_m_s)} km/s`}
+        title={sat.range_rate_m_s < 0 ? 'Approaching' : 'Receding'}
+      />
+      <LinkMetrics sat={sat} />
+      <Metric wide label="Lat, lon" value={`${deg(sat.lat_deg, 2)}°, ${deg(sat.lon_deg, 2)}°`} title="Sub-satellite point" />
+      <Metric label="Alt km" value={km(sat.alt_m)} title="Height above the WGS84 ellipsoid" />
+    </dl>
   )
 }

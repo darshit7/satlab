@@ -3,16 +3,12 @@ import { ClockBar } from './components/ClockBar'
 import { Notices } from './components/Notices'
 import { TiltedGridBackground } from './components/ui/TiltedGridBackground'
 import { useMission } from './store/mission'
-import { AllSky } from './views/AllSky/AllSky'
-import { CatalogSearch } from './views/Catalog/CatalogSearch'
-import { CommsPanel } from './views/Comms/CommsPanel'
-import { Indicators } from './views/Indicators/Indicators'
-import { LocationPanel } from './views/Location/LocationPanel'
+import { useUi } from './store/ui'
+import { Inspector } from './views/Inspector/Inspector'
 import { MapPanel } from './views/Map/MapPanel'
-import { PassSchedule } from './views/Passes/PassSchedule'
-import { Readout } from './views/Readout/Readout'
-import { SkyPlot } from './views/SkyPlot/SkyPlot'
-import { VisibleList } from './views/Visible/VisibleList'
+import { MissionBar, MissionPanels } from './views/Mission/MissionBar'
+import { PassScheduleDialog } from './views/Passes/PassSchedule'
+import { SkyDialog } from './views/Sky/SkyDock'
 
 let booted = false
 
@@ -27,6 +23,7 @@ export default function App() {
       // Resume where the last session observed from: a custom location, or a preset that still exists.
       const { stations, site, startSession } = useMission.getState()
       if (site && ('location' in site || stations.some((s) => s.id === site.station_id))) void startSession(site)
+      else useUi.getState().openPanel('station') // first visit: start by choosing where to observe from
     })
   }, [])
 
@@ -34,30 +31,23 @@ export default function App() {
     <div className="relative isolate flex min-h-dvh flex-col gap-4 px-4 pt-2 pb-4 sm:px-6 lg:h-dvh lg:pt-3 xl:px-12">
       <TiltedGridBackground className="bottom-auto h-[50vh]" />
       <ClockBar />
-      <div className="flex min-h-0 flex-1 flex-col gap-4 lg:grid lg:grid-cols-[22.5rem_minmax(0,1fr)]">
-        <main className="order-first flex min-h-0 min-w-0 flex-col gap-4 lg:order-last lg:overflow-y-auto">
-          <Readout />
-          <Indicators />
-          <CommsPanel />
-          {/* map + sky rail: side by side on xl, sky views paired under the map below that */}
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(17rem,22rem)]">
-            <div className="grid h-[55vh] min-h-[22rem] xl:h-auto">
-              <MapPanel />
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
-              <SkyPlot />
-              <AllSky />
-            </div>
+      {/* the map is the stage; the inspector beside it (below it on narrow screens) scrolls on its own */}
+      <div className="flex min-h-0 flex-1 flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_24rem] xl:grid-cols-[minmax(0,1fr)_26rem] 2xl:grid-cols-[minmax(0,1fr)_28rem]">
+        <main className="flex min-h-0 min-w-0 flex-col gap-3">
+          <MissionBar />
+          {/* positioned: the mission panels float over the map's top-left corner */}
+          <div className="relative grid h-[60vh] min-h-[22rem] lg:h-auto lg:flex-1">
+            <MapPanel />
+            <MissionPanels />
           </div>
-          <PassSchedule />
         </main>
-        <aside className="flex min-h-0 flex-col gap-4 lg:overflow-y-auto">
-          <CatalogSearch />
-          <LocationPanel />
-          <VisibleList />
+        <aside aria-label="Inspector" className="@container flex min-h-0 min-w-0 flex-col gap-4 lg:overflow-y-auto">
+          <Inspector />
         </aside>
       </div>
       <Notices />
+      <SkyDialog />
+      <PassScheduleDialog />
     </div>
   )
 }

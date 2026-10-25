@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { Search } from 'lucide-react'
 import { api } from '../../api/client'
 import { Button, focusRing } from '../../components/ui/Button'
-import { Card } from '../../components/ui/Card'
 import { inputClass } from '../../components/ui/Field'
 import { Pill } from '../../components/ui/Pill'
 import { formatAge } from '../../lib/time'
@@ -11,7 +10,10 @@ import type { CatalogStatus, SatelliteSummary } from '../../types/api'
 import { TrackedChips } from './TrackedChips'
 
 const DEBOUNCE_MS = 250
+/** The search box's id: the `/` shortcut focuses it. */
+export const CATALOG_SEARCH_ID = 'catalog-search'
 
+/** The catalog panel's body: local search as you type, Celestrak on request, tracked chips. */
 export function CatalogSearch() {
   const tracked = useMission((s) => s.tracked)
   const track = useMission((s) => s.track)
@@ -108,27 +110,36 @@ export function CatalogSearch() {
           }`
 
   return (
-    <Card
-      dense
-      title="Satellite catalog"
-      aside={status && status.satellite_count > 0 && <Pill size="sm">{status.satellite_count.toLocaleString()}</Pill>}
-    >
-      <p className="mb-2 text-xs text-gray-500 dark:text-gray-400">{statusText}</p>
+    <>
+      <p className="mb-2 flex items-center justify-between gap-2 text-xs text-gray-500 dark:text-gray-400">
+        {statusText}
+        {status && status.satellite_count > 0 && <Pill size="sm">{status.satellite_count.toLocaleString()}</Pill>}
+      </p>
       <div className="relative">
         <Search size={16} strokeWidth={1.5} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-gray-500 dark:text-gray-400" aria-hidden />
         <input
+          id={CATALOG_SEARCH_ID}
           type="search"
+          // the panel opens to search: focus goes straight to the box
+          autoFocus
           className={`${inputClass} pl-9`}
           placeholder="Name or NORAD ID, e.g. ISS, NOAA 19, 25544"
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
+          onKeyDown={(e) => {
+            // the first Escape clears the search, the next closes the panel
+            if (e.key === 'Escape' && query) {
+              e.preventDefault()
+              onQueryChange('')
+            }
+          }}
           aria-label="Search satellites"
         />
       </div>
       <TrackedChips />
       {error && <p className="mt-2 text-sm text-red-700 dark:text-red-400">{error}</p>}
       {results.length > 0 && (
-        <ul className="mt-1 max-h-72 divide-y divide-gray-200 overflow-y-auto dark:divide-gray-700">
+        <ul className="mt-1 divide-y divide-gray-200 dark:divide-gray-700">
           {results.map((sat) => {
             const isTracked = trackedIds.has(sat.norad_id)
             const age = sat.tle_epoch ? formatAge(now - Date.parse(sat.tle_epoch)) : null
@@ -170,6 +181,6 @@ export function CatalogSearch() {
         </p>
       )}
       {loading && <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">Searching…</p>}
-    </Card>
+    </>
   )
 }

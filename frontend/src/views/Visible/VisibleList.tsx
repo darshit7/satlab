@@ -1,9 +1,7 @@
 import { Crosshair } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { Card } from '../../components/ui/Card'
 import { cn } from '../../components/ui/cn'
 import { Emoji } from '../../components/ui/Emoji'
-import { Pill } from '../../components/ui/Pill'
 import { RagDot } from '../../components/ui/Rag'
 import { focusRing } from '../../components/ui/Button'
 import { TYPE_LABELS } from '../../lib/filters'
@@ -69,7 +67,7 @@ function UpNow({ sats, simMs }: { sats: SatelliteState[]; simMs: number }) {
   const tracked = useMission((s) => s.tracked)
   const trackedIds = new Set(tracked.map((t) => t.norad_id))
   return (
-    <ul className="-mx-2 max-h-60 overflow-y-auto">
+    <ul className="-mx-2">
       {sats.slice(0, MAX_ROWS).map((sat) => {
         const arc = arcs[sat.norad_id]
         const los = arc?.los_time
@@ -103,7 +101,7 @@ function UpNow({ sats, simMs }: { sats: SatelliteState[]; simMs: number }) {
 
 function RisingSoon({ passes, simMs }: { passes: UpcomingPass[]; simMs: number }) {
   return (
-    <ul className="-mx-2 max-h-48 overflow-y-auto">
+    <ul className="-mx-2">
       {passes.map((p) => (
         <Row
           key={p.norad_id}
@@ -125,7 +123,10 @@ function RisingSoon({ passes, simMs }: { passes: UpcomingPass[]; simMs: number }
   )
 }
 
-/** "What's up now, and what's coming": every satellite above the mask, and the next to rise. */
+/**
+ * The Overhead panel's body, "what's up now, and what's coming": the filters, every satellite above
+ * the mask that matches them, and the next to rise. The panel scrolls as one.
+ */
 export function VisibleList() {
   const snapshot = useMission((s) => s.snapshot)
   const upcoming = useMission((s) => s.upcoming)
@@ -138,7 +139,7 @@ export function VisibleList() {
   const rising = simMs === null ? [] : (upcoming?.passes ?? []).filter((p) => Date.parse(p.aos_time) > simMs)
 
   return (
-    <Card dense title="Overhead" aside={snapshot && <Pill size="sm">{snapshot.visible_count.toLocaleString()} in view</Pill>}>
+    <>
       <Filters />
       {!snapshot || simMs === null ? (
         <p className={cn(muted, 'mt-3')}>Set a ground station to see what's above it.</p>
@@ -188,6 +189,6 @@ export function VisibleList() {
           )}
         </>
       )}
-    </Card>
+    </>
   )
 }

@@ -14,6 +14,7 @@ import { currentResolvedTheme, onThemeChange, type ResolvedTheme } from '../../l
 import { estimateSimMs } from '../../lib/time'
 import { token } from '../../lib/tokens'
 import { useMission } from '../../store/mission'
+import { useUi } from '../../store/ui'
 import type { GroundTrackMessage, Snapshot } from '../../types/ws'
 
 // MapLibre resolves its worker dynamically, which Vite can't see; hand it the bundled URL.
@@ -284,7 +285,8 @@ export function GroundTrackMap() {
         attributionControl: { compact: true },
       })
       map = m
-      m.addControl(new NavigationControl({ showCompass: false }), 'top-right')
+      // bottom-right: the 2D/3D toggle holds the top-right corner
+      m.addControl(new NavigationControl({ showCompass: false }), 'bottom-right')
 
       // Fires for the first style and after every theme switch.
       m.on('style.load', () => {
@@ -312,6 +314,12 @@ export function GroundTrackMap() {
         }),
         onThemeChange(() => void switchTheme()),
       )
+      // While the station panel is open a click places the station: say so with the cursor.
+      const placeCursor = () => {
+        m.getCanvasContainer().style.cursor = useUi.getState().panel === 'station' ? 'crosshair' : ''
+      }
+      placeCursor()
+      unsubscribers.push(useUi.subscribe((s, prev) => s.panel !== prev.panel && placeCursor()))
 
       for (const layer of ['sats-dot', 'visible-dot']) {
         m.on('mouseenter', layer, () => (m.getCanvas().style.cursor = 'pointer'))
@@ -328,7 +336,8 @@ export function GroundTrackMap() {
         const { select, setDraft, draft } = useMission.getState()
         if (hit) {
           select(Number(hit.properties.norad_id))
-        } else {
+        } else if (useUi.getState().panel === 'station') {
+          // empty ground places the station, only while its panel is open
           setDraft({ lat_deg: e.lngLat.lat, lon_deg: wrapLon(e.lngLat.lng), alt_m: draft?.alt_m ?? 0 })
         }
       })
