@@ -1,5 +1,6 @@
 """The comms writer: alarms and their acknowledgement, the system check on a command, and a flush
-that really waits for every record offered before it."""
+that really waits for every record offered before it (and never loses one the worker is about to
+take)."""
 
 import asyncio
 import threading
@@ -93,3 +94,27 @@ def test_flush_writes_what_the_worker_took(app_env: Path) -> None:
         await writer.stop()
 
     asyncio.run(run())
+
+
+def test_a_flush_while_the_worker_waits_loses_nothing(app_env: Path) -> None:
+    """A flush runs while the worker waits on an empty queue; a record offered next still gets
+    written (the worker used to append it to the list the flush had just replaced)."""
+    run_migrations()
+    session_id, _ = _session_with_command()
+
+    async def run() -> None:
+        writer = CommsWriter(get_settings(), get_sessionmaker())
+        writer.start()
+        for _ in range(500):  # until the worker, past its first purge, waits on the queue
+            if writer._queue._getters:  # type: ignore[attr-defined]
+                break
+            await asyncio.sleep(0.01)
+        await writer.flush()
+        writer.offer(AlarmRecord(session_id, 1, T0, "warning", None, None, "first"))
+        writer.offer(AlarmRecord(session_id, 2, T0, "warning", None, None, "second"))
+        await asyncio.sleep(0.2)
+        await writer.stop()
+
+    asyncio.run(run())
+    with get_sessionmaker()() as db:
+        assert sorted(a.seq for a in db.scalars(select(Alarm))) == [1, 2]

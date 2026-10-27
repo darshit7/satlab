@@ -80,7 +80,9 @@ class CommsWriter:
             try:
                 timeout = max(0.0, next_purge - loop.time())
                 try:
-                    self._taken.append(await asyncio.wait_for(self._queue.get(), timeout))
+                    record = await asyncio.wait_for(self._queue.get(), timeout)
+                    # appended after the await: a flush meanwhile replaces ``_taken``
+                    self._taken.append(record)
                     async with self._writing:
                         batch = self._take_all(_BATCH)
                         if batch:
