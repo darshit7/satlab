@@ -26,10 +26,10 @@ An end-to-end, real-time **satellite mission control simulator** (portfolio / le
 ## 2. Golden rules (do not break these)
 
 1. **One simulation engine.** All physics lives in the backend sim loop. The frontend **renders streamed state**; it never re-derives orbital positions, link margins, or pass windows. A new feature that needs physics adds a field to the tick output — never a parallel calculation in JS.
-2. **Events are immutable and additive.** The event log is the source of truth for playback. Add new event `type`s; never mutate the meaning of existing ones, or old recordings stop replaying.
+2. **Contracts change additively.** A new snapshot, message or REST field gets a default and the TS mirror marks it optional; every migration is expand/contract-compatible with the code still running. Web/API version skew then degrades gracefully instead of breaking.
 3. **Server computes, client interpolates.** Propagate and filter server-side; stream only visible satellites; the client tweens between updates.
 4. **One link-budget computation, many views.** The same link state drives the RF indicator, the sky-plot dot color, and the 3D cone boundary color. They must always agree.
-5. **Schemas are the contract.** Pydantic models define the WebSocket snapshot and every event payload; the frontend mirrors them as TypeScript types. Change them deliberately and in lockstep.
+5. **Schemas are the contract.** Pydantic models define the WebSocket snapshot and every message; the frontend mirrors them as TypeScript types. Change them deliberately and in lockstep.
 6. **Never block the sim loop on a network call.** External data (Celestrak, SatNOGS, STAC) is cached and fetched off the loop; degrade gracefully when unavailable.
 7. **Build strictly phase by phase** (see §9). Do not pull later-phase work forward unless asked. Every phase stays end-to-end runnable.
 8. **No secrets in the repo.** API accounts (e.g. Space-Track) go in `.env` (gitignored); provide `.env.example`.
@@ -74,7 +74,7 @@ An end-to-end, real-time **satellite mission control simulator** (portfolio / le
 satellite-mission-control/
 ├─ CLAUDE.md                 # this file
 ├─ README.md
-├─ docker-compose.yml        # optional, for parity (Phase 9)
+├─ docker-compose.yml        # optional, for parity (Phase 6)
 ├─ .env.example
 ├─ .github/workflows/        # ci.yml (PR checks), deploy.yml (main → GHCR → Azure Container Apps)
 ├─ scripts/smoke.sh          # end-to-end smoke test of a running web+API pair (CI and post-deploy)
@@ -103,13 +103,12 @@ satellite-mission-control/
 │     │  ├─ channel.py       # downlink channel: light time, bit errors from the link margin
 │     │  ├─ comms.py         # contact, beacons, replayed frames, command lifecycle (per session)
 │     │  ├─ scheduler.py     # pass automation: booked commands, antenna, AOS check, alarms
-│     │  └─ loop.py          # the tick; emits snapshots + events
+│     │  └─ loop.py          # the tick; streams snapshots and messages
 │     ├─ packets/            # AX.25 / CCSDS codecs (bounds-checked), CRCs, packet templates
 │     ├─ data/               # TLE (Celestrak), SatNOGS client, catalog ingestion; seed/ JSON
 │     │                      #   (stations, type rules, link_profiles, subsystem_models,
 │     │                      #   packet_templates)
 │     ├─ sar/                # STAC search/download, change detection
-│     ├─ events/             # event store: append + replay
 │     └─ services/           # orchestration between sim, db, ws (catalog, sessions, passes,
 │                            #   comms writer, SatNOGS archive)
 │  └─ tests/
@@ -133,8 +132,7 @@ satellite-mission-control/
       │  ├─ Indicators/      # RAG panel + rollup bar
       │  ├─ Comms/           # packet send/receive + animation
       │  ├─ Scheduler/       # command scheduling + alarms
-      │  ├─ SAR/             # image compare + change overlay
-      │  └─ Playback/        # timeline scrubber
+      │  └─ SAR/             # image compare + change overlay
       └─ components/         # shared UI
 ```
 
@@ -219,10 +217,10 @@ scripts/smoke.sh http://localhost:8080 http://localhost:8000 http://localhost:80
 - **Python:** 3.12+, full type hints, `ruff` for lint+format, `snake_case` modules/functions, `PascalCase` classes. Prefer pure functions in `sim/` (easy to unit-test against known passes).
 - **TypeScript:** strict mode; `PascalCase` components, `camelCase` vars; colocate a view's components under its `views/<View>/` folder.
 - **UI look & feel:** follow [design-system.md](design-system.md) ("Warm Notebook"). Compose `frontend/src/components/ui/` primitives; tokens live only in the `@theme` block of `src/index.css`; one emerald accent, `gray` only, rounded everywhere, both themes.
-- **Time:** store and compute in **UTC**; every event/record carries both `sim_time` and `wall_time`; localize only in the UI (user is UTC+05:30).
+- **Time:** store and compute in **UTC**; every record carries both `sim_time` and `wall_time`; localize only in the UI (user is UTC+05:30).
 - **IDs:** integer autoincrement PKs for local-session data; natural key `norad_id` (int) for satellites; STAC scene IDs stored as strings.
 - **Angles/units:** degrees in the API/UI, radians internally in math code — convert at the boundary and name variables with units (`elevation_deg`, `range_m`).
-- **JSON columns:** use SQLAlchemy `JSON` type (maps to SQLite JSON1 / Postgres JSONB). Keep flexible payloads (event payloads, decoded telemetry, packet specs) here.
+- **JSON columns:** use SQLAlchemy `JSON` type (maps to SQLite JSON1 / Postgres JSONB). Keep flexible payloads (decoded telemetry, packet specs, system checks) here.
 - **Migrations:** every schema change is an Alembic revision; never hand-edit the DB. SQLite dev DB is disposable and gitignored.
 - **Config:** ground stations, satellite link profiles, packet templates, and thresholds come from versioned seed data / config — not hard-coded in logic.
 
@@ -257,14 +255,14 @@ scripts/smoke.sh http://localhost:8080 http://localhost:8000 http://localhost:80
 ## 8. Database design
 
 ### 8.1 Principles
-- **Event sourcing at the core.** `event` is an append-only, ordered log and the source of truth for playback. Other operational tables are convenient projections/queryable views of what also appears as events; if they ever disagree, the event log is authoritative.
+- **The operational tables are the record.** `command`, `telemetry_frame`, `alarm` and `pass_window` (later `sar_task`) hold what happened in a session, each row stamped with its sim time. There is no separate event log and no session playback.
 - **SQLite for local dev/tests, Postgres (Neon) for persistence/production — since Phase 2b.** All access via SQLAlchemy 2.x; migrations via Alembic; the URL picks the dialect. Every change must work on both (the opt-in Postgres test run checks this, §5).
 - **Geometry:** store AOI/footprints as **bbox columns + GeoJSON (JSON)**; at Phase 7 enable **PostGIS** on the Neon DB and use real `geometry` columns for spatial queries (SQLite keeps the bbox/JSON fallback).
 - **Rasters on disk, not in DB.** Store file paths / object-store keys only.
 
 ### 8.2 Entity groups
 1. **Reference/config** — stations, satellites, packet templates, link profiles (small, relatively static).
-2. **Operational/session** — sessions, events, commands, telemetry, passes, alarms (the live mission data).
+2. **Operational/session** — sessions, commands, telemetry, passes, alarms (the live mission data).
 3. **SAR** — tasks, scenes, change results.
 
 ### 8.3 Canonical DDL (SQLite dialect; the ORM is the source of truth)
@@ -336,21 +334,6 @@ CREATE TABLE mission_session (
     sim_start_time TEXT NOT NULL,         -- simulated epoch at start
     time_scale     REAL NOT NULL DEFAULT 1.0
 );
-
--- Append-only event log: SOURCE OF TRUTH for playback.
-CREATE TABLE event (
-    id          INTEGER PRIMARY KEY,
-    session_id  INTEGER NOT NULL REFERENCES mission_session(id),
-    seq         INTEGER NOT NULL,         -- monotonic per session
-    sim_time    TEXT NOT NULL,            -- simulated timestamp
-    wall_time   TEXT NOT NULL,            -- real timestamp
-    type        TEXT NOT NULL,            -- e.g. aos, los, cmd_sent, tlm_rx,
-                                          -- alarm, health_change, sar_status
-    payload     JSON NOT NULL
-);
-CREATE UNIQUE INDEX ix_event_session_seq ON event(session_id, seq);
-CREATE INDEX ix_event_session_simtime     ON event(session_id, sim_time);
-CREATE INDEX ix_event_session_type        ON event(session_id, type);
 
 CREATE TABLE command (
     id            INTEGER PRIMARY KEY,
@@ -451,19 +434,7 @@ CREATE TABLE change_result (
 );
 ```
 
-### 8.4 Event payload conventions
-- `type` is a stable string; add new types freely, never repurpose old ones.
-- Payloads are JSON and self-describing. Examples:
-  - `aos` / `los` → `{ norad_id, az_deg, elev_deg }`
-  - `health_change` → `{ subsystem, from, to, margin_db? }`
-  - `cmd_sent` → `{ command_id, norad_id, template_id }`
-  - `tlm_rx` → `{ norad_id, frame_id, crc_ok, source }`
-  - `alarm` → `{ alarm_id, severity, subsystem, message }`
-  - `sar_status` → `{ task_id, from, to }`
-- Pass automation (Phase 5) already records its decisions in `command` (status, `check_result`) and `alarm`; Phase 6 emits them as events from the same points in `sim/scheduler.py`: `cmd_scheduled` `{ command_id, norad_id, aos, los }`, `antenna` `{ norad_id, aos, clock_slowed }`, `system_check` `{ norad_id, go, subsystems }`, `cmd_status` `{ command_id, from, to, reason }`, `alarm`, `alarm_ack` `{ alarm_id }`.
-- Replaying a session = reading `event` for a `session_id` ordered by `seq` and re-emitting through the same renderer. Nothing else is needed for playback.
-
-### 8.5 SQLite ↔ Postgres notes
+### 8.4 SQLite ↔ Postgres notes
 Already handled (Phase 2b):
 - Timestamps: `UTCDateTime` is ISO-8601 `TEXT` on SQLite and `TIMESTAMPTZ` on Postgres.
 - Booleans: `Boolean` maps to `INTEGER 0/1` / `BOOLEAN`; upserts pick `sqlite_insert` / `pg_insert` by dialect.
@@ -472,7 +443,7 @@ Already handled (Phase 2b):
 Still to do, when the feature arrives:
 - `JSON` → `JSONB` on Postgres; add GIN indexes where you query inside payloads.
 - Phase 7: `aoi_geojson` / `footprint` → **PostGIS `geometry(Polygon, 4326)`**; add GiST indexes; replace bbox filtering with `ST_Intersects`.
-- Phase 9 (optional): `event` / `telemetry_frame` as **TimescaleDB hypertables** if volume warrants (Neon ships only the Apache-2 TimescaleDB feature set — verify then).
+- Phase 6 (optional): `telemetry_frame` as a **TimescaleDB hypertable** if volume warrants (Neon ships only the Apache-2 TimescaleDB feature set — verify then).
 - Keep the ORM dialect-agnostic; gate Postgres-only types behind the configured dialect so SQLite dev still works.
 
 ---
@@ -481,23 +452,22 @@ Still to do, when the feature arrives:
 
 Each phase is a **vertical slice** (backend + WebSocket + UI) that runs on its own. Mark the current phase here as you go.
 
-> **Current phase: _Phase 5 — Scheduling & alarms._** Phases 1–4b are done and deployed (4b merged in PR #10). Phase 5 (pass automation) is implemented on `dev` and awaiting its merge; Phase 6 (record & playback) is next.
+> **Current phase: _Phase 5 — Scheduling & alarms._** Phases 1–4b are done and deployed (4b merged in PR #10). Phase 5 (pass automation) is implemented on `dev` and awaiting its merge; Phase 6 (polish) is next.
 >
 > Phase numbers are for this plan and the docs only: the UI never shows "Phase N" (`frontend/src/lib/copy.test.ts` guards it).
 
 - **Phase 1 — Walking skeleton.** TLE fetch (Celestrak) + SGP4; topocentric geometry; accelerable sim clock; WebSocket snapshot. Frontend: location (geolocation + map click + lat/lon), **full catalog search**, 2D ground track moving live, az/el/range readout. DB: `ground_station`, `satellite`, `mission_session`.
 - **Phase 2 — Visibility & passes.** Visible-set (horizon mask): once a location is set, the server streams **every satellite currently above the mask by default**, with no search needed (design §5.3); search/track still work alongside it. AOS/LOS prediction (+max elevation/azimuths); polar sky plot + all-sky view; filterable list (type, min elevation, time-to-AOS, SAR-capable); selection linked across the map and both sky views. DB: `pass_window`.
 - **Phase 2b — Persistent Postgres (Neon).** Pulled forward from Phase 7 (2026-10-15) ahead of the Azure deploy: a container's filesystem is ephemeral, so SQLite can't persist there. psycopg 3 driver; Postgres engine pooling for Neon's auto-suspend; Alembic on Neon (owner role, direct host); least-privilege app role (pooled host); opt-in Postgres test run. No schema, contract or UI changes; SQLite stays the local/test default. Runbook: [deploy/neon.md](deploy/neon.md).
-- **Phase 2c — Containers + CI/CD (Azure).** Pulled forward from Phase 9 (2026-10-16). API and web images; PR checks on `dev → main`; merge to `main` pushes to GHCR, migrates Neon `production` and rolls out to Azure Container Apps at `https://satlab.darshitp.dev/satlab/`. Public without login, so the §12.11 gaps were closed first: per-session capability tokens, WS `Origin` check + first-message auth + rate/size limits, active-session cap, Celestrak global rate limit, generic upstream errors, `/docs` off, CSP and security headers in nginx.
+- **Phase 2c — Containers + CI/CD (Azure).** Pulled forward from Phase 6 (2026-10-16). API and web images; PR checks on `dev → main`; merge to `main` pushes to GHCR, migrates Neon `production` and rolls out to Azure Container Apps at `https://satlab.darshitp.dev/satlab/`. Public without login, so the §12.11 gaps were closed first: per-session capability tokens, WS `Origin` check + first-message auth + rate/size limits, active-session cap, Celestrak global rate limit, generic upstream errors, `/docs` off, CSP and security headers in nginx.
 - **Phase 3 — Systems & link.** Link budget (margin dB + Doppler) + subsystem models; RAG indicators + rollup bar; sky-plot/all-sky dot colors and the inner "strong-link" region driven by the same link state (design §5.4, §6). DB: `link_profile`.
 - **Phase 4 — Communications**, in two parts (2026-10-22):
   - **4a — Globe.** **3D globe (Cesium) + the visibility "V" cone** (design §5.3–5.4): outer cone = above the horizon mask, inner cone = green-margin region; satellites enter at one rim (AOS) and leave at the far rim (LOS), changing color at cone boundaries; the full orbital arc is drawn with the out-of-window part faded; the user can lock onto one active contact while the others dim. The globe joins the 2D map rather than replacing it: a **2D/3D toggle, 3D by default**.
   - **4b — Comms.** Per-satellite AX.25/CCSDS templates; command uplink (sim) + telemetry downlink; SatNOGS real-frame replay; packet animation; channel effects. DB: `packet_template`, `command`, `telemetry_frame`.
 - **Phase 5 — Scheduling & alarms.** Queue command for a future window; AOS trigger; auto system check; transmit-if-green / alarm-if-red. DB: `alarm` (+ `command.scheduled_aos`).
-- **Phase 6 — Record & playback.** Persist full `event` log; timeline scrubber (play/pause/speed/jump); playback reuses the live renderer.
+- **Phase 6 — Polish.** Cesium footprints, day/night terminator, naked-eye model, globe look (colours, orbits, cones, labels), msgpack, TimescaleDB (Apache-2 feature set on Neon), docker-compose parity.
 - **Phase 7 — SAR archive explore (Flow 1).** STAC search (Sentinel-1 RTC / Umbra) for AOI + two dates; swipe compare; v1 log-ratio change detection; flagged regions. **Enable PostGIS on the existing Neon DB** (geometry columns + GiST). DB: `sar_scene`, `change_result`.
 - **Phase 8 — SAR mission tasking (Flow 2).** Simulated tasking over the real acquisition plan; sim states tasked→acquiring→downlink→processing; STAC polling; "waiting for real data" gate; unlock compare when the real scene lands. DB: `sar_task`.
-- **Phase 9 — Polish.** Cesium footprints, day/night terminator, naked-eye model, msgpack, TimescaleDB (Apache-2 feature set on Neon), cloud deploy, docker-compose parity.
 
 ---
 
@@ -520,7 +490,6 @@ Sentinel-1 publishes its acquisition plan as KML — use it to compute the **rea
 
 - Unit-test `sim/geometry.py` and `sim/linkbudget.py` against **known passes** (compare az/el to a reference like skyfield examples or published pass predictions).
 - Snapshot-test RAG thresholds (margin → color).
-- Integration test: write an `event` log, replay it, assert the reconstructed state matches.
 - Keep `sim/` functions pure where possible so they're testable without a DB or network.
 - Never commit a failing `ruff`/`pytest`/`vitest` state as "done."
 
@@ -530,16 +499,16 @@ Sentinel-1 publishes its acquisition plan as KML — use it to compute the **rea
 
 There is no separate vulnerability-scanning step in this project's workflow. Security comes from writing code that follows these rules and from reviewing every change against them. When a rule and a convenience conflict, the rule wins; if a rule genuinely blocks the task, stop and ask rather than quietly weakening it.
 
-**Threat model, briefly.** Today this is a local-first, single-user app on `127.0.0.1`. Phase 9 adds a cloud deploy. The realistic risks are:
+**Threat model, briefly.** The app runs on `127.0.0.1` in development and has been public, without login, since the Phase 2c deploy. The realistic risks are:
 - a malicious web page talking to the local backend;
 - hostile or malformed bytes from external data sources (TLE text, KML, STAC JSON, SAR rasters, SatNOGS frames);
 - secrets leaking into git, logs or the frontend bundle;
 - compromised dependencies.
 
-Write code as if the Phase 9 deploy already exists.
+Write every change for that public deploy.
 
 ### 12.1 Input validation (backend)
-- **Every input crosses a pydantic model.** REST bodies and query params, WebSocket messages and event payloads are all parsed by pydantic before use. Never `json.loads` a client message and index into the dict. Put bounds in the schema (`Field(ge=…, le=…, max_length=…)`), not in ad-hoc `if` checks scattered through handlers.
+- **Every input crosses a pydantic model.** REST bodies and query params and WebSocket messages are all parsed by pydantic before use. Never `json.loads` a client message and index into the dict. Put bounds in the schema (`Field(ge=…, le=…, max_length=…)`), not in ad-hoc `if` checks scattered through handlers.
 - **Bound every collection and string** a client can send: list lengths (e.g. `norad_ids`), string lengths, numeric ranges (lat/lon, `time_scale`, limits). Unbounded input becomes a DoS: a huge list fans out into DB or network work.
 - **Reject unknown message types**; don't silently ignore them. The discriminated unions in `app/models/ws.py` already do this. Keep it that way.
 - **Fail closed with generic messages.** Errors sent to the client say *what* was wrong ("invalid message", "satellite not found"), never stack traces, SQL, file paths or raw upstream exception text. Log the details server-side instead.
@@ -621,7 +590,7 @@ When you close a gap, delete its line here.
 - **Timestamps**: `UTCDateTime` column type (`app/db/base.py`) stores ISO-8601 TEXT on SQLite and switches to `TIMESTAMPTZ` on Postgres — no model changes for time columns across dialects.
 - **Catalog**: Celestrak `GROUP=active` bulk-loaded into `satellite` (cached in `backend/var/cache/` and refreshed when > 12 h old); "full catalog" search hits Celestrak by `NAME`/`CATNR` only on explicit request. The sim loop reads only an in-memory elements registry — never the DB or network.
 - **Session-scoped observer location** (2026-10-15). `ground_station` holds only seeded presets; there is no API to create one. A session observes from its own `location_name` / `lat_deg` / `lon_deg` / `alt_m`, copied from a preset (`station_id` set) or given as a custom `location` (geolocation, map click, typed lat/lon; `station_id` NULL, name "Custom location"). `POST /api/sessions` takes exactly one of `station_id` or `location`; `MissionSessionOut` drops the nested `station` for those flat fields; `ObserverState.station_id` and `PassPrediction.station_id` are nullable. The client remembers the last site (preset id or custom location) in `localStorage` and starts a new session there on reload.
-- **Session clock** is in-memory; after a backend restart a session resumes at `sim_start_time + elapsed × initial time_scale` (approximate until the Phase 6 event log makes it exact). Sessions end after 60 s with no subscribers.
+- **Session clock** is in-memory; after a backend restart a session resumes at `sim_start_time + elapsed × initial time_scale` (approximate: later clock changes aren't persisted). Sessions end after 60 s with no subscribers.
 - **Phase 1 — UI design system**: the frontend follows `design-system.md` ("Warm Notebook", from the author's site). Tailwind v4 with tokens pinned to the system's v3 hexes and all other palettes removed; light/dark/system theme; the map reads its colors from the same tokens and swaps basemaps per theme.
 - **Cesium globe + visibility "V" cone → Phase 4** (2026-10-10; resolves design doc open question #5). Until then the visible set is shown on the 2D map, polar sky plot and all-sky view (Phase 2). **2D/3D toggle, 3D by default** (2026-10-22): the map panel switches between the Cesium globe and the existing MapLibre ground-track map, which stays as the 2D option and takes over if the globe can't start (its chunk fails to load, Cesium throws, or the browser has no WebGL; MapLibre needs WebGL2 itself, so a browser with no WebGL at all gets neither). The choice is a `localStorage` preference (`satlab.mapMode`). Both render the same streamed state, selection and filters, so switching never changes what's shown.
 - **Phase 4a — globe** (2026-10-22).
@@ -642,8 +611,7 @@ When you close a gap, delete its line here.
 - **Session capability tokens + WS auth** (2026-10-16). `POST /api/sessions` returns `MissionSessionCreated` = `MissionSessionOut` + `token` (`secrets.token_urlsafe(32)`), once; the DB keeps only `mission_session.token_hash` (SHA-256 hex, nullable; older sessions without one can't be attached and clients start a new session). `GET /api/sessions/{id}`, `POST …/end` and `GET …/passes` require `X-Session-Token`; missing/wrong token = the same 404 as an unknown session. WebSocket: the first client message must be `auth {token}` within `SATLAB_WS_AUTH_TIMEOUT_S` (default 5 s), sent as a message so the token never appears in URLs or proxy logs. Close codes: `4401` no valid `auth` (client treats it like 4404), `4404` unknown/ended/not-yours, `4503` at `SATLAB_MAX_ACTIVE_SESSIONS` (client keeps its backoff and shows "at capacity" once), `1008` foreign `Origin` (refused before accept, an HTTP 403) or over the per-connection message rate (`SATLAB_WS_MESSAGES_PER_S` / `SATLAB_WS_MESSAGE_BURST`). Frames are capped at 64 KiB (`uvicorn --ws-max-size`). The frontend keeps the token in memory only (the store's `session`, which isn't persisted).
 - **Phase 3 — link budget from published sources only** (2026-10-21). `link_profile` rows are synced from `backend/app/data/seed/link_profiles.json` inside `CatalogService.rebuild_fleet()` (startup and every ingest), only for satellites already in `satellite`, so the FK always holds without placeholder rows; the seed is authoritative (rows it drops are deleted) and an invalid seed is logged and skipped. Every value is quoted or derived (formula in `derivations`) from the cited source, and each source's own worked margin is a `checks` entry reproduced to 0.1 dB in `tests/test_linkbudget.py`. Deviations from the original DDL: `station_gt_db_k` (G/T, what budgets quote) replaces `station_gain_dbi`; `eirp_pattern` (isoflux antennas: EIRP by off-nadir angle, nadir pointing assumed), `atmospheric_loss_db` at `atmospheric_ref_elev_deg` scaled by the cosecant law, `coverage_half_angle_deg`, `label`, `sources`. Shipped: NOAA 20, NOAA 21 (X-band HRD ICDs), FengYun-3D (MPT ICD; its source holds losses constant, so they stay in `system_loss_db`), GOES 18/19 (GRB budget). Excluded: NOAA-15/18/19 (decommissioned 2025), analog FM (no Eb/N0), anything without a published EIRP (Metop AHRPT, Meteor LRPT, amateur cubesats). The fleet carries a `LinkTable` aligned with its rows; `LinkTable.evaluate` is the one computation behind snapshot links, arc colours, the link filter and RF health.
 - **Phase 3 — contract** (2026-10-21). `SatelliteState.link: LinkState | null` (`frequency_hz`, `data_rate_bps`, `ebn0_db`/`margin_db` null below the horizon, `doppler_hz` = received − transmitted, `rag`, `strong_link_elev_bands_deg` = elevation bands where the margin is green at the current altitude). `PassArcMessage.rag` (link state per point). `Snapshot.health: HealthState | null` for the selected satellite only: `power` (`soc_pct`, `sunlit_fraction`, `illumination`), `thermal` (`temperature_c`, band), `storage` (`fill_pct`, `activity`; null without a profile), `attitude` (`off_nadir_deg` vs `half_beamwidth_deg`; null below the mask), `rf` (= the link), each with `rag` and `modelled`, plus `rollup` (red if any red, else null if any lacks data, else worse of amber/green) and `model_version`. `SetFilter.link_ok_only` (profiled satellites only; in view, margin ≥ amber). `GET /api/link-profiles` (thresholds + profiles with sources). Every new field has a default and the TS mirror marks them optional, so web/API version skew degrades gracefully.
-- **Phase 3 — subsystem health is deterministic in sim time** (2026-10-21). `sim/subsystems.py` integrates from a fixed initial state (full battery, equilibrium temperature, full buffer) over the last `SATLAB_SUBSYSTEM_LOOKBACK_H` (24) hours on an absolute `SATLAB_SUBSYSTEM_STEP_S` (60 s) grid, so a clock jump or a replay gives the same values; grid inputs (sunlit fraction, downlink possible) are cached and extended incrementally (~4 ms/tick). Drivers are real: the Astronomical Almanac low-precision Sun (0.01°) with a conical umbra/penumbra (`sim/sun.py`, no ephemeris download), the pass geometry and the link margin. Parameters are generic and labelled modelled (`seed/subsystem_models.json`): the battery is sized for its own orbit's longest eclipse; storage knows only this station's contacts (a satellite unseen for a day reads full); attitude assumes nadir pointing. Not written to an event log yet (Phase 6); `health_change` events come then.
-- **Phase 3 — RAG colours** (2026-10-21). Green reuses the emerald primary (700 light / 400 dark); amber is a new functional pair amber-700 / amber-400 (amber-600 stays reserved for the greeting); red reuses red-700 / red-400. In the sky views a dot's fill is its link state (grey = no RF data) and the selection is marked by shape (ink ring, larger dot, ink label); the selected pass is coloured by `arc.rag` over a faint green strong-link band. Colour is never the only cue: RAG icons and words (Go / Marginal / No-go / No data) go with it.
+- **Phase 3 — subsystem health is deterministic in sim time** (2026-10-21). `sim/subsystems.py` integrates from a fixed initial state (full battery, equilibrium temperature, full buffer) over the last `SATLAB_SUBSYSTEM_LOOKBACK_H` (24) hours on an absolute `SATLAB_SUBSYSTEM_STEP_S` (60 s) grid, so a clock jump or a replay gives the same values; grid inputs (sunlit fraction, downlink possible) are cached and extended incrementally (~4 ms/tick). Drivers are real: the Astronomical Almanac low-precision Sun (0.01°) with a conical umbra/penumbra (`sim/sun.py`, no ephemeris download), the pass geometry and the link margin. Parameters are generic and labelled modelled (`seed/subsystem_models.json`): the battery is sized for its own orbit's longest eclipse; storage knows only this station's contacts (a satellite unseen for a day reads full); attitude assumes nadir pointing.- **Phase 3 — RAG colours** (2026-10-21). Green reuses the emerald primary (700 light / 400 dark); amber is a new functional pair amber-700 / amber-400 (amber-600 stays reserved for the greeting); red reuses red-700 / red-400. In the sky views a dot's fill is its link state (grey = no RF data) and the selection is marked by shape (ink ring, larger dot, ink label); the selected pass is coloured by `arc.rag` over a faint green strong-link band. Colour is never the only cue: RAG icons and words (Go / Marginal / No-go / No data) go with it.
 - **Phase 4b — packet templates** (2026-10-23). Seed `backend/app/data/seed/packet_templates.json` (template sets assigned to satellites, validated strictly: unknown keys are errors), synced to `packet_template` in `CatalogService.rebuild_fleet()` for catalogued satellites; upsert by (satellite, kind, name), rows the seed drops are set `active=false` (not deleted) so `command.template_id` holds. Codecs in `app/packets/` (AX.25 v2.2 UI frames, CCSDS 133.0-B-2 space packets with a CUC time header and CRC-16 error control) bound every length against the bytes present and the protocol maximum; payload encodings `binary`, `csv` (CroCube) and `aprs`. Satellites, chosen by research (SatNOGS DB `telemetries[].decoder`, recent good observations on the Network API, a public layout):
   - **NOAA 20/21, FY-3D, GOES 18/19** (`ccsds_bus`): simulated housekeeping from the modelled subsystems; layout, APIDs (0x100 hk, 0x101 ack, 0x180 TC) and opcodes are **illustrative** (no public housekeeping/command ICD) and labelled so. Commands PING, REQUEST_HK, SET_BEACON_INTERVAL (10–120 s, changes the session's hk cadence only).
   - **ISS** (`iss_aprs`): real AX.25 APRS frames replayed from SatNOGS (145.825 MHz digipeater); command APRS_MESSAGE from the placeholder N0CALL via ARISS, answered by the digipeated copy (H bit set).
@@ -653,8 +621,7 @@ When you close a gap, delete its line here.
 - **Phase 4b — persistence and SatNOGS** (2026-10-23). The runtime hands frames and status changes to `services/comms.py` `CommsWriter` (non-blocking queue, batches on a worker thread; ≤ `SATLAB_MAX_TELEMETRY_FRAMES_PER_SESSION` stored, more still stream; hourly purge of comms rows of sessions ended > `SATLAB_COMMS_RETENTION_DAYS` ago). `services/satnogs.py` `SatnogsArchive` fetches each replayed satellite's recent frames from the SatNOGS DB at most every `SATLAB_SATNOGS_REFRESH_HOURS` within one global budget (429 → back off for Retry-After, clamped 1 min–6 h), keeps only frames that decode cleanly with a template, caches raw frames on disk (validated on load) and swaps them in per satellite. The client (`data/satnogs.py`) sends the token only as `Authorization: Token`, streams with a 2 MB cap, follows `next` only to the configured endpoint and never follows redirects. Without `SATLAB_SATNOGS_API_TOKEN` the archive reads `not_configured` and the UI says so; tests blank the token. Production: ACA secret `satnogs-api-token` (deploy/azure.md).
 - **Phase 4b — UI** (2026-10-23). `views/Comms/CommsPanel.tsx` under the Systems strip, for the selection: contact state, a packet-flow strip (`PacketFlow.tsx`: commands up in ink, frames down coloured intact / corrupted / lost; slowed down, the real light time beside it), a command composer from the templates (params checked as the server will), recent command statuses, the packet log and the latest decoded frame (SatNOGS origin linked by observation id). Honesty lines: "Uplink is simulated: nothing is transmitted" and what the downlink is. The globe flies the same packets along its line of sight. Packets and statuses merge into the store once per snapshot, like arcs.
 - **UI layout: map stage + inspector** (2026-10-25). Selecting a satellite used to stack the readout, systems and comms above the map, squeezing it mid-column; the map now takes the full height under a mission bar (ground station, catalog, and Overhead with an always-visible filter summary), each opening a non-modal floating panel over the map. The right-hand inspector holds the two sky views (small, each enlargeable in a dialog) and the selection: a sticky go/no-go header, a metric grid, the next pass (the 24 h schedule in a dialog), and collapsible Systems and Comms. Map clicks place a custom location only while the station panel is open. Frontend only: no contract, schema or physics change. View chrome lives in its own store (`store/ui.ts`; only the collapsed sections persist, as `satlab.ui`). Layout rules: design-system.md §6.
-- **Phase 5 — pass automation** (2026-10-25). `sim/scheduler.py` (`PassAutomation`, one per session, stepped by the tick, no I/O). A command is booked for a pass the server predicts (`search_passes` / `nearest_pass` over `find_spans`; the client names it by its AOS, matched within 120 s); geostationary / always-visible satellites have no AOS and aren't bookable. **Automation takes the antenna**: from `SATLAB_SCHEDULE_LEAD_S` (60 s) before AOS until LOS the session's selection is the booked satellite, so the check reads the same `HealthState` the inspector shows. **A fast clock drops to real time**: above `SATLAB_COMMS_MAX_TIME_SCALE`, when the next tick (twice its nominal advance) would cross AOS − lead, the clock jumps forward to that instant and runs at 1× (inside the window it only slows). **Go/no-go = no red, once**, at the first tick in contact after AOS: amber passes, a subsystem with no data isn't checked, no health at all holds; the pass's commands go to `CommsRuntime` (sent next tick, answered through the channel as in 4b) or are `held` with one critical alarm naming each red subsystem and its value. With the real models NOAA 20/21 go (RF amber all pass), FY-3D goes (green), the ISS is held (its modelled ±62° beam doesn't reach the station below ~11°): accepted, it covers the alarm path. Missed pass (the clock jumped past it) or no contact during it → `aborted` + warning alarm; the operator selecting another satellite before the check → `aborted` ("took the antenna"), no alarm; clock moved back before a booking → `aborted`. One antenna: passes of different satellites can't overlap including the lead (refused with the booking in the way). Limits: `SATLAB_SCHEDULE_HORIZON_H` (24) ahead, `SATLAB_MAX_SCHEDULED_COMMANDS` (20) waiting, and the 4b command budget and cap. Event log deferred to Phase 6 (§8.4).
-- **Phase 5 — contract** (2026-10-25). `CommandStatus` += `scheduled`, `held`. `CommandStatusMessage.scheduled_pass` (`ScheduledPass {aos_time, los_time, max_elev_deg}`) and `.check` (`SystemCheck {sim_time, norad_id, rollup, go, subsystems}`), carried on every later status of a booked command. Server message `alarm` (`alarm_id` = per-session seq, `severity`, `subsystem`, `norad_id`, `message`, `sim_time`, `acknowledged`; re-sent when acknowledged). `Snapshot.automation: AutomationState | null` (`norad_id`, `aos_time`, `los_time`, `max_elev_deg`, `commands`, `checked`, `clock_slowed`) while a booked pass holds the antenna: the client follows it (selects the satellite once per pass without echoing `set_selected`, one info notice), so a reconnect can't miss it. Client messages `schedule_command {norad_id, command, params, aos_time}` (same bounds as `send_command`, shared base), `cancel_command {command_id}`, `ack_alarm {alarm_id}`. A (re)connecting client gets the waiting commands' statuses and the last 50 alarms. Every new field has a default; the TS mirror marks them optional.
+- **Phase 5 — pass automation** (2026-10-25). `sim/scheduler.py` (`PassAutomation`, one per session, stepped by the tick, no I/O). A command is booked for a pass the server predicts (`search_passes` / `nearest_pass` over `find_spans`; the client names it by its AOS, matched within 120 s); geostationary / always-visible satellites have no AOS and aren't bookable. **Automation takes the antenna**: from `SATLAB_SCHEDULE_LEAD_S` (60 s) before AOS until LOS the session's selection is the booked satellite, so the check reads the same `HealthState` the inspector shows. **A fast clock drops to real time**: above `SATLAB_COMMS_MAX_TIME_SCALE`, when the next tick (twice its nominal advance) would cross AOS − lead, the clock jumps forward to that instant and runs at 1× (inside the window it only slows). **Go/no-go = no red, once**, at the first tick in contact after AOS: amber passes, a subsystem with no data isn't checked, no health at all holds; the pass's commands go to `CommsRuntime` (sent next tick, answered through the channel as in 4b) or are `held` with one critical alarm naming each red subsystem and its value. With the real models NOAA 20/21 go (RF amber all pass), FY-3D goes (green), the ISS is held (its modelled ±62° beam doesn't reach the station below ~11°): accepted, it covers the alarm path. Missed pass (the clock jumped past it) or no contact during it → `aborted` + warning alarm; the operator selecting another satellite before the check → `aborted` ("took the antenna"), no alarm; clock moved back before a booking → `aborted`. One antenna: passes of different satellites can't overlap including the lead (refused with the booking in the way). Limits: `SATLAB_SCHEDULE_HORIZON_H` (24) ahead, `SATLAB_MAX_SCHEDULED_COMMANDS` (20) waiting, and the 4b command budget and cap.- **Phase 5 — contract** (2026-10-25). `CommandStatus` += `scheduled`, `held`. `CommandStatusMessage.scheduled_pass` (`ScheduledPass {aos_time, los_time, max_elev_deg}`) and `.check` (`SystemCheck {sim_time, norad_id, rollup, go, subsystems}`), carried on every later status of a booked command. Server message `alarm` (`alarm_id` = per-session seq, `severity`, `subsystem`, `norad_id`, `message`, `sim_time`, `acknowledged`; re-sent when acknowledged). `Snapshot.automation: AutomationState | null` (`norad_id`, `aos_time`, `los_time`, `max_elev_deg`, `commands`, `checked`, `clock_slowed`) while a booked pass holds the antenna: the client follows it (selects the satellite once per pass without echoing `set_selected`, one info notice), so a reconnect can't miss it. Client messages `schedule_command {norad_id, command, params, aos_time}` (same bounds as `send_command`, shared base), `cancel_command {command_id}`, `ack_alarm {alarm_id}`. A (re)connecting client gets the waiting commands' statuses and the last 50 alarms. Every new field has a default; the TS mirror marks them optional.
 - **Phase 5 — persistence** (2026-10-25). Migration `2e2299af7ee7` (expand-only): `alarm` (+ `seq` unique per session, `norad_id`, `wall_time` beyond the original DDL) and `command.check_result`. Rows go through the 4b `CommsWriter` (`StatusRecord.check`, `AlarmRecord`, `AlarmAckRecord`); the hourly purge also removes alarms of sessions ended > `SATLAB_COMMS_RETENTION_DAYS` ago. Fixed in passing: the writer's worker could take a record off the queue while a `flush()` waited for the lock, so `flush()` returned before it was written; the taken record now waits where `flush()` also looks (`tests/test_comms_writer.py`). After a restart, attaching rebuilds the session's automation from the DB (waiting commands re-booked around their `scheduled_aos`, those that can't be are aborted and reported; alarms and their numbering restored). Ending a session aborts its waiting commands.
 - **Phase 5 — UI** (2026-10-25). The Comms composer gains **When** ("Now", or a pass from the selection's 24 h schedule: "Next pass · 19:31 UTC · max 62°"); the button reads Send / Schedule. Mission bar: a fourth button, **Schedule** (`CalendarClock`, the waiting count, a red alarm count with icon), opening a panel (`views/Scheduler/SchedulerPanel.tsx`): alarms (severity icon + word, Acknowledge), commands waiting for a pass (AOS UTC and local, countdown, Cancel), recent booked outcomes with the check in words ("Go · amber: RF", "Held · attitude red"). The selection header shows "Pass automation · system check at AOS in m:ss · N commands" while it holds the antenna. Notices gain an `info` tone (automation) beside `alert`. Presentation helpers in `lib/schedule.ts`; no decision is made in the client.
 - **Overhead comms filter + "Telecom" label** (2026-10-25). Only satellites with packet templates can be talked to, so Overhead gains a **Comms** toggle: `SetFilter.comms_only` (default false), applied server-side in `_allowed_rows` through `Fleet.comms_mask()` (rows whose satellite is in the `CommsTable`, receive-only ones included), so the map, both sky views, Up now and the rising-soon sweep agree. The satellite *type* `comms` (Starlink, OneWeb, Iridium…) is labelled **Telecom** on screen (the chip, rows, the selection header, the summary), so "Comms" means one thing in the UI: what the Comms section works with. The API value `comms` and the classification rules are unchanged. Overhead rows mark satellites with comms by a radio icon ("Comms: commands and telemetry" / "receive-only"), taken from the `GET /api/packet-templates` reference data (`commsCapabilities` in `lib/comms.ts`).
@@ -662,3 +629,4 @@ When you close a gap, delete its line here.
 - **"Communications", spelled out** (2026-10-25). The UI never abbreviates it: the inspector section, the Overhead toggle, the filter summary, the row marker's hover, "Too fast for communications" and the alarm text say "Communications". `comms` stays the name in code, the API (`comms_only`, the `comms` satellite type, which the UI labels Telecom) and file names.
 - **Dark theme reset** (2026-10-27). Dark was already the default, but a choice stored earlier (Light, or System on a light OS) still won. The storage key moved from `satlab.theme` to `satlab.theme.v2` (the pre-paint script and `lib/theme.ts`), so every browser starts on dark once; the old key is removed. `theme.ts` also applies the theme when it loads, so the default holds even if the pre-paint script didn't run.
 - **Comms writer: a lost record** (2026-10-27). The worker evaluated `self._taken.append` before awaiting the queue, so a `flush()` during that wait (which replaces `_taken`) made the next record land on the discarded list. It now appends after the await (`tests/test_comms_writer.py`).
+- **Record & playback dropped; Polish moved up** (2026-10-27). The former Phase 6 (persisted `event` log, timeline scrubber, playback through the live renderer) is out of scope, together with the event sourcing that existed only for it: no `event` table, no event payload conventions, no replay test. None of it had been built. The operational tables are the record (§8.1). Golden rule 2 ("events are immutable and additive") became "contracts change additively", which §14 already practised, so rules 3–10 keep their numbers. Polish moved from 9 to 6, so it comes next: it gained the deferred globe look pass, and "cloud deploy" left it (Phase 2c delivered it). The SAR phases keep 7 (archive explore) and 8 (mission tasking); every phase reference here and in the design doc uses these numbers.
