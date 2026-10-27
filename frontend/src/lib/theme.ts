@@ -3,13 +3,15 @@ import { useSyncExternalStore } from 'react'
 export type ThemePreference = 'light' | 'dark' | 'system'
 export type ResolvedTheme = 'light' | 'dark'
 
-// Keep in sync with the pre-paint script in index.html.
-const STORAGE_KEY = 'satlab.theme'
+// Keep in sync with the pre-paint script in index.html. The key was renamed (2026-10-27) so that
+// every browser starts on the dark default once, whatever it stored under the old one.
+export const STORAGE_KEY = 'satlab.theme.v2'
+const LEGACY_STORAGE_KEY = 'satlab.theme'
 const DEFAULT_PREFERENCE: ThemePreference = 'dark'
 const media = () => window.matchMedia('(prefers-color-scheme: dark)')
 const listeners = new Set<() => void>()
 
-function readPreference(): ThemePreference {
+export function readPreference(): ThemePreference {
   try {
     const stored = localStorage.getItem(STORAGE_KEY)
     if (stored === 'light' || stored === 'dark' || stored === 'system') return stored
@@ -17,6 +19,14 @@ function readPreference(): ThemePreference {
     // storage unavailable (private mode): fall back to the default
   }
   return DEFAULT_PREFERENCE
+}
+
+function forgetLegacyPreference() {
+  try {
+    localStorage.removeItem(LEGACY_STORAGE_KEY)
+  } catch {
+    // storage unavailable: nothing to forget
+  }
 }
 
 let preference: ThemePreference = readPreference()
@@ -37,6 +47,11 @@ function apply() {
 media().addEventListener('change', () => {
   if (preference === 'system') apply()
 })
+
+forgetLegacyPreference()
+// The pre-paint script normally did this already; applying again keeps the default even if it
+// didn't run.
+apply()
 
 export function setThemePreference(next: ThemePreference) {
   preference = next
