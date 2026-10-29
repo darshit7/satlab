@@ -4,7 +4,7 @@ A real-time satellite mission control simulator. Positions and geometry come fro
 with **SGP4** for **your real location**. Nothing is faked. See [AGENTS.md](AGENTS.md) for the architecture,
 conventions, database design, and phase plan.
 
-**Status: Phase 6 (polish), part 6a: globe & map.** Pick a ground station (a preset, your geolocation, a map click,
+**Status: Phase 6 (polish), parts 6a (globe & map) and 6b (command sounds).** Pick a ground station (a preset, your geolocation, a map click,
 or typed lat/lon; a custom location is used for that session only, never saved) and every satellite above the horizon mask appears at once, with no search needed: on
 a 3D globe with the station's visibility cone (or the 2D map), a polar sky plot and an all-sky
 (looking-up) view, all linked by selection. Filter by type,
@@ -29,7 +29,9 @@ system check sends them unless a subsystem is red; otherwise they're held and an
 
 The globe is lit by the Sun computed for the sim time (the 2D map shades the night side too), and the
 selected satellite shows its footprint (the ground from which it is above the mask) and its orbit coloured
-by the link margin along the pass, with marks where it enters and leaves the station's cone.
+by the link margin along the pass, with marks where it enters and leaves the station's cone. In contact,
+the Communications card shows the downlink frequency and its live Doppler shift, and optional sound cues
+follow your commands: a chirp when one goes up, a chime when its answer comes back.
 
 ## Quick start
 

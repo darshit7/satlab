@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app.data.seed import packet_template_specs
+from app.data.seed import link_profile_specs, load_downlinks, packet_template_specs
 from app.models.ws import (
     AttitudeHealth,
     CommandStatusMessage,
@@ -37,7 +37,7 @@ def _table() -> CommsTable:
     rows = []
     for norad_id, templates in packet_template_specs().templates().items():
         rows += [(1000 * norad_id + i, norad_id, t) for i, t in enumerate(templates)]
-    return CommsTable.build(rows)
+    return CommsTable.build(rows, load_downlinks())
 
 
 TABLE = _table()
@@ -123,6 +123,54 @@ def test_contact_states() -> None:
 
     _step(rt, T0, None)
     assert rt.contact is None
+
+
+def test_contact_doppler() -> None:
+    """The downlink the station listens on and its Doppler shift: a link profile's from the link
+    state, else from the seeded frequency; nothing without either."""
+    rt, _ = _runtime()
+    iss = ContactLook(
+        norad_id=ISS,
+        elevation_deg=40.0,
+        above_mask=True,
+        range_m=1_200_000.0,
+        margin_db=None,
+        has_link=False,
+        range_rate_m_s=-5000.0,  # approaching
+    )
+    _step(rt, T0, iss)
+    assert rt.contact is not None
+    assert rt.contact.downlink_frequency_hz == 145_825_000
+    # -ṙ·f/c = 5000 * 145.825e6 / 299 792 458
+    assert rt.contact.doppler_hz == pytest.approx(2432.1, abs=0.05)
+
+    noaa = ContactLook(
+        norad_id=NOAA_20,
+        elevation_deg=40.0,
+        above_mask=True,
+        range_m=1_200_000.0,
+        margin_db=8.0,
+        has_link=True,
+        range_rate_m_s=-5000.0,
+        link_frequency_hz=7.812e9,
+        link_doppler_hz=130_290.5,
+    )
+    _step(rt, T0, noaa)
+    assert rt.contact is not None  # one computation: the link state's, as given
+    assert (rt.contact.downlink_frequency_hz, rt.contact.doppler_hz) == (7.812e9, 130_290.5)
+
+    _step(rt, T0, _look(GOES_16, margin=None))
+    assert rt.contact is not None and rt.contact.state == "no_template"
+    assert rt.contact.downlink_frequency_hz is None and rt.contact.doppler_hz is None
+
+
+def test_every_comms_satellite_has_a_downlink() -> None:
+    """Each satellite with templates gets a frequency: from its link profile or the seed."""
+    profiled = {p.norad_id for p in link_profile_specs().profiles}
+    seeded = set(load_downlinks())
+    with_templates = {s.norad_id for s in packet_template_specs().satellites}
+    assert with_templates <= profiled | seeded
+    assert not profiled & seeded  # one source of truth per satellite
 
 
 # ---------- beacons ----------

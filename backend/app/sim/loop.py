@@ -223,6 +223,7 @@ class _Look:
     elevation_deg: float
     above_mask: bool
     range_m: float
+    range_rate_m_s: float
     off_nadir_deg: float
     link: LinkState | None
 
@@ -646,6 +647,7 @@ class SessionRuntime:
                     el,
                     el >= self._mask_deg,
                     rng,
+                    rate,
                     float(off_nadir),
                     links.get(k),
                 )
@@ -722,6 +724,9 @@ class SessionRuntime:
             range_m=look.range_m,
             margin_db=look.link.margin_db if look.link is not None else None,
             has_link=look.link is not None,
+            range_rate_m_s=look.range_rate_m_s,
+            link_frequency_hz=look.link.frequency_hz if look.link is not None else None,
+            link_doppler_hz=look.link.doppler_hz if look.link is not None else None,
         )
 
     def _selected_health(self, links: LinkTable, sim_time: datetime) -> HealthState | None:

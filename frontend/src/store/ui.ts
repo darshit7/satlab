@@ -12,6 +12,9 @@ interface UiState {
   skyDialog: SkyView | null
   passesOpen: boolean
   sections: Record<SectionId, boolean>
+  /** Sound cues for command traffic. Not remembered: browsers start audio only after a click, so
+   *  a stored "on" would sit silent until then. */
+  sound: boolean
 
   togglePanel: (id: PanelId) => void
   openPanel: (id: PanelId) => void
@@ -19,6 +22,7 @@ interface UiState {
   setSkyDialog: (view: SkyView | null) => void
   setPassesOpen: (open: boolean) => void
   toggleSection: (id: SectionId) => void
+  setSound: (on: boolean) => void
 }
 
 /**
@@ -32,6 +36,7 @@ export const useUi = create<UiState>()(
       skyDialog: null,
       passesOpen: false,
       sections: DEFAULT_SECTIONS,
+      sound: false,
 
       togglePanel: (id) => set((s) => ({ panel: s.panel === id ? null : id })),
       openPanel: (id) => set({ panel: id }),
@@ -39,6 +44,7 @@ export const useUi = create<UiState>()(
       setSkyDialog: (skyDialog) => set({ skyDialog }),
       setPassesOpen: (passesOpen) => set({ passesOpen }),
       toggleSection: (id) => set((s) => ({ sections: { ...s.sections, [id]: !s.sections[id] } })),
+      setSound: (sound) => set({ sound }),
     }),
     {
       name: 'satlab.ui',

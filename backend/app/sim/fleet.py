@@ -6,7 +6,7 @@ and swaps it in with a single assignment; the sim loop only ever reads it.
 """
 
 import itertools
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -15,7 +15,7 @@ from numpy.typing import NDArray
 from sgp4.api import Satrec, SatrecArray
 
 from app.models.ws import SATELLITE_TYPES, SatelliteType
-from app.packets.table import CommsTable
+from app.packets.table import CommsTable, Downlink
 from app.packets.templates import CommandTemplate, TelemetryTemplate
 from app.sim.linkbudget import LinkProfile, LinkTable
 from app.sim.propagate import jd_to_datetime
@@ -54,6 +54,7 @@ class Fleet:
         rows: Iterable[FleetRow],
         profiles: Iterable[LinkProfile] = (),
         templates: Iterable[tuple[int, int, TelemetryTemplate | CommandTemplate]] = (),
+        downlinks: Mapping[int, Downlink] | None = None,
     ) -> "Fleet":
         kept: list[tuple[FleetRow, Satrec]] = []
         seen: set[int] = set()
@@ -81,7 +82,7 @@ class Fleet:
             index=index,
             array=SatrecArray(list(satrecs)) if satrecs else None,
             links=LinkTable.build(profiles, index, len(kept)),
-            comms=CommsTable.build(templates),
+            comms=CommsTable.build(templates, downlinks),
         )
 
     @classmethod

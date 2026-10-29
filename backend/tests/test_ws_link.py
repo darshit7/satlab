@@ -183,3 +183,23 @@ def test_track_recoloured_when_link_profiles_change(client: TestClient, wallops:
         again = ws.until("ground_track", lambda m: m["norad_id"] == NOAA_20)
     assert again["rag"] is None
     assert again["points"] == first["points"]  # same orbit, recoloured
+
+
+def test_contact_doppler_is_the_link_states(client: TestClient, wallops: dict) -> None:
+    with open_stream(client, wallops) as ws:
+        _paused_at(ws)
+        ws.send(type="set_selected", norad_id=NOAA_20)
+        snap = ws.until("snapshot", lambda m: m["contact"] is not None)
+    link, contact = _sat(snap, NOAA_20)["link"], snap["contact"]
+    assert contact["state"] == "active"
+    assert contact["downlink_frequency_hz"] == link["frequency_hz"] == 7.812e9
+    assert contact["doppler_hz"] == link["doppler_hz"] > 0  # rising: approaching
+
+    body = client.get("/api/packet-templates").json()
+    by_id = {s["norad_id"]: s for s in body["satellites"]}
+    assert by_id[NOAA_20]["downlink_frequency_hz"] is None  # its link profile's
+    iss = by_id[25544]  # seeded: no link profile
+    assert iss["downlink_frequency_hz"] == 145_825_000
+    assert iss["downlink_sources"]
+    assert all(s["url"].startswith("https://") for s in iss["downlink_sources"])
+

@@ -7,14 +7,15 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Self
 
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from app.db.models import GroundStation, LinkProfile, PacketTemplate, Satellite
-from app.packets.templates import CommandTemplate, Name, TelemetryTemplate
+from app.packets.table import Downlink
+from app.packets.templates import CommandTemplate, Name, SourceRef, TelemetryTemplate
 from app.sim.linkbudget import LinkProfile as LinkProfileModel
 
 log = logging.getLogger(__name__)
@@ -236,9 +237,21 @@ class TemplateSet(BaseModel):
 
 
 class SatelliteTemplatesSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     norad_id: int = Field(ge=1, le=999_999_999)
     satellite_name: str = Field(max_length=100)
     template_set: Name
+    # The downlink its contact's Doppler shift is computed for, when it has no link profile (a
+    # profile's frequency is that satellite's). Cited like everything else in the seed.
+    downlink_frequency_hz: float | None = Field(default=None, gt=1e6, lt=1e11)
+    downlink_sources: list[SourceRef] = Field(default_factory=list, max_length=5)
+
+    @model_validator(mode="after")
+    def _cited(self) -> Self:
+        if self.downlink_frequency_hz is not None and not self.downlink_sources:
+            raise ValueError(f"{self.satellite_name}: a downlink frequency needs a source")
+        return self
 
 
 class PacketTemplatesFile(BaseModel):
@@ -264,6 +277,14 @@ class PacketTemplatesFile(BaseModel):
             chosen = self.template_sets[s.template_set]
             result[s.norad_id] = [*chosen.telemetry, *chosen.commands]
         return result
+
+    def downlinks(self) -> dict[int, Downlink]:
+        """The satellites the seed gives a downlink frequency."""
+        return {
+            s.norad_id: Downlink(s.downlink_frequency_hz, tuple(s.downlink_sources))
+            for s in self.satellites
+            if s.downlink_frequency_hz is not None
+        }
 
 
 PACKET_TEMPLATES_FILE = SEED_DIR / "packet_templates.json"
@@ -332,6 +353,15 @@ def sync_packet_templates(db: Session, path: Path = PACKET_TEMPLATES_FILE) -> in
         )
     db.commit()
     return len(wanted)
+
+
+def load_downlinks(path: Path = PACKET_TEMPLATES_FILE) -> dict[int, Downlink]:
+    """Seeded downlink frequencies by NORAD ID; none (logged) when the seed doesn't read."""
+    try:
+        return packet_template_specs(path).downlinks()
+    except (OSError, ValueError, ValidationError):
+        log.exception("packet templates: could not read %s; no downlink frequencies", path.name)
+        return {}
 
 
 def load_packet_templates(

@@ -179,6 +179,10 @@ class ContactState(BaseModel):
     channel_modelled: bool  # a published link budget drives bit errors
     one_way_light_time_s: float | None  # null below the horizon
     archive: ArchiveStatus | None = None
+    # The downlink the station listens on (the link profile's, else the seed's) and its Doppler
+    # shift, received minus transmitted; null when the satellite has neither.
+    downlink_frequency_hz: float | None = None
+    doppler_hz: float | None = None
 
 
 class SunState(BaseModel):

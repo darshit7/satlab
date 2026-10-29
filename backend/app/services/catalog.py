@@ -22,6 +22,7 @@ from app.config import Settings
 from app.data.celestrak import CelestrakClient, CelestrakNotice, TleRecord, parse_tle_text
 from app.data.classify import classify
 from app.data.seed import (
+    load_downlinks,
     load_link_profiles,
     load_packet_templates,
     sync_link_profiles,
@@ -272,7 +273,10 @@ class CatalogService:
                 sync_link_profiles(db)
                 sync_packet_templates(db)
                 return Fleet.build(
-                    load_fleet_rows(db), load_link_profiles(db), load_packet_templates(db)
+                    load_fleet_rows(db),
+                    load_link_profiles(db),
+                    load_packet_templates(db),
+                    load_downlinks(),
                 )
 
         async with self._fleet_lock:

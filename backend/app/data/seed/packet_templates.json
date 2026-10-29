@@ -4,10 +4,11 @@
     "Framing standards are real (AX.25 v2.2, CCSDS 133.0-B-2 space packets, CCSDS 301.0 CUC time). Field layouts are real where layout_sourced is true (CroCube's own amateur-radio document; UWE-4's layout from the decoder SatNOGS runs; APRS text) and illustrative where it is false.",
     "ccsds_bus: the satellites with a published link budget get simulated housekeeping. The layout, APIDs and opcodes are illustrative (no public ICD for their housekeeping or commanding); the values come from the modelled subsystems (sim/subsystems.py). Corruption on the way down follows their real link margin.",
     "satnogs downlink: frames really received by SatNOGS stations, replayed during this station's pass, one per interval_s per template. CroCube's 90 s cadence is from its document; the ISS digipeater (it relays whatever hams send) and UWE-4 replay cadences are modelled.",
-    "Commands are simulated (nothing is transmitted). CroCube and UWE-4 publish no command set, so they are receive-only. N0CALL is the conventional placeholder callsign; APZSLB is an APRS experimental destination (APZxxx)."
+    "Commands are simulated (nothing is transmitted). CroCube and UWE-4 publish no command set, so they are receive-only. N0CALL is the conventional placeholder callsign; APZSLB is an APRS experimental destination (APZxxx).",
+    "downlink_frequency_hz: the downlink the contact's Doppler shift (and its tone) is computed for, for satellites without a link profile (those use the profile's frequency). Each value cites the satellite's own document or announcement and the SatNOGS DB transmitter, which lists it active."
   ],
-  "version": 1,
-  "verified_on": "2026-10-23",
+  "version": 2,
+  "verified_on": "2026-10-29",
   "template_sets": {
     "ccsds_bus": {
       "telemetry": [
@@ -336,8 +337,35 @@
     { "norad_id": 43010, "satellite_name": "FENGYUN 3D", "template_set": "ccsds_bus" },
     { "norad_id": 51850, "satellite_name": "GOES 18", "template_set": "ccsds_bus" },
     { "norad_id": 60133, "satellite_name": "GOES 19", "template_set": "ccsds_bus" },
-    { "norad_id": 25544, "satellite_name": "ISS (ZARYA)", "template_set": "iss_aprs" },
-    { "norad_id": 62394, "satellite_name": "CROCUBE", "template_set": "crocube" },
-    { "norad_id": 43880, "satellite_name": "UWE-4", "template_set": "uwe4" }
+    {
+      "norad_id": 25544,
+      "satellite_name": "ISS (ZARYA)",
+      "template_set": "iss_aprs",
+      "downlink_frequency_hz": 145825000,
+      "downlink_sources": [
+        { "title": "ARRL: simultaneous APRS and voice repeater on the ISS (145.825 MHz; paths RS0ISS, ARISS, APRSAT)", "url": "https://www.arrl.org/news/simultaneous-aprs-and-voice-repeater-on-the-international-space-station" },
+        { "title": "ISS in the SatNOGS DB (Mode V APRS, 145.825 MHz, AFSK 1200, active)", "url": "https://db.satnogs.org/satellite/XSKZ-5603-1870-9019-3066" }
+      ]
+    },
+    {
+      "norad_id": 62394,
+      "satellite_name": "CROCUBE",
+      "template_set": "crocube",
+      "downlink_frequency_hz": 436775000,
+      "downlink_sources": [
+        { "title": "CroCube amateur radio information (UHF 436.775 MHz, GFSK 9k6, AX.25)", "url": "https://crocube.hr/wp-content/uploads/2022/12/CroCube_AmateurRadioInfo_2024-09-15.pdf" },
+        { "title": "CroCube in the SatNOGS DB (Mode U GFSK 9k6 AX.25, 436.775 MHz, IARU coordinated, active)", "url": "https://db.satnogs.org/satellite/HADL-0708-3181-3728-3212" }
+      ]
+    },
+    {
+      "norad_id": 43880,
+      "satellite_name": "UWE-4",
+      "template_set": "uwe4",
+      "downlink_frequency_hz": 435600000,
+      "downlink_sources": [
+        { "title": "AMSAT-UK: UWE-4 frequency change to 435.600 MHz approved", "url": "https://amsat-uk.org/2019/01/10/uwe-4-cubesat-frequency-change-request-approved/" },
+        { "title": "UWE-4 in the SatNOGS DB (Mode U FSK 9600 AX.25, 435.600 MHz, IARU coordinated, active)", "url": "https://db.satnogs.org/satellite/WDIT-2736-3800-1720-7555" }
+      ]
+    }
   ]
 }

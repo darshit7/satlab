@@ -133,6 +133,10 @@ export interface ContactState {
   one_way_light_time_s: number | null
   /** The SatNOGS replay, for satellites whose downlink is real archived frames. */
   archive?: ArchiveStatus | null
+  /** The downlink the station listens on (the link profile's, else the seed's); null without one. */
+  downlink_frequency_hz?: number | null
+  /** Its Doppler shift, received minus transmitted (Hz); positive while approaching. */
+  doppler_hz?: number | null
 }
 
 /** Pass automation holds the antenna: from shortly before a booked pass's AOS until its LOS the
