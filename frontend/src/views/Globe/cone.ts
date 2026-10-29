@@ -69,17 +69,17 @@ export interface ConeSurface {
   positions: Float64Array
   /** Triangles (apex, rim i, rim i + 1). */
   indices: Uint16Array
-  /** Per vertex, 0–1: `apexAlpha` at the apex fading to nothing at the rim. */
+  /** Per vertex, 0–1: `apexAlpha` at the apex fading to `rimAlpha` at the rim. */
   alphas: Float32Array
 }
 
 /**
- * The side of a cone, open at the rim (no lid), as one fan from the apex: a faint fill that fades
- * from the station upwards, behind the wireframe.
+ * The side of a cone, open at the rim (no lid), as one fan from the apex: the translucent cone,
+ * fading from the station upwards.
  */
-export function coneSurface(shape: ConeShape, apexAlpha: number, slices = 96): ConeSurface {
+export function coneSurface(shape: ConeShape, apexAlpha: number, rimAlpha = 0, slices = 96): ConeSurface {
   const positions = new Float64Array((slices + 1) * 3)
-  const alphas = new Float32Array(slices + 1)
+  const alphas = new Float32Array(slices + 1).fill(rimAlpha)
   alphas[0] = apexAlpha
   for (let i = 0; i < slices; i++) {
     const a = (2 * Math.PI * i) / slices

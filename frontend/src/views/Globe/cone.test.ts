@@ -56,7 +56,7 @@ describe('coneSurface', () => {
   const [mask] = coneShapes(5, [], R, LEO)
 
   it('fans from the apex to the rim, with no lid', () => {
-    const surface = coneSurface(mask!, 0.06, 8)
+    const surface = coneSurface(mask!, 0.06, 0, 8)
     expect(surface.positions.length).toBe(9 * 3)
     expect(surface.indices.length).toBe(8 * 3)
     expect([...surface.positions.slice(0, 3)]).toEqual([0, 0, 0])
@@ -69,10 +69,11 @@ describe('coneSurface', () => {
     for (let t = 0; t < 8; t++) expect(surface.indices[t * 3]).toBe(0)
   })
 
-  it('fades from the apex to nothing at the rim', () => {
-    const { alphas } = coneSurface(mask!, 0.06, 8)
-    expect(alphas[0]).toBeCloseTo(0.06)
-    expect([...alphas.slice(1)].every((a) => a === 0)).toBe(true)
+  it('fades from the apex to the rim', () => {
+    const { alphas } = coneSurface(mask!, 0.3, 0.05, 8)
+    expect(alphas[0]).toBeCloseTo(0.3)
+    expect([...alphas.slice(1)].every((a) => Math.abs(a - 0.05) < 1e-6)).toBe(true)
+    expect(coneSurface(mask!, 0.3, undefined, 8).alphas[1]).toBe(0)
   })
 })
 

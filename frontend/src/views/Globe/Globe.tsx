@@ -71,8 +71,10 @@ const CAMERA_RANGE_M = 13_000_000
 const DEFAULT_SHELL_ALT_M = 1_000_000
 // Rebuild the cone when the selected satellite's height changes by about this much.
 const CONE_SHELL_STEP_M = 20_000
-// Lines from the station up to each cone's rim.
-const CONE_LINES = 8
+// The cones: a translucent surface fading from the station (apex) up to its rim, where a ring
+// marks where a satellite at that height enters and leaves.
+const CONE_FILL = { mask: { apex: 0.3, rim: 0.08 }, strong: { apex: 0.34, rim: 0.1 } } as const
+const CONE_RIM_ALPHA = { mask: 0.55, strong: 0.8 } as const
 // The camera looks at the station from the south and above, so the cone shows as a "V".
 const CAMERA_VIEW = new HeadingPitchRange(0, -0.8, CAMERA_RANGE_M)
 const LABEL_FONT = '600 12px "Nunito Variable", system-ui, sans-serif'
@@ -150,10 +152,11 @@ function packetColor(packet: PacketMessage, c: Palette): Color {
   }
 }
 
-/** The faint fill of a cone: its side only, fading from the station upwards, in east-north-up
- *  coordinates (per-vertex colour, so the fade needs no custom shader). */
-function coneFillGeometry(shape: ConeShape, color: Color, apexAlpha: number): Geometry {
-  const surface = coneSurface(shape, apexAlpha)
+/** A cone's surface: its side only, fading from the station upwards, in east-north-up coordinates
+ *  (per-vertex colour, so the fade needs no custom shader). */
+function coneFillGeometry(shape: ConeShape, color: Color): Geometry {
+  const fill = CONE_FILL[shape.kind]
+  const surface = coneSurface(shape, fill.apex, fill.rim)
   const n = surface.alphas.length
   const rgba = new Uint8Array(n * 4)
   const [r, g, b] = [color.red, color.green, color.blue].map((v) => Math.round(v * 255))
@@ -436,36 +439,36 @@ export function Globe({ onError }: { onError: () => void }) {
       const enu = FixedFrameTransforms.eastNorthUpToFixedFrame(station.position)
       coneToEnu = Matrix4.inverseTransformation(enu, new Matrix4())
       const colorOf = (s: ConeShape) => (s.kind === 'mask' ? c.mask : c.rag.green)
-      // The outline: rim + lines from the station up to it, the "V" in profile.
-      const outline = (s: ConeShape) =>
+      // The rim: where a satellite at this height enters (AOS) and leaves (LOS). A cylinder
+      // outline with no vertical lines and a zero bottom radius is just that ring.
+      const rim = (s: ConeShape) =>
         new GeometryInstance({
           geometry: new CylinderOutlineGeometry({
             length: s.heightM,
             topRadius: s.rimRadiusM,
             bottomRadius: 0,
             slices: 128,
-            numberOfVerticalLines: CONE_LINES,
+            numberOfVerticalLines: 0,
           }),
           // apex at the station, rim up at the satellite's height
           modelMatrix: Matrix4.multiplyByTranslation(enu, new Cartesian3(0, 0, s.heightM / 2), new Matrix4()),
           attributes: {
-            color: ColorGeometryInstanceAttribute.fromColor(colorOf(s).withAlpha(s.kind === 'mask' ? 0.7 : 0.9)),
+            color: ColorGeometryInstanceAttribute.fromColor(colorOf(s).withAlpha(CONE_RIM_ALPHA[s.kind])),
           },
         })
       cone = scene.primitives.add(
         new Primitive({
-          geometryInstances: shapes.map(outline),
+          geometryInstances: shapes.map(rim),
           appearance: new PerInstanceColorAppearance({ flat: true, translucent: true }),
-          asynchronous: false, // a handful of outlines: build them now, on this thread
+          asynchronous: false, // a handful of rings: build them now, on this thread
         }),
       ) as Primitive
-      // A faint fill behind it, fading upwards. Hidden while the camera is inside (see the frame
-      // loop): a fill all around the camera, as a GEO cone's is, would tint the whole view.
+      // The cone itself, fading upwards. Hidden while the camera is inside (see the frame loop):
+      // a surface all around the camera, as a GEO cone's is, would tint the whole view; the rim
+      // still shows where the cone ends.
       coneFill = scene.primitives.add(
         new Primitive({
-          geometryInstances: shapes.map(
-            (s) => new GeometryInstance({ geometry: coneFillGeometry(s, colorOf(s), s.kind === 'mask' ? 0.06 : 0.08), modelMatrix: enu }),
-          ),
+          geometryInstances: shapes.map((s) => new GeometryInstance({ geometry: coneFillGeometry(s, colorOf(s)), modelMatrix: enu })),
           appearance: new PerInstanceColorAppearance({ flat: true, translucent: true, closed: false }),
           asynchronous: false,
         }),
