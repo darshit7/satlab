@@ -96,6 +96,7 @@ export function drawGrid(
   mask_deg: number,
   ringLabels: boolean,
   font: string,
+  shown_deg: number | null = null,
 ) {
   const ring = (el: number) => Math.hypot(...sub(project(0, el, p), [p.cx, p.cy]))
   ctx.save()
@@ -127,6 +128,17 @@ export function drawGrid(
     ctx.arc(p.cx, p.cy, ring(mask_deg), 0, 2 * Math.PI)
     ctx.stroke()
     ctx.setLineDash([])
+  }
+  // the Overhead filter's floor, when it shows only what is higher than the mask
+  if (shown_deg !== null && shown_deg > mask_deg && shown_deg < 90) {
+    ctx.strokeStyle = c.ink
+    ctx.globalAlpha = 0.55
+    ctx.lineWidth = 1.25
+    ctx.beginPath()
+    ctx.arc(p.cx, p.cy, ring(shown_deg), 0, 2 * Math.PI)
+    ctx.stroke()
+    ctx.globalAlpha = 1
+    ctx.lineWidth = 1
   }
 
   ctx.fillStyle = c.label

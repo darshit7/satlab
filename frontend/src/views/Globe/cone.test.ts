@@ -45,6 +45,15 @@ describe('coneShapes', () => {
     expect(coneShapes(5, [], 0, LEO)).toEqual([])
   })
 
+  it('adds the Overhead filter\'s cone only above the mask', () => {
+    expect(coneShapes(5, [], R, LEO, 60).map((s) => [s.kind, s.elevationDeg])).toEqual([
+      ['mask', 5],
+      ['shown', 60],
+    ])
+    expect(coneShapes(5, [], R, LEO, 5).map((s) => s.kind)).toEqual(['mask']) // the filter is the mask
+    expect(coneShapes(5, [], R, LEO, null).map((s) => s.kind)).toEqual(['mask'])
+  })
+
   it('keeps what lies under the mask out', () => {
     expect(coneShapes(10, [[2, 8]], R, LEO).map((s) => s.kind)).toEqual(['mask'])
     // a band reaching under the mask is green from the mask up

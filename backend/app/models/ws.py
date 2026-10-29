@@ -211,6 +211,9 @@ class Snapshot(BaseModel):
     contact: ContactState | None = None  # with the selected satellite
     automation: AutomationState | None = None  # while a booked pass holds the antenna
     sun: SunState | None = None
+    # The elevation floor the session filter applies to the satellites shown: max(horizon mask,
+    # the filter's minimum elevation). Tracked and selected satellites are shown below it too.
+    shown_min_elevation_deg: float | None = None
 
 
 class TrackCrossing(BaseModel):

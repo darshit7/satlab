@@ -73,8 +73,8 @@ const DEFAULT_SHELL_ALT_M = 1_000_000
 const CONE_SHELL_STEP_M = 20_000
 // The cones: a translucent surface fading from the station (apex) up to its rim, where a ring
 // marks where a satellite at that height enters and leaves.
-const CONE_FILL = { mask: { apex: 0.3, rim: 0.08 }, strong: { apex: 0.34, rim: 0.1 } } as const
-const CONE_RIM_ALPHA = { mask: 0.55, strong: 0.8 } as const
+const CONE_FILL = { mask: { apex: 0.3, rim: 0.08 }, strong: { apex: 0.34, rim: 0.1 }, shown: { apex: 0.2, rim: 0.06 } } as const
+const CONE_RIM_ALPHA = { mask: 0.55, strong: 0.8, shown: 0.6 } as const
 // The camera looks at the station from the south and above, so the cone shows as a "V".
 const CAMERA_VIEW = new HeadingPitchRange(0, -0.8, CAMERA_RANGE_M)
 const LABEL_FONT = '600 12px "Nunito Variable", system-ui, sans-serif'
@@ -428,17 +428,19 @@ export function Globe({ onError }: { onError: () => void }) {
       }
       const mask = snapshot.observer.horizon_mask_deg
       const bands = selected?.link?.strong_link_elev_bands_deg ?? []
+      // the Overhead filter's floor, as the server applies it (only drawn above the mask)
+      const shown = snapshot.shown_min_elevation_deg ?? null
       const stationRadius = Cartesian3.magnitude(station.position)
       const shellAlt = selected ? selected.alt_m : DEFAULT_SHELL_ALT_M
-      const key = `${mask}|${JSON.stringify(bands)}|${Math.round(shellAlt / CONE_SHELL_STEP_M)}|${theme}`
+      const key = `${mask}|${JSON.stringify(bands)}|${shown}|${Math.round(shellAlt / CONE_SHELL_STEP_M)}|${theme}`
       if (key === coneKey) return
       coneKey = key
       removeCone()
-      const shapes = coneShapes(mask, bands, stationRadius, stationRadius + shellAlt)
+      const shapes = coneShapes(mask, bands, stationRadius, stationRadius + shellAlt, shown)
       if (shapes.length === 0) return
       const enu = FixedFrameTransforms.eastNorthUpToFixedFrame(station.position)
       coneToEnu = Matrix4.inverseTransformation(enu, new Matrix4())
-      const colorOf = (s: ConeShape) => (s.kind === 'mask' ? c.mask : c.rag.green)
+      const colorOf = (s: ConeShape) => (s.kind === 'mask' ? c.mask : s.kind === 'shown' ? c.ink : c.rag.green)
       // The rim: where a satellite at this height enters (AOS) and leaves (LOS). A cylinder
       // outline with no vertical lines and a zero bottom radius is just that ring.
       const rim = (s: ConeShape) =>
@@ -778,9 +780,11 @@ export function Globe({ onError }: { onError: () => void }) {
 }
 
 /** What the cones, the footprint and the selection's orbit colours mean. The inner cone and the
- *  link-coloured orbit only exist for a selected satellite with a link budget. */
+ *  link-coloured orbit only exist for a selected satellite with a link budget; the shown cone only
+ *  while the Overhead filter's minimum elevation is above the mask. */
 function GlobeLegend() {
   const mask = useMission((s) => s.snapshot?.observer.horizon_mask_deg)
+  const shown = useMission((s) => s.snapshot?.shown_min_elevation_deg ?? null)
   const selected = (s: ReturnType<typeof useMission.getState>) => s.snapshot?.satellites.find((x) => x.norad_id === s.selectedId)
   const strong = useMission((s) => (selected(s)?.link?.strong_link_elev_bands_deg.length ?? 0) > 0)
   const linked = useMission((s) => Boolean(selected(s)?.link))
@@ -792,6 +796,12 @@ function GlobeLegend() {
         <span className="size-2.5 shrink-0 rounded-full ring-2 ring-gray-400 dark:ring-gray-500" aria-hidden />
         In view: above the {mask}° horizon mask
       </div>
+      {shown !== null && shown > mask && (
+        <div className="flex items-center gap-2">
+          <span className="size-2.5 shrink-0 rounded-full ring-2 ring-gray-900/60 dark:ring-gray-100/60" aria-hidden />
+          Shown: above {shown}° (Overhead filter)
+        </div>
+      )}
       {strong && (
         <div className="flex items-center gap-2">
           <span className="size-2.5 shrink-0 rounded-full ring-2 ring-primary-600 dark:ring-primary-400" aria-hidden />

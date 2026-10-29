@@ -497,6 +497,7 @@ class SessionRuntime:
             contact=self.comms.contact,
             automation=self.automation.state(sim_time),
             sun=sun_state(sim_time),
+            shown_min_elevation_deg=min_elev,
         )
         self.tick += 1
         self._publish(snapshot)

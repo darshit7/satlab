@@ -182,6 +182,9 @@ export interface Snapshot {
   automation?: AutomationState | null
   /** For day/night shading (absent from an older server). */
   sun?: SunState | null
+  /** The elevation floor the session filter applies to what's shown: max(mask, filter). Tracked
+   *  and selected satellites are shown below it too. */
+  shown_min_elevation_deg?: number | null
 }
 
 /** Where the orbit crosses this station's horizon mask, refined like a pass's AOS / LOS. */

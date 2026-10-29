@@ -69,7 +69,7 @@ export function SkyCanvas({ label, kind, eastLeft, ringLabels, compact = false, 
       const margin = compact ? 14 : 18
       const p: SkyProjection = { cx: size / 2, cy: size / 2, radius: size / 2 - margin, eastLeft, kind }
       const mask_deg = snapshot?.observer.horizon_mask_deg ?? 0
-      drawGrid(ctx, p, c, mask_deg, ringLabels && !compact, font)
+      drawGrid(ctx, p, c, mask_deg, ringLabels && !compact, font, snapshot?.shown_min_elevation_deg ?? null)
       hits = []
       if (!snapshot || !clockSample) return
       draw({

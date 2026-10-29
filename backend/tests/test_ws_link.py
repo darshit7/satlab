@@ -203,3 +203,16 @@ def test_contact_doppler_is_the_link_states(client: TestClient, wallops: dict) -
     assert iss["downlink_sources"]
     assert all(s["url"].startswith("https://") for s in iss["downlink_sources"])
 
+
+def test_snapshot_carries_the_shown_floor(client: TestClient, wallops: dict) -> None:
+    """The elevation floor the session filter applies: the mask, until the filter raises it."""
+    with open_stream(client, wallops) as ws:
+        snap = _paused_at(ws)
+        assert snap["shown_min_elevation_deg"] == snap["observer"]["horizon_mask_deg"] == 5.0
+        ws.send(
+            type="set_filter",
+            types=["station", "weather", "comms", "navigation", "sar", "other"],
+            min_elevation_deg=60,
+        )
+        snap = ws.until("snapshot", lambda m: m["shown_min_elevation_deg"] == 60)
+    assert all(s["elevation_deg"] >= 60 for s in snap["satellites"])  # nothing pinned here
