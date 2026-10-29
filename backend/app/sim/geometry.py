@@ -213,15 +213,42 @@ def geodetic(r_itrf_m: Floats) -> tuple[Floats, Floats, Floats]:
     return np.degrees(lat), np.degrees(np.arctan2(y, x)), height
 
 
+def mask_footprint_deg(r_itrf_m: Floats, mask_deg: float) -> Floats:
+    """The satellite's footprint: Earth central angle (°) from its sub-point to where it stands at
+    ``mask_deg`` elevation, i.e. the ground area from which it is above the mask.
+
+    Spherical geometry, λ = arccos(R/r · cos ε) - ε, with R the ellipsoid's geocentric radius under
+    the satellite: it ignores the tilt between the geocentric and the geodetic vertical, so the rim
+    sits within ~0.2° of elevation of the ellipsoidal test ``observe`` makes.
+    """
+    r = np.linalg.norm(r_itrf_m, axis=-1)
+    b = WGS84_A_M * (1 - WGS84_F)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        sin_lat = r_itrf_m[..., 2] / r  # geocentric latitude
+        radius = WGS84_A_M * b / np.sqrt((b * b) * (1 - sin_lat**2) + WGS84_A_M**2 * sin_lat**2)
+        mask = math.radians(mask_deg)
+        angle = np.arccos(np.clip(radius / r * math.cos(mask), -1.0, 1.0)) - mask
+    return np.degrees(np.maximum(angle, 0.0))
+
+
 @dataclass(frozen=True)
 class GroundTrack:
-    """Orbit samples, evenly spaced in time from ``start`` to ``end`` (minus any SGP4 dropped)."""
+    """Orbit samples, evenly spaced in time from ``start`` to ``end`` (minus any SGP4 dropped).
+
+    The arrays are aligned with ``points`` and give the link geometry from the observer there.
+    """
 
     start: datetime
     end: datetime
     points: list[tuple[float, float]]  # (lon_deg, lat_deg)
     alt_m: list[float]  # height above the WGS84 ellipsoid, per point
     above_mask: list[bool]  # per point: above the observer's horizon mask (the in-view part)
+    offsets_s: Floats  # seconds from ``start``
+    elevation_deg: Floats
+    range_m: Floats
+    range_rate_m_s: Floats
+    off_nadir_deg: Floats
+    complete: bool  # no sample dropped: still evenly spaced in time
 
 
 def ground_track(
@@ -237,15 +264,21 @@ def ground_track(
     height and whether ``observer`` sees it above the mask, through the tick's vectorized chain."""
     start = center - timedelta(seconds=elements.period_s * orbits_before)
     end = center + timedelta(seconds=elements.period_s * orbits_after)
-    obs = observe(
-        SatrecArray([elements.satellite.model]), linspace_epochs(start, end, n_points), observer
-    )
+    when = linspace_epochs(start, end, n_points)
+    obs = observe(SatrecArray([elements.satellite.model]), when, observer)
     lat, lon, alt = geodetic(obs.r_itrf_m[0])
-    points: list[tuple[float, float]] = []
-    alt_m: list[float] = []
-    above_mask: list[bool] = []
-    for i in np.flatnonzero(obs.ok[0]):  # SGP4 yields nothing past decay
-        points.append((round(float(lon[i]), 4), round(float(lat[i]), 4)))
-        alt_m.append(round(float(alt[i]), 1))
-        above_mask.append(bool(obs.elevation_deg[0, i] >= mask_deg))
-    return GroundTrack(start=start, end=end, points=points, alt_m=alt_m, above_mask=above_mask)
+    kept = np.flatnonzero(obs.ok[0])  # SGP4 yields nothing past decay
+    elevation = obs.elevation_deg[0, kept]
+    return GroundTrack(
+        start=start,
+        end=end,
+        points=[(round(float(lon[i]), 4), round(float(lat[i]), 4)) for i in kept],
+        alt_m=[round(float(alt[i]), 1) for i in kept],
+        above_mask=[bool(e >= mask_deg) for e in elevation],
+        offsets_s=when.offsets_s[kept],
+        elevation_deg=elevation,
+        range_m=obs.range_m[0, kept],
+        range_rate_m_s=obs.range_rate_m_s[0, kept],
+        off_nadir_deg=off_nadir_deg(obs.r_itrf_m[0, kept], observer.itrf_m),
+        complete=len(kept) == len(when),
+    )

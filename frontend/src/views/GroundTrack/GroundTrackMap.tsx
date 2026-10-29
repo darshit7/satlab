@@ -9,7 +9,17 @@ import {
 } from 'maplibre-gl'
 import type { Feature, FeatureCollection } from 'geojson'
 import { useEffect, useRef } from 'react'
-import { positionOnTrack, splitAntimeridian, wrapLon, type TimedTrack } from '../../lib/geo'
+import {
+  nightPolygon,
+  positionOnTrack,
+  smallCircle,
+  splitAntimeridian,
+  subsolarAt,
+  terminatorLine,
+  wrapLon,
+  type LonLat,
+  type TimedTrack,
+} from '../../lib/geo'
 import { currentResolvedTheme, onThemeChange, type ResolvedTheme } from '../../lib/theme'
 import { estimateSimMs } from '../../lib/time'
 import { token } from '../../lib/tokens'
@@ -27,6 +37,8 @@ const STYLE_URLS: Record<ResolvedTheme, string> = {
 // Map labels are drawn by MapLibre from the basemap's glyph server, so they use its font.
 const LABEL_FONT = import.meta.env.VITE_MAP_LABEL_FONT ?? 'Noto Sans Regular'
 const FRAME_INTERVAL_MS = 50
+// Redraw the night side once the subsolar point has moved this far.
+const NIGHT_STEP_DEG = 0.1
 
 /** Map colors per theme, from the same tokens as the UI: accent for selection, gray for the rest. */
 function palette(theme: ResolvedTheme) {
@@ -40,6 +52,10 @@ function palette(theme: ResolvedTheme) {
     station: token(light ? 'gray-900' : 'gray-100'),
     draft: token(light ? 'gray-500' : 'gray-400'),
     label: token(light ? 'gray-700' : 'gray-300'),
+    /** The night side: a shade over the basemap, light enough to read through. */
+    night: token('gray-900'),
+    nightOpacity: light ? 0.12 : 0.5,
+    terminator: token(light ? 'gray-400' : 'gray-500'),
   }
 }
 type Palette = ReturnType<typeof palette>
@@ -87,9 +103,22 @@ function loadStyle(theme: ResolvedTheme): Promise<LoadedStyle> {
 }
 
 function addLayers(map: MapLibreMap, labels: boolean, c: Palette) {
-  for (const id of ['tracks', 'visible', 'station', 'draft', 'sats']) {
+  for (const id of ['night', 'terminator', 'tracks', 'visible', 'station', 'draft', 'footprint', 'sats']) {
     map.addSource(id, { type: 'geojson', data: emptyFC() })
   }
+  // Night from the server's Sun, under everything the operator works with.
+  map.addLayer({
+    id: 'night-fill',
+    type: 'fill',
+    source: 'night',
+    paint: { 'fill-color': c.night, 'fill-opacity': c.nightOpacity },
+  })
+  map.addLayer({
+    id: 'night-line',
+    type: 'line',
+    source: 'terminator',
+    paint: { 'line-color': c.terminator, 'line-width': 1, 'line-opacity': 0.7 },
+  })
   map.addLayer({
     id: 'tracks-line',
     type: 'line',
@@ -124,6 +153,14 @@ function addLayers(map: MapLibreMap, labels: boolean, c: Palette) {
     type: 'circle',
     source: 'station',
     paint: { 'circle-radius': 5, 'circle-color': c.station, 'circle-stroke-color': c.ground, 'circle-stroke-width': 2 },
+  })
+  // The selection's footprint: where on the ground it is above the mask (the server's radius).
+  map.addLayer({
+    id: 'footprint-line',
+    type: 'line',
+    source: 'footprint',
+    layout: { 'line-join': 'round' },
+    paint: { 'line-color': c.accent, 'line-width': 1.5, 'line-opacity': 0.7 },
   })
   map.addLayer({
     id: 'sats-halo',
@@ -221,6 +258,24 @@ export function GroundTrackMap() {
     let renderedSnapshot: Snapshot | null = null
     let renderedSelection: number | null = null
     let renderedTracked: unknown = null
+    let nightAt: LonLat | null = null
+
+    /** The night side and its edge, redrawn when the subsolar point has moved enough to see. */
+    const renderNight = (subsolar: LonLat | null) => {
+      const last = nightAt
+      if (subsolar && last && Math.abs(wrapLon(subsolar[0] - last[0])) < NIGHT_STEP_DEG && Math.abs(subsolar[1] - last[1]) < NIGHT_STEP_DEG) {
+        return
+      }
+      if (!subsolar && !last) return
+      nightAt = subsolar
+      void source('night')?.setData(
+        subsolar ? { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [nightPolygon(subsolar)] } } : emptyFC(),
+      )
+      void source('terminator')?.setData(
+        subsolar ? { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: terminatorLine(subsolar) } } : emptyFC(),
+      )
+    }
+
     const renderSatellites = (now: number) => {
       frame = requestAnimationFrame(renderSatellites)
       if (now - lastFrameAt < FRAME_INTERVAL_MS) return
@@ -229,17 +284,24 @@ export function GroundTrackMap() {
       if (!snapshot || !clockSample) {
         void source('sats')?.setData(emptyFC())
         void source('visible')?.setData(emptyFC())
+        void source('footprint')?.setData(emptyFC())
+        renderNight(null)
         renderedSnapshot = null
         return
       }
       const pinned = new Set(tracked.map((t) => t.norad_id))
       if (selectedId !== null) pinned.add(selectedId)
       const simMs = estimateSimMs(clockSample, now)
+      // the Sun, tweened along the server's rates between snapshots
+      renderNight(snapshot.sun ? subsolarAt(snapshot.sun, clockSample.simMs, simMs) : null)
+      let footprint: LonLat[][] = []
       const features: Feature[] = snapshot.satellites
         .filter((sat) => pinned.has(sat.norad_id))
         .map((sat) => {
           const track = tracks[sat.norad_id]
-          const position = (track && positionOnTrack(timed(track), simMs)) ?? [sat.lon_deg, sat.lat_deg]
+          const position = (track && positionOnTrack(timed(track), simMs)) ?? ([sat.lon_deg, sat.lat_deg] as LonLat)
+          const radius = sat.norad_id === selectedId ? sat.footprint_radius_deg : null
+          if (radius) footprint = splitAntimeridian(smallCircle(position, radius).map(([lon, lat]): LonLat => [wrapLon(lon), lat]))
           return {
             type: 'Feature',
             properties: { norad_id: sat.norad_id, name: sat.name, selected: sat.norad_id === selectedId },
@@ -247,6 +309,9 @@ export function GroundTrackMap() {
           }
         })
       void source('sats')?.setData({ type: 'FeatureCollection', features })
+      void source('footprint')?.setData(
+        footprint.length ? { type: 'Feature', properties: {}, geometry: { type: 'MultiLineString', coordinates: footprint } } : emptyFC(),
+      )
 
       if (snapshot !== renderedSnapshot || selectedId !== renderedSelection || tracked !== renderedTracked) {
         renderedSnapshot = snapshot
@@ -294,6 +359,7 @@ export function GroundTrackMap() {
         renderTracks()
         renderStation()
         renderedSnapshot = null // the new style's sources start empty
+        nightAt = null
       })
       m.once('load', () => {
         frame = requestAnimationFrame(renderSatellites)

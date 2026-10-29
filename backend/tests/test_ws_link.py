@@ -7,7 +7,8 @@ from fastapi.testclient import TestClient
 
 from app.data.celestrak import parse_tle_text
 from app.db.base import get_sessionmaker
-from app.services.catalog import upsert_tle_records
+from app.services.catalog import load_fleet_rows, upsert_tle_records
+from app.sim.fleet import Fleet
 from tests.conftest import FLEET_2026_TLE, WALLOPS
 from tests.test_ws import Stream, open_stream, paused
 
@@ -134,3 +135,51 @@ def test_link_profiles_endpoint(client: TestClient, wallops: dict) -> None:
     assert noaa["norad_id"] == NOAA_20
     assert noaa["satellite_name"] == "NOAA 20 (JPSS-1)"
     assert noaa["sources"] and noaa["sources"][0]["url"].startswith("https://")
+
+
+def test_track_carries_link_state_and_crossings(client: TestClient, wallops: dict) -> None:
+    """The selection's orbit: link state per point (the snapshot's evaluation) and exact mask
+    crossings matching the pass; a satellite without a profile has neither colour nor rim."""
+    with open_stream(client, wallops) as ws:
+        _paused_at(ws)
+        ws.send(type="set_selected", norad_id=NOAA_20)
+        track = ws.until("ground_track", lambda m: m["norad_id"] == NOAA_20)
+        arc = ws.find("pass_arc", lambda m: m["norad_id"] == NOAA_20)
+        snap = ws.until("snapshot", lambda m: m["health"] is not None)
+
+        ws.send(type="set_selected", norad_id=GOES_16)
+        goes_track = ws.until("ground_track", lambda m: m["norad_id"] == GOES_16)
+
+    rag, above = track["rag"], track["above_mask"]
+    assert len(rag) == len(above) == len(track["points"])
+    assert all(r == "red" for r, up in zip(rag, above, strict=True) if not up)  # below the mask
+    assert any(r != "red" for r, up in zip(rag, above, strict=True) if up)
+
+    when = datetime.fromisoformat
+    for kind in ("aos", "los"):  # the track can hold later passes too
+        times = [when(c["time"]) for c in track["crossings"] if c["kind"] == kind]
+        pass_time = when(arc[f"{kind}_time"])
+        assert min(abs((t - pass_time).total_seconds()) for t in times) < 1.0
+
+    noaa = _sat(snap, NOAA_20)
+    assert 22 < noaa["footprint_radius_deg"] < 24.5  # ~830 km up, 5° mask: about 23°
+    assert all(s["footprint_radius_deg"] is None for s in snap["satellites"] if s is not noaa)
+    sun = snap["sun"]
+    assert -23.5 < sun["subsolar_lat_deg"] < 23.5 and -180 <= sun["subsolar_lon_deg"] <= 180
+
+    assert goes_track["rag"] is None
+    assert goes_track["crossings"] == []  # geostationary: always up
+
+
+def test_track_recoloured_when_link_profiles_change(client: TestClient, wallops: dict) -> None:
+    with open_stream(client, wallops) as ws:
+        _paused_at(ws)
+        ws.send(type="set_selected", norad_id=NOAA_20)
+        first = ws.until("ground_track", lambda m: m["norad_id"] == NOAA_20)
+        assert first["rag"] is not None
+        catalog = client.app.state.catalog
+        with get_sessionmaker()() as db:
+            catalog.fleet = Fleet.build(load_fleet_rows(db))  # no link profiles any more
+        again = ws.until("ground_track", lambda m: m["norad_id"] == NOAA_20)
+    assert again["rag"] is None
+    assert again["points"] == first["points"]  # same orbit, recoloured

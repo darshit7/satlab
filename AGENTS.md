@@ -57,12 +57,12 @@ An end-to-end, real-time **satellite mission control simulator** (portfolio / le
 | Sky plot / all-sky / indicators | **Canvas 2D** (+ **D3** when a view earns it) |
 | Client state | **Zustand** |
 | Styling / design system | **Tailwind CSS v4** + **lucide-react** icons — rules in [design-system.md](design-system.md) |
-| Transport | **WebSocket** (JSON; msgpack later if needed) |
+| Transport | **WebSocket** (JSON) |
 | SAR access | **STAC** via **pystac-client** |
 | SAR rasters | **rioxarray / rasterio / stackstac** |
 | Change detection v1 | **NumPy / scikit-image** (log-ratio) |
 | Change detection v2 (opt) | **PyTorch** (Siamese/U-Net) |
-| Runtime | Local-first; optional **docker-compose** |
+| Runtime | Local-first; two container images on **Azure Container Apps** (Phase 2c) |
 | Lint/format (py) | **ruff** |
 | Test (py / js) | **pytest** / **vitest** |
 
@@ -74,7 +74,6 @@ An end-to-end, real-time **satellite mission control simulator** (portfolio / le
 satellite-mission-control/
 ├─ CLAUDE.md                 # this file
 ├─ README.md
-├─ docker-compose.yml        # optional, for parity (Phase 6)
 ├─ .env.example
 ├─ .github/workflows/        # ci.yml (PR checks), deploy.yml (main → GHCR → Azure Container Apps)
 ├─ scripts/smoke.sh          # end-to-end smoke test of a running web+API pair (CI and post-deploy)
@@ -452,7 +451,7 @@ Still to do, when the feature arrives:
 
 Each phase is a **vertical slice** (backend + WebSocket + UI) that runs on its own. Mark the current phase here as you go.
 
-> **Current phase: _Phase 5 — Scheduling & alarms._** Phases 1–4b are done and deployed (4b merged in PR #10). Phase 5 (pass automation) is implemented on `dev` and awaiting its merge; Phase 6 (polish) is next.
+> **Current phase: _Phase 6 — Polish_, sub-phase 6a (globe & map) implemented on `dev`.** Phases 1–4b are done and deployed (4b merged in PR #10); Phase 5 (pass automation) is on `dev` awaiting its merge. 6b (Doppler audio) and 6c (TimescaleDB) follow.
 >
 > Phase numbers are for this plan and the docs only: the UI never shows "Phase N" (`frontend/src/lib/copy.test.ts` guards it).
 
@@ -465,7 +464,10 @@ Each phase is a **vertical slice** (backend + WebSocket + UI) that runs on its o
   - **4a — Globe.** **3D globe (Cesium) + the visibility "V" cone** (design §5.3–5.4): outer cone = above the horizon mask, inner cone = green-margin region; satellites enter at one rim (AOS) and leave at the far rim (LOS), changing color at cone boundaries; the full orbital arc is drawn with the out-of-window part faded; the user can lock onto one active contact while the others dim. The globe joins the 2D map rather than replacing it: a **2D/3D toggle, 3D by default**.
   - **4b — Comms.** Per-satellite AX.25/CCSDS templates; command uplink (sim) + telemetry downlink; SatNOGS real-frame replay; packet animation; channel effects. DB: `packet_template`, `command`, `telemetry_frame`.
 - **Phase 5 — Scheduling & alarms.** Queue command for a future window; AOS trigger; auto system check; transmit-if-green / alarm-if-red. DB: `alarm` (+ `command.scheduled_aos`).
-- **Phase 6 — Polish.** Cesium footprints, day/night terminator, naked-eye model, globe look (colours, orbits, cones, labels), msgpack, TimescaleDB (Apache-2 feature set on Neon), docker-compose parity.
+- **Phase 6 — Polish**, in three parts (2026-10-28; naked-eye model, msgpack and docker-compose dropped, §14):
+  - **6a — Globe & map.** Globe look pass (muted, token-toned: atmosphere and Sun-driven shading, RAG-coloured glowing orbit with AOS/LOS marks, dimmed tracked orbits and labels, names on hover, station icon, selection halo, faint cone fill); the selection's footprint and day/night shading on the globe and the 2D map.
+  - **6b — Doppler audio.** The contact's carrier tone and packet bursts, pitched by the streamed Doppler shift.
+  - **6c — TimescaleDB.** `telemetry_frame` as a hypertable on Postgres where the extension exists (Apache-2 feature set on Neon); storage only.
 - **Phase 7 — SAR archive explore (Flow 1).** STAC search (Sentinel-1 RTC / Umbra) for AOI + two dates; swipe compare; v1 log-ratio change detection; flagged regions. **Enable PostGIS on the existing Neon DB** (geometry columns + GiST). DB: `sar_scene`, `change_result`.
 - **Phase 8 — SAR mission tasking (Flow 2).** Simulated tasking over the real acquisition plan; sim states tasked→acquiring→downlink→processing; STAC polling; "waiting for real data" gate; unlock compare when the real scene lands. DB: `sar_task`.
 
@@ -630,3 +632,6 @@ When you close a gap, delete its line here.
 - **Dark theme reset** (2026-10-27). Dark was already the default, but a choice stored earlier (Light, or System on a light OS) still won. The storage key moved from `satlab.theme` to `satlab.theme.v2` (the pre-paint script and `lib/theme.ts`), so every browser starts on dark once; the old key is removed. `theme.ts` also applies the theme when it loads, so the default holds even if the pre-paint script didn't run.
 - **Comms writer: a lost record** (2026-10-27). The worker evaluated `self._taken.append` before awaiting the queue, so a `flush()` during that wait (which replaces `_taken`) made the next record land on the discarded list. It now appends after the await (`tests/test_comms_writer.py`).
 - **Record & playback dropped; Polish moved up** (2026-10-27). The former Phase 6 (persisted `event` log, timeline scrubber, playback through the live renderer) is out of scope, together with the event sourcing that existed only for it: no `event` table, no event payload conventions, no replay test. None of it had been built. The operational tables are the record (§8.1). Golden rule 2 ("events are immutable and additive") became "contracts change additively", which §14 already practised, so rules 3–10 keep their numbers. Polish moved from 9 to 6, so it comes next: it gained the deferred globe look pass, and "cloud deploy" left it (Phase 2c delivered it). The SAR phases keep 7 (archive explore) and 8 (mission tasking); every phase reference here and in the design doc uses these numbers.
+- **Phase 6 scope** (2026-10-28). Polish ships as **6a** globe & map, **6b** Doppler audio and **6c** TimescaleDB, each merged on its own. Dropped from the plan: the **naked-eye model** (no maintained open catalogue of satellite brightness exists, and a guessed magnitude would break the honesty rules; the UI keeps saying that "in view" is geometric), **msgpack** (JSON hasn't been a bottleneck) and **docker-compose parity** (CI's `images` job and §5's commands already run the two images together). Honesty rule 3 stands as copy, without a filter.
+- **Phase 6a — contract** (2026-10-28). `Snapshot.sun: SunState | null` (`subsolar_lat_deg`, `subsolar_lon_deg`, `lat_rate_deg_s`, `lon_rate_deg_s`): the Almanac Sun of `sim/sun.py` rotated Earth-fixed by GMST like SGP4 positions (`subsolar_point`, checked against skyfield's bundled JPL kernels to 0.05°), with rates over the next 60 s of sim time; clients advance it by the estimated sim time between snapshots, so the terminator moves smoothly at 3600× with no solar model in the browser. `SatelliteState.footprint_radius_deg` (selection only): the Earth central angle to where the satellite stands at the mask (`geometry.mask_footprint_deg`, spherical with the ellipsoid's radius under it, within ~0.2° of elevation of the ellipsoidal test). `GroundTrackMessage.rag` (per point, the same `LinkTable.evaluate` as snapshots and arcs through one `_rag_along`) and `.crossings` (`TrackCrossing {time, kind aos|los, lon/lat/alt}`: the exact mask crossings, bisected like pass AOS/LOS by `passes.mask_crossings`, each strictly between the two samples whose `above_mask` differ; null if SGP4 dropped a sample). Tracks now re-send when the link profiles change (`_TrackState.links_version`). Every new field has a default; the TS mirror marks them optional.
+- **Phase 6a — globe & map** (2026-10-28). Muted, token-toned, globe only (the 2D map keeps its style). **Lighting**: `scene.light` is a `DirectionalLight` set every frame from the tweened subsolar point (`dynamicAtmosphereLightingFromSun = false`: never Cesium's wall-clock Sun; still `skyBox: false`), `enableLighting` with the lighting fade distances at 1/2 so shading holds at every zoom; the sky atmosphere's limb glow follows it, desaturated per theme. **No ground atmosphere**: from afar Cesium replaces the night ground with the atmosphere's black night, close up it scatters per vertex without the light and washes the night out, so the night would change with the zoom; without it the night is the shaded ground (Cesium's fixed 0.3 floor). A terminator polyline sits on top (and an older server without `sun` keeps the unlit look). **Orbits** (`views/Globe/orbit.ts`): runs split at the exact crossings (else at the last sample, as before) and, for the selection, by RAG halfway between samples like the sky arcs; the selection's in-view runs glow (`PolylineGlow`, one polyline per run) in the RAG colour or ink without RF data, its AOS/LOS crossings are hollow marks; other tracked orbits and labels step back while something is selected. **Markers**: the station is lucide's radio-tower glyph drawn on a canvas billboard (`views/Globe/markers.ts`, no image URL, no CSP change), the selection gets a soft halo billboard, a hovered dot without a label shows its name in one reused label. **Cone fill**: a side-only fan (`cone.ts` `coneSurface`, per-vertex alpha fading from the apex, `PerInstanceColorAppearance` reading a geometry `color` attribute) behind the wireframe, hidden while the camera is inside a cone (`insideCone`). **Footprint and night** on both views from server values: `lib/geo.ts` `smallCircle`, `terminatorLine` and `nightPolygon` (pure geometry); the 2D map adds `night-fill`/`night-line` under the tracks and `footprint-line` in the accent.

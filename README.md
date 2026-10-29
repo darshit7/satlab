@@ -4,7 +4,7 @@ A real-time satellite mission control simulator. Positions and geometry come fro
 with **SGP4** for **your real location**. Nothing is faked. See [AGENTS.md](AGENTS.md) for the architecture,
 conventions, database design, and phase plan.
 
-**Status: Phase 5 (scheduling & alarms).** Pick a ground station (a preset, your geolocation, a map click,
+**Status: Phase 6 (polish), part 6a: globe & map.** Pick a ground station (a preset, your geolocation, a map click,
 or typed lat/lon; a custom location is used for that session only, never saved) and every satellite above the horizon mask appears at once, with no search needed: on
 a 3D globe with the station's visibility cone (or the 2D map), a polar sky plot and an all-sky
 (looking-up) view, all linked by selection. Filter by type,
@@ -26,6 +26,10 @@ systems through a channel whose bit errors follow the real link margin, or real 
 SatNOGS stations, replayed. Commands can also be **booked for a future pass**: a minute before AOS the
 antenna turns to the satellite (a clock faster than 60× drops to real time), and at AOS an automatic
 system check sends them unless a subsystem is red; otherwise they're held and an alarm is raised.
+
+The globe is lit by the Sun computed for the sim time (the 2D map shades the night side too), and the
+selected satellite shows its footprint (the ground from which it is above the mask) and its orbit coloured
+by the link margin along the pass, with marks where it enters and leaves the station's cone.
 
 ## Quick start
 
@@ -101,8 +105,8 @@ browser ──REST──▶ FastAPI ── stations / sessions / pass schedule  
   pass prediction, tick),
   `services/` orchestrates the catalog and sessions, `models/` is the pydantic WS/REST contract, and
   `db/` + `migrations/` hold the SQLAlchemy models and Alembic revisions.
-- **Frontend** (`frontend/src`): a zustand store fed by the WebSocket; the MapLibre 2D map and the two
-  canvas sky views only render streamed state, tweening markers along server-computed ground tracks
+- **Frontend** (`frontend/src`): a zustand store fed by the WebSocket; the Cesium globe, the MapLibre 2D
+  map and the two canvas sky views only render streamed state, tweening markers along server-computed ground tracks
   and pass arcs. Styling is Tailwind v4; shared primitives live in `components/ui/`.
 
 ## Honesty notes

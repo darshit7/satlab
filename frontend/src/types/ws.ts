@@ -59,6 +59,9 @@ export interface SatelliteState {
   above_mask: boolean
   /** Null (or absent from an older server): no published RF parameters for this satellite. */
   link?: LinkState | null
+  /** The selection only: Earth central angle from the sub-point to the rim of the ground area
+   *  from which it is above the horizon mask (its footprint). */
+  footprint_radius_deg?: number | null
 }
 
 export type Illumination = 'sunlit' | 'penumbra' | 'eclipse'
@@ -146,6 +149,15 @@ export interface AutomationState {
   clock_slowed?: boolean
 }
 
+/** Where the Sun is overhead, and how fast that point moves in sim time (advanced by the
+ *  estimated sim time between snapshots). */
+export interface SunState {
+  subsolar_lat_deg: number
+  subsolar_lon_deg: number
+  lat_rate_deg_s: number
+  lon_rate_deg_s: number
+}
+
 /** Streamed satellites = (above the mask ∩ the session filter) ∪ tracked ∪ selected. */
 export interface Snapshot {
   type: 'snapshot'
@@ -164,6 +176,17 @@ export interface Snapshot {
   contact?: ContactState | null
   /** While a booked pass holds the antenna (absent from an older server). */
   automation?: AutomationState | null
+  /** For day/night shading (absent from an older server). */
+  sun?: SunState | null
+}
+
+/** Where the orbit crosses this station's horizon mask, refined like a pass's AOS / LOS. */
+export interface TrackCrossing {
+  time: string
+  kind: 'aos' | 'los'
+  lon_deg: number
+  lat_deg: number
+  alt_m: number
 }
 
 /** The orbit around the sim time, sampled evenly in time: drawn on the map and the globe. */
@@ -178,6 +201,11 @@ export interface GroundTrackMessage {
   alt_m?: number[] | null
   /** Per point: above this station's horizon mask, the in-view part of the orbit. */
   above_mask?: boolean[] | null
+  /** Per point: the link state; null without a link profile. */
+  rag?: Rag[] | null
+  /** Exact mask crossings, each between the two samples whose above_mask differ; null when the
+   *  points aren't evenly spaced. */
+  crossings?: TrackCrossing[] | null
 }
 
 /** The current (or next) pass in the sky, sampled evenly in time from start_time to end_time. */

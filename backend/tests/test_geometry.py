@@ -1,12 +1,33 @@
 """Geometry checked against the published skyfield ISS example (Bluffton, OH, 2014-01-23)."""
 
+import math
 from datetime import timedelta
 
+import numpy as np
 import pytest
+from sgp4.api import SatrecArray
 
-from app.sim.geometry import Observer, ground_track, look_angles, sub_point
-from app.sim.propagate import elements_from_tle, to_time
-from tests.conftest import BLUFFTON, ISS_LINE1, ISS_LINE2, ISS_NAME, REFERENCE_TIME
+from app.data.celestrak import parse_tle_text
+from app.sim.geometry import (
+    WGS84_F,
+    Observer,
+    ground_track,
+    look_angles,
+    mask_footprint_deg,
+    sub_point,
+    teme_to_itrf,
+    topocentric,
+)
+from app.sim.propagate import elements_from_tle, epochs, sgp4_teme, to_time
+from tests.conftest import (
+    BLUFFTON,
+    FLEET_2026_TIME,
+    FLEET_2026_TLE,
+    ISS_LINE1,
+    ISS_LINE2,
+    ISS_NAME,
+    REFERENCE_TIME,
+)
 
 
 @pytest.fixture
@@ -77,3 +98,61 @@ def test_ground_track(iss) -> None:
         assert -180 <= lon <= 180
         # geodetic latitude peaks slightly above the 51.65° inclination (geocentric bound)
         assert abs(lat) <= 51.65 + 0.2
+
+
+def _ground_point(r_itrf_m: np.ndarray, angle_deg: float, bearing_deg: float) -> Observer:
+    """The point ``angle_deg`` of Earth central angle from the satellite's geocentric sub-point,
+    towards ``bearing_deg``, on the WGS84 surface."""
+    u = r_itrf_m / np.linalg.norm(r_itrf_m)
+    east = np.cross([0.0, 0.0, 1.0], u)
+    east /= np.linalg.norm(east)
+    north = np.cross(u, east)
+    a, b = math.radians(angle_deg), math.radians(bearing_deg)
+    p = math.cos(a) * u + math.sin(a) * (math.cos(b) * north + math.sin(b) * east)
+    geocentric = math.atan2(p[2], math.hypot(p[0], p[1]))
+    geodetic_lat = math.atan(math.tan(geocentric) / (1 - WGS84_F) ** 2)  # surface point
+    return Observer(math.degrees(geodetic_lat), math.degrees(math.atan2(p[1], p[0])))
+
+
+@pytest.mark.parametrize("mask_deg", [0.0, 5.0, 20.0])
+@pytest.mark.parametrize("which", ["iss", "goes"])
+def test_mask_footprint_rim(iss, which: str, mask_deg: float) -> None:
+    """Ground points just inside the footprint see the satellite above the mask; just outside,
+    below it — whichever way from the sub-point."""
+    if which == "iss":
+        elements = iss
+        when = REFERENCE_TIME
+    else:
+        [goes] = [r for r in parse_tle_text(FLEET_2026_TLE) if r.name == "GOES 16"]
+        elements = elements_from_tle(goes.name, goes.line1, goes.line2)
+        when = FLEET_2026_TIME
+    at = epochs(when)
+    r_teme, v_teme, _ = sgp4_teme(SatrecArray([elements.satellite.model]), at)
+    r, v = teme_to_itrf(r_teme, v_teme, at)
+    r_sat, v_sat = r[0, 0], v[0, 0]
+    radius = float(mask_footprint_deg(r_sat, mask_deg))
+    if which == "iss" and mask_deg == 0.0:
+        assert radius == pytest.approx(20.0, abs=1.0)  # ~420 km up: about 20°
+    for bearing in (0.0, 90.0, 180.0, 270.0):
+        for offset, inside in ((-0.5, True), (0.5, False)):
+            observer = _ground_point(r_sat, radius + offset, bearing)
+            _, el, _, _ = topocentric(r_sat, v_sat, observer)
+            assert (float(el) > mask_deg) == inside, (bearing, offset, float(el))
+
+
+def test_ground_track_link_geometry(iss) -> None:
+    observer = Observer(*BLUFFTON)
+    track = ground_track(iss, REFERENCE_TIME, 120, observer, mask_deg=5.0)
+    assert track.complete
+    n = len(track.points)
+    for values in (
+        track.offsets_s,
+        track.elevation_deg,
+        track.range_m,
+        track.range_rate_m_s,
+        track.off_nadir_deg,
+    ):
+        assert len(values) == n
+    assert track.offsets_s[0] == 0.0
+    assert track.offsets_s[-1] == pytest.approx((track.end - track.start).total_seconds())
+    assert [bool(e >= 5.0) for e in track.elevation_deg] == track.above_mask

@@ -1,10 +1,12 @@
-"""The Sun's position and the Earth's shadow, for eclipse-driven subsystem models.
+"""The Sun's position and the Earth's shadow: eclipse-driven subsystem models and day/night.
 
 Pure numpy, no ephemeris file (the runtime never downloads one):
 
 * ``sun_position_km`` — the Astronomical Almanac's low-precision solar coordinates (good to 0.01°
   between 1950 and 2050), equatorial of date. TEME differs from that by the equation of the
   equinoxes (well under 0.01°), so it is used directly against SGP4 positions.
+* ``subsolar_point`` — where the Sun is overhead: the same position rotated into the Earth-fixed
+  frame by GMST, as SGP4 positions are. The globe and map shade night from it.
 * ``sunlit_fraction`` — the conical Earth-shadow model with umbra and penumbra (Montenbruck & Gill,
   *Satellite Orbits*, §3.4.2): the fraction of the solar disc a satellite sees.
 """
@@ -12,6 +14,7 @@ Pure numpy, no ephemeris file (the runtime never downloads one):
 import numpy as np
 from numpy.typing import NDArray
 
+from app.sim.geometry import teme_to_itrf
 from app.sim.propagate import Epochs
 
 AU_KM = 149_597_870.7
@@ -38,6 +41,18 @@ def sun_position_km(when: Epochs) -> Floats:
         ),
         axis=-1,
     )
+
+
+def subsolar_point(when: Epochs) -> tuple[Floats, Floats]:
+    """Where the Sun is at the zenith: WGS84 (latitude°, longitude°), ``[n_times]`` each.
+
+    The geodetic latitude whose ellipsoid normal points at the Sun is the declination of the
+    Earth-fixed Sun direction (solar parallax, 9", is ignored).
+    """
+    r_sun = sun_position_km(when)
+    r_itrf, _ = teme_to_itrf(r_sun, np.zeros_like(r_sun), when)
+    x, y, z = r_itrf[..., 0], r_itrf[..., 1], r_itrf[..., 2]
+    return np.degrees(np.arctan2(z, np.hypot(x, y))), np.degrees(np.arctan2(y, x))
 
 
 def sunlit_fraction(r_sat_km: Floats, r_sun_km: Floats) -> Floats:

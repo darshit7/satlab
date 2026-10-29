@@ -1,6 +1,7 @@
 """Pass prediction vs skyfield's ``find_events``, plus sky arcs and the rising-soon sweep."""
 
 from datetime import timedelta
+from itertools import pairwise
 
 import numpy as np
 import pytest
@@ -8,8 +9,8 @@ import pytest
 from app.data.celestrak import parse_tle_text
 from app.data.classify import classify
 from app.sim.fleet import Fleet, FleetRow
-from app.sim.geometry import Observer
-from app.sim.passes import LIVE, UpcomingSweep, find_spans, pass_arcs
+from app.sim.geometry import Observer, ground_track
+from app.sim.passes import LIVE, UpcomingSweep, _Pairs, find_spans, mask_crossings, pass_arcs
 from app.sim.propagate import elements_from_tle, to_time
 from tests.conftest import (
     BLUFFTON,
@@ -253,3 +254,50 @@ def test_sweep_restarts_after_clock_jump() -> None:
     assert not sweep.valid_for(fleet, later)
     assert sweep.advance(fleet, later, 0.5)
     assert sweep.result is not None and sweep.result.start == later
+
+
+# ---------- mask crossings along an orbit ----------
+
+
+@pytest.mark.parametrize("which", ["iss", "noaa20"])
+def test_mask_crossings_match_find_spans(iss, which: str) -> None:
+    if which == "iss":
+        elements, observer, center = iss, Observer(*BLUFFTON), REFERENCE_TIME
+    else:
+        [rec] = [r for r in parse_tle_text(FLEET_2026_TLE) if r.norad_id == 43013]
+        elements = elements_from_tle(rec.name, rec.line1, rec.line2)
+        observer, center = Observer(*WALLOPS), FLEET_2026_TIME + timedelta(hours=5, minutes=52)
+    mask = 5.0
+    satrec = elements.satellite.model
+    # several orbits, so the track holds more than one pass
+    track = ground_track(elements, center, 720, observer, mask, orbits_before=1, orbits_after=4)
+    crossings = mask_crossings(
+        satrec, observer, track.start, track.offsets_s, track.above_mask, mask
+    )
+    assert crossings, "the track should cross the mask"
+    assert all(a.rising != b.rising for a, b in pairwise(crossings))  # alternating
+
+    duration = (track.end - track.start).total_seconds()
+    [spans] = find_spans([satrec], observer, track.start, duration, 30.0, mask)
+    aos = [s.aos for s in spans if s.aos]
+    los = [s.los for s in spans if s.los]
+    for c in crossings:
+        refs = aos if c.rising else los
+        assert min(abs((c.time - t).total_seconds()) for t in refs) < 0.2
+        # on the mask, and between the two samples whose flags differ
+        _, el = _Pairs([satrec], c.time, observer).look(np.zeros(1, np.intp), np.zeros(1))
+        assert float(el[0]) == pytest.approx(mask, abs=0.01)
+        assert track.start < c.time < track.end
+        assert -180 <= c.lon_deg <= 180 and c.alt_m > 300_000
+
+
+def test_mask_crossings_none_for_geostationary() -> None:
+    [goes] = [r for r in parse_tle_text(FLEET_2026_TLE) if r.name == "GOES 16"]
+    elements = elements_from_tle(goes.name, goes.line1, goes.line2)
+    observer = Observer(*WALLOPS)
+    track = ground_track(elements, FLEET_2026_TIME, 240, observer, 5.0)
+    assert all(track.above_mask)
+    satrec = elements.satellite.model
+    args = (satrec, observer, track.start, track.offsets_s)
+    assert mask_crossings(*args, track.above_mask, 5.0) == []
+    assert mask_crossings(satrec, observer, track.start, track.offsets_s[:1], [True], 5.0) == []

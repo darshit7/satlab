@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { coneShapes, slantRangeM } from './cone'
+import { coneShapes, coneSurface, insideCone, slantRangeM } from './cone'
 
 const R = 6_371_000 // station radius (m)
 const LEO = R + 830_000 // NOAA 20's shell
@@ -49,5 +49,44 @@ describe('coneShapes', () => {
     expect(coneShapes(10, [[2, 8]], R, LEO).map((s) => s.kind)).toEqual(['mask'])
     // a band reaching under the mask is green from the mask up
     expect(coneShapes(10, [[5, 90]], R, LEO).map((s) => [s.kind, s.elevationDeg])).toEqual([['strong', 10]])
+  })
+})
+
+describe('coneSurface', () => {
+  const [mask] = coneShapes(5, [], R, LEO)
+
+  it('fans from the apex to the rim, with no lid', () => {
+    const surface = coneSurface(mask!, 0.06, 8)
+    expect(surface.positions.length).toBe(9 * 3)
+    expect(surface.indices.length).toBe(8 * 3)
+    expect([...surface.positions.slice(0, 3)]).toEqual([0, 0, 0])
+    for (let i = 1; i <= 8; i++) {
+      const [x, y, z] = surface.positions.slice(i * 3, i * 3 + 3)
+      expect(Math.hypot(x!, y!)).toBeCloseTo(mask!.rimRadiusM, 3)
+      expect(z).toBeCloseTo(mask!.heightM, 6)
+    }
+    // every triangle has the apex: no rim-only (lid) triangle
+    for (let t = 0; t < 8; t++) expect(surface.indices[t * 3]).toBe(0)
+  })
+
+  it('fades from the apex to nothing at the rim', () => {
+    const { alphas } = coneSurface(mask!, 0.06, 8)
+    expect(alphas[0]).toBeCloseTo(0.06)
+    expect([...alphas.slice(1)].every((a) => a === 0)).toBe(true)
+  })
+})
+
+describe('insideCone', () => {
+  const [mask] = coneShapes(5, [], R, LEO)
+
+  it('is inside above the cone surface and below the rim', () => {
+    expect(insideCone([0, 0, 1000], mask!)).toBe(true) // straight up
+    expect(insideCone([10_000, 0, 10_000], mask!)).toBe(true) // 45°
+  })
+
+  it('is outside below the surface, under the ground, or above the rim', () => {
+    expect(insideCone([100_000, 0, 1000], mask!)).toBe(false) // ~0.6° up: under the 5° surface
+    expect(insideCone([0, 0, -10], mask!)).toBe(false)
+    expect(insideCone([0, 0, mask!.heightM + 1], mask!)).toBe(false)
   })
 })
