@@ -69,7 +69,8 @@ The app runs as two containers and is live at https://satlab.darshitp.dev/satlab
   (`/` redirects there) and reverse-proxies `/satlab/api` and `/satlab/ws` (WebSocket upgrade) to the API
   **with the `/satlab` prefix stripped**. It also sets the CSP and other security headers.
   `SATLAB_API_UPSTREAM` points it at the API. Build with `--build-arg NEXT_UMAMI_ID=<uuid>` to include
-  the Umami tracker; without it, no tracker is added.
+  the Umami tracker (custom events, Web Vitals, errors; it runs only on `satlab.darshitp.dev`), and
+  `--build-arg SATLAB_RELEASE=<commit sha>` to tag captured errors; without an ID, no tracker is added.
 - **`satlab-api`** ([backend/Dockerfile](backend/Dockerfile)): uvicorn with one worker, run as a single
   replica, because sessions live in memory. Only the web container can reach it.
 

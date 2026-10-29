@@ -1,5 +1,6 @@
 import { Button } from '../../components/ui/Button'
 import { Select } from '../../components/ui/Select'
+import { trackOnce } from '../../lib/analytics'
 import { MIN_ELEVATION_OPTIONS, RISING_WITHIN_OPTIONS, TYPE_LABELS } from '../../lib/filters'
 import { useMission } from '../../store/mission'
 import { SATELLITE_TYPES, type SatelliteType } from '../../types/ws'
@@ -12,12 +13,18 @@ export function Filters() {
   const setFilters = useMission((s) => s.setFilters)
   const mask = useMission((s) => s.snapshot?.observer.horizon_mask_deg ?? null)
 
-  const toggleType = (t: SatelliteType) =>
+  const toggleType = (t: SatelliteType) => {
+    if (!filters.types.includes(t)) trackOnce('filter-on', { filter: t })
     setFilters({
       types: filters.types.includes(t)
         ? filters.types.filter((x) => x !== t)
         : SATELLITE_TYPES.filter((x) => x === t || filters.types.includes(x)),
     })
+  }
+  const toggleOnly = (key: 'sar_only' | 'link_ok_only' | 'comms_only', filter: 'sar' | 'link-ok' | 'comms') => {
+    if (!filters[key]) trackOnce('filter-on', { filter })
+    setFilters({ [key]: !filters[key] })
+  }
 
   return (
     <div className="space-y-2">
@@ -35,7 +42,7 @@ export function Filters() {
           aria-pressed={filters.sar_only}
           className={toggle}
           title="Only satellites carrying a synthetic-aperture radar"
-          onClick={() => setFilters({ sar_only: !filters.sar_only })}
+          onClick={() => toggleOnly('sar_only', 'sar')}
         >
           SAR-capable
         </Button>
@@ -44,7 +51,7 @@ export function Filters() {
           aria-pressed={filters.link_ok_only}
           className={toggle}
           title="Only satellites with a published link budget (5); of those in view, only with a usable margin (0 dB or better)"
-          onClick={() => setFilters({ link_ok_only: !filters.link_ok_only })}
+          onClick={() => toggleOnly('link_ok_only', 'link-ok')}
         >
           Link OK
         </Button>
@@ -53,7 +60,7 @@ export function Filters() {
           aria-pressed={filters.comms_only}
           className={toggle}
           title="Only satellites you can communicate with (8): the link-budget ones plus the ISS, CroCube and UWE-4, which work without a modelled channel"
-          onClick={() => setFilters({ comms_only: !filters.comms_only })}
+          onClick={() => toggleOnly('comms_only', 'comms')}
         >
           Communications
         </Button>

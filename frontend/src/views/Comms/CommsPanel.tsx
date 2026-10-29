@@ -8,6 +8,7 @@ import { InfoPopover } from '../../components/ui/InfoPopover'
 import { RagIcon } from '../../components/ui/Rag'
 import { RAG_TEXT } from '../../components/ui/ragClasses'
 import { Select } from '../../components/ui/Select'
+import { trackOnce } from '../../lib/analytics'
 import {
   formatBer,
   formatLightTime,
@@ -253,6 +254,7 @@ function SoundToggle() {
       title={label}
       onClick={() => {
         if (!sound && !startCommsSound()) return // no Web Audio in this browser
+        if (!sound) trackOnce('sound-on')
         setSound(!sound)
       }}
       className={cn(

@@ -4,6 +4,7 @@ import { api } from '../../api/client'
 import { Button, focusRing } from '../../components/ui/Button'
 import { inputClass } from '../../components/ui/Field'
 import { Pill } from '../../components/ui/Pill'
+import { trackOnce } from '../../lib/analytics'
 import { formatAge } from '../../lib/time'
 import { useMission } from '../../store/mission'
 import type { CatalogStatus, SatelliteSummary } from '../../types/api'
@@ -77,6 +78,7 @@ export function CatalogSearch() {
 
   const searchRemote = async () => {
     setLoading(true)
+    trackOnce('catalog-remote-search') // not the query: it's free text
     try {
       const r = await api.searchSatellites(q, true)
       setResults(r.results)

@@ -3,6 +3,7 @@ import { useCallback, useEffect, type ReactNode } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Panel } from '../../components/ui/Panel'
 import { Pill } from '../../components/ui/Pill'
+import { trackOnce } from '../../lib/analytics'
 import { filterSummary } from '../../lib/filters'
 import { scheduledCommands, unacknowledgedCount } from '../../lib/schedule'
 import { useMission } from '../../store/mission'
@@ -59,7 +60,10 @@ function BarButton({
       aria-controls={open ? panelId(id) : undefined}
       title={title}
       className={className}
-      onClick={() => togglePanel(id)}
+      onClick={() => {
+        if (!open) trackOnce('panel-open', { panel: id })
+        togglePanel(id)
+      }}
     >
       {children}
     </Button>

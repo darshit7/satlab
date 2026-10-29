@@ -4,6 +4,7 @@ import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Dialog } from '../../components/ui/Dialog'
 import { RagDot } from '../../components/ui/Rag'
+import { trackOnce } from '../../lib/analytics'
 import { useMission } from '../../store/mission'
 import { useUi, type SkyView } from '../../store/ui'
 import { ALL_SKY_VIEW } from '../AllSky/AllSky'
@@ -48,7 +49,10 @@ function MiniView({ view }: { view: SkyView }) {
           className="absolute -top-1 -right-1"
           aria-label={`Enlarge the ${title.toLowerCase()}`}
           title="Enlarge"
-          onClick={() => setSkyDialog(view)}
+          onClick={() => {
+            trackOnce('sky-expand', { view })
+            setSkyDialog(view)
+          }}
         >
           <Maximize2 size={16} strokeWidth={1.5} />
         </Button>

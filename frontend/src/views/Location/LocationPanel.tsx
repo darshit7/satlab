@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { NumberField } from '../../components/NumberField'
 import { Button } from '../../components/ui/Button'
 import { Select } from '../../components/ui/Select'
+import { track } from '../../lib/analytics'
 import { useMission } from '../../store/mission'
 import { useUi } from '../../store/ui'
 
@@ -62,6 +63,7 @@ export function LocationPanel() {
   const apply = () => {
     if (!draft || !valid) return
     void startSession({ location: { lat_deg: draft.lat_deg, lon_deg: draft.lon_deg, alt_m: draft.alt_m } })
+    track('session-start', { how: 'custom', station: 'Custom location' }) // never the coordinates
     closePanel()
   }
 
@@ -88,6 +90,7 @@ export function LocationPanel() {
         options={stations.map((s) => ({ value: s.id, label: s.name }))}
         onChange={(id) => {
           void startSession({ station_id: id })
+          track('session-start', { how: 'preset', station: stations.find((s) => s.id === id)?.name ?? `#${id}` })
           closePanel()
         }}
       />

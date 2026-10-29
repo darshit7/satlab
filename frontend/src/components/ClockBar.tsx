@@ -1,4 +1,5 @@
 import { Pause, Play } from 'lucide-react'
+import { trackOnce } from '../lib/analytics'
 import { formatLocal, formatUtc } from '../lib/time'
 import { useSimNow } from '../lib/useSimNow'
 import { useMission } from '../store/mission'
@@ -48,7 +49,10 @@ export function ClockBar() {
       <div className="flex flex-wrap gap-1.5" role="group" aria-label="Simulation clock">
         <Button
           disabled={!live}
-          onClick={() => setClock({ paused: !clock?.paused })}
+          onClick={() => {
+            setClock({ paused: !clock?.paused })
+            trackOnce('clock-change', { to: clock?.paused ? 'resumed' : 'paused' })
+          }}
           aria-label={clock?.paused ? 'Resume' : 'Pause'}
           title={clock?.paused ? 'Resume' : 'Pause'}
         >
@@ -61,7 +65,10 @@ export function ClockBar() {
             active={clock?.time_scale === rate}
             aria-pressed={clock?.time_scale === rate}
             className="tabular-nums"
-            onClick={() => setClock({ time_scale: rate })}
+            onClick={() => {
+              setClock({ time_scale: rate })
+              trackOnce('clock-change', { to: `${rate}×` })
+            }}
           >
             {rate}×
           </Button>
@@ -69,7 +76,10 @@ export function ClockBar() {
         <Button
           disabled={!live}
           title="Jump to real time at 1×"
-          onClick={() => setClock({ sim_time: new Date().toISOString(), time_scale: 1, paused: false })}
+          onClick={() => {
+            setClock({ sim_time: new Date().toISOString(), time_scale: 1, paused: false })
+            trackOnce('clock-change', { to: 'now' })
+          }}
         >
           Now
         </Button>

@@ -13,20 +13,36 @@ const BASE = '/satlab/'
 const stripBase = (path: string) => path.slice(BASE.length - 1)
 
 const UMAMI_SRC = 'https://cloud.umami.is/script.js'
+// The tracker stays silent anywhere else (the production image run locally, a preview).
+const UMAMI_DOMAINS = 'satlab.darshitp.dev'
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const GIT_SHA = /^[0-9a-f]{7,40}$/
 
-/** Umami Cloud tracker, injected into production builds only when a website ID is configured. */
-function umami(websiteId: string | undefined): Plugin {
+/**
+ * Umami Cloud tracker, injected into production builds only when a website ID is configured: page
+ * views, the custom events of src/lib/analytics.ts, Core Web Vitals and uncaught errors (tagged
+ * with the release, the deployed commit, when given).
+ */
+function umami(websiteId: string | undefined, release: string | undefined): Plugin {
   if (websiteId && !UUID.test(websiteId)) {
     throw new Error('NEXT_UMAMI_ID must be an Umami website ID (a UUID).')
+  }
+  if (release && !GIT_SHA.test(release)) {
+    throw new Error('SATLAB_RELEASE must be a git commit SHA.')
+  }
+  const attrs = {
+    defer: true,
+    src: UMAMI_SRC,
+    'data-website-id': websiteId,
+    'data-domains': UMAMI_DOMAINS,
+    'data-performance': 'true',
+    'data-errors': 'true',
+    ...(release ? { 'data-release': release } : {}),
   }
   return {
     name: 'satlab-umami',
     apply: 'build',
-    transformIndexHtml: () =>
-      websiteId
-        ? [{ tag: 'script', attrs: { defer: true, src: UMAMI_SRC, 'data-website-id': websiteId }, injectTo: 'head' }]
-        : [],
+    transformIndexHtml: () => (websiteId ? [{ tag: 'script', attrs, injectTo: 'head' }] : []),
   }
 }
 
@@ -76,12 +92,15 @@ function cesiumAssets(): Plugin {
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
-  // Only NEXT_UMAMI_ID is read here; envPrefix stays VITE_ so no other variable reaches the bundle.
-  const umamiId = loadEnv(mode, process.cwd(), '').NEXT_UMAMI_ID?.trim() || undefined
+  // Only NEXT_UMAMI_ID and SATLAB_RELEASE are read here (both public, they end up in the page);
+  // envPrefix stays VITE_ so no other variable reaches the bundle.
+  const env = loadEnv(mode, process.cwd(), '')
+  const umamiId = env.NEXT_UMAMI_ID?.trim() || undefined
+  const release = env.SATLAB_RELEASE?.trim().toLowerCase() || undefined
 
   return {
     base: BASE,
-    plugins: [react(), tailwindcss(), umami(umamiId), cesiumAssets()],
+    plugins: [react(), tailwindcss(), umami(umamiId, release), cesiumAssets()],
     resolve: {
       // Cesium's meshopt decoder compiles WebAssembly on import, which the CSP refuses; the globe
       // never decodes meshopt data (src/views/Globe/meshoptStub.ts).
