@@ -159,6 +159,9 @@ export interface SatelliteComms {
   telemetry: TelemetryTemplate[]
   /** Empty: receive-only (no published command set). */
   commands: CommandTemplate[]
+  /** Seeded downlink frequency; null for satellites with a link profile (the profile's frequency). */
+  downlink_frequency_hz?: number | null
+  downlink_sources?: LinkSource[]
 }
 
 /** Every satellite with packet templates (reference data, like the link profiles). */

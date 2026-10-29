@@ -24,7 +24,14 @@ from numpy.typing import NDArray
 from sgp4.api import Satrec, SatrecArray
 
 from app.sim.fleet import Fleet
-from app.sim.geometry import Observation, Observer, elevations, observe_pairs, off_nadir_deg
+from app.sim.geometry import (
+    Observation,
+    Observer,
+    elevations,
+    geodetic,
+    observe_pairs,
+    off_nadir_deg,
+)
 from app.sim.propagate import epochs
 
 # A pass can peak between two grid samples; local maxima this far below the mask get refined too.
@@ -241,6 +248,65 @@ def find_spans(
             )
         )
     return result
+
+
+# ---------- mask crossings along an orbit ----------
+
+
+@dataclass(frozen=True)
+class Crossing:
+    """Where an orbit crosses the station's horizon mask: rising (AOS) or setting (LOS)."""
+
+    time: datetime
+    rising: bool
+    lon_deg: float
+    lat_deg: float
+    alt_m: float
+
+
+def mask_crossings(
+    satrec: Satrec,
+    observer: Observer,
+    start: datetime,
+    offsets_s: Floats,
+    above_mask: Sequence[bool],
+    mask_deg: float,
+    precision: Precision = SCHEDULE,
+) -> list[Crossing]:
+    """The exact crossings between consecutive samples (at ``start + offsets_s``) whose
+    ``above_mask`` flags differ, bisected like a pass's AOS / LOS. Each lies strictly between its
+    two samples, so it always agrees with the flags."""
+    flags = np.asarray(above_mask, dtype=bool)
+    change = np.flatnonzero(flags[1:] != flags[:-1]) if len(flags) > 1 else np.empty(0, np.intp)
+    if len(change) == 0:
+        return []
+    rising = flags[change + 1]
+    pairs = _Pairs([satrec], start, observer, precision)
+    t = np.empty(len(change))
+    for direction in (True, False):
+        chosen = rising == direction
+        if chosen.any():
+            j = change[chosen]
+            t[chosen] = pairs.bisect(
+                np.zeros(len(j), dtype=np.intp),
+                offsets_s[j],
+                offsets_s[j + 1],
+                mask_deg,
+                rising=direction,
+            )
+    obs = pairs.observe(np.zeros(len(t), dtype=np.intp), t)
+    lat, lon, alt = geodetic(obs.r_itrf_m)
+    return [
+        Crossing(
+            time=start + timedelta(seconds=float(t[i])),
+            rising=bool(rising[i]),
+            lon_deg=float(lon[i]),
+            lat_deg=float(lat[i]),
+            alt_m=float(alt[i]),
+        )
+        for i in range(len(t))
+        if obs.ok[i] and math.isfinite(float(alt[i]))
+    ]
 
 
 # ---------- sky arcs ----------

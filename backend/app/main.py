@@ -254,6 +254,8 @@ def list_packet_templates(request: Request, catalog: Catalog) -> PacketTemplates
                     )
                     for _, c in sat.commands
                 ],
+                downlink_frequency_hz=sat.downlink.frequency_hz if sat.downlink else None,
+                downlink_sources=sources(list(sat.downlink.sources)) if sat.downlink else [],
             )
         )
     return PacketTemplatesOut(

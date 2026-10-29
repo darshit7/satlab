@@ -1,6 +1,6 @@
-import { ArrowDown, ArrowUp, CalendarClock, Radio, Send } from 'lucide-react'
+import { ArrowDown, ArrowUp, CalendarClock, Radio, Send, Volume2, VolumeX } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { Button } from '../../components/ui/Button'
+import { Button, focusRing } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { cn } from '../../components/ui/cn'
 import { inputClass } from '../../components/ui/Field'
@@ -19,15 +19,17 @@ import {
   satnogsObservationUrl,
   type PacketOutcome,
 } from '../../lib/comms'
-import { safeHttpsUrl } from '../../lib/rag'
+import { formatDopplerKHz, safeHttpsUrl } from '../../lib/rag'
 import { checkSummary, passLabel, schedulablePasses, utcWhen } from '../../lib/schedule'
 import { useSimNow } from '../../lib/useSimNow'
 import { useMission } from '../../store/mission'
 import { useUi } from '../../store/ui'
-import type { CommandTemplate } from '../../types/api'
+import type { CommandTemplate, LinkSource } from '../../types/api'
 import type { CommandStatus, ContactState, PacketMessage, Rag } from '../../types/ws'
 import { CommsSatellites } from './CommsSatellites'
+import { startCommsSound } from './commsSound'
 import { PacketFlow } from './PacketFlow'
+import { useCommsSound } from './useCommsSound'
 
 const LOG_ROWS = 20
 const muted = 'text-gray-500 dark:text-gray-400'
@@ -232,6 +234,68 @@ function Telemetry({ packet }: { packet: PacketMessage }) {
  * The link with the selected satellite: contact, packets up and down, the latest decoded frame and
  * a command composer. Every packet, check and value comes from the server; uplink is simulated.
  */
+/** A downlink frequency to the kHz: "145.825 MHz", "7812 MHz". */
+const megahertz = (hz: number) => `${Number((hz / 1e6).toFixed(3))} MHz`
+
+/** Sound cues for command traffic, on or off. Turning them on starts the page's audio in this
+ *  click, as browsers require. */
+function SoundToggle() {
+  const sound = useUi((s) => s.sound)
+  const setSound = useUi((s) => s.setSound)
+  const label = sound
+    ? 'Turn command sounds off'
+    : 'Turn command sounds on: a chirp when a command goes up, a chime when its answer comes back'
+  return (
+    <button
+      type="button"
+      aria-pressed={sound}
+      aria-label={label}
+      title={label}
+      onClick={() => {
+        if (!sound && !startCommsSound()) return // no Web Audio in this browser
+        setSound(!sound)
+      }}
+      className={cn(
+        'rounded p-0.5 hover:text-gray-900 dark:hover:text-gray-100',
+        sound ? 'text-primary-700 dark:text-primary-400' : 'text-gray-600 dark:text-gray-400',
+        focusRing,
+      )}
+    >
+      {sound ? <Volume2 size={16} strokeWidth={1.5} /> : <VolumeX size={16} strokeWidth={1.5} />}
+    </button>
+  )
+}
+
+/** The downlink the station listens on and its Doppler shift now (both from the server). */
+function DownlinkLine({ contact }: { contact: ContactState }) {
+  const { doppler_hz: shift, downlink_frequency_hz: frequency } = contact
+  if (frequency == null) return null
+  return (
+    <p className={cn('mt-1 text-xs tabular-nums', muted)}>
+      Downlink {megahertz(frequency)}
+      {shift != null && ` · Doppler ${formatDopplerKHz(shift)} kHz`}
+    </p>
+  )
+}
+
+function SourceLinks({ sources }: { sources: LinkSource[] }) {
+  return sources.map((src, i) => {
+    const href = safeHttpsUrl(src.url)
+    return (
+      <span key={src.url}>
+        {i > 0 && ', '}
+        {href ? (
+          <a href={href} target="_blank" rel="noopener noreferrer" className="growing-underline text-primary-700 dark:text-primary-400">
+            {src.title}
+          </a>
+        ) : (
+          src.title
+        )}
+      </span>
+    )
+  })
+}
+
 export function CommsPanel() {
   const selectedId = useMission((s) => s.selectedId)
   const simMs = useMission((s) => (s.snapshot ? Date.parse(s.snapshot.sim_time) : null))
@@ -241,6 +305,7 @@ export function CommsPanel() {
   const commandStatuses = useMission((s) => s.commands)
   const open = useUi((s) => s.sections.comms)
   const toggleSection = useUi((s) => s.toggleSection)
+  useCommsSound()
 
   const packets = useMemo(() => allPackets.filter((p) => p.norad_id === selectedId), [allPackets, selectedId])
   const sat = templates?.satellites.find((s) => s.norad_id === selectedId)
@@ -275,15 +340,18 @@ export function CommsPanel() {
       dense
       title="Communications"
       titleAction={
-        <InfoPopover
-          label="Satellites you can communicate with"
-          iconSize={16}
-          buttonClassName="p-0.5"
-          panelClassName="inset-x-3 top-11 max-h-[min(28rem,60vh)] origin-top-left"
-          closeOnPick
-        >
-          <CommsSatellites />
-        </InfoPopover>
+        <span className="flex items-center gap-1">
+          <InfoPopover
+            label="Satellites you can communicate with"
+            iconSize={16}
+            buttonClassName="p-0.5"
+            panelClassName="inset-x-3 top-11 max-h-[min(28rem,60vh)] origin-top-left"
+            closeOnPick
+          >
+            <CommsSatellites />
+          </InfoPopover>
+          <SoundToggle />
+        </span>
       }
       open={open}
       onToggle={() => toggleSection('comms')}
@@ -295,6 +363,7 @@ export function CommsPanel() {
       }
     >
       <PacketFlow packets={packets} active={words.active} lightTime={formatLightTime(contact.one_way_light_time_s)} />
+      <DownlinkLine contact={contact} />
 
       <div className="mt-3">
         {sat && sat.commands.length > 0 ? (
@@ -358,23 +427,12 @@ export function CommsPanel() {
         Uplink is simulated: nothing is transmitted. {downlink}{' '}
         {uniqueSources.length > 0 && (
           <>
-            Formats:{' '}
-            {uniqueSources.map((src, i) => {
-              const href = safeHttpsUrl(src.url)
-              return (
-                <span key={src.url}>
-                  {i > 0 && ', '}
-                  {href ? (
-                    <a href={href} target="_blank" rel="noopener noreferrer" className="growing-underline text-primary-700 dark:text-primary-400">
-                      {src.title}
-                    </a>
-                  ) : (
-                    src.title
-                  )}
-                </span>
-              )
-            })}
-            .
+            Formats: <SourceLinks sources={uniqueSources} />.{' '}
+          </>
+        )}
+        {sat?.downlink_sources && sat.downlink_sources.length > 0 && (
+          <>
+            Downlink frequency: <SourceLinks sources={sat.downlink_sources} />.
           </>
         )}
       </p>

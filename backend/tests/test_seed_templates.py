@@ -6,11 +6,18 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.data.celestrak import parse_tle_text
-from app.data.seed import PACKET_TEMPLATES_FILE, load_packet_templates, sync_packet_templates
+from app.data.seed import (
+    PACKET_TEMPLATES_FILE,
+    PacketTemplatesFile,
+    load_packet_templates,
+    sync_packet_templates,
+)
 from app.db.base import get_sessionmaker
 from app.db.models import PacketTemplate
 from app.services.catalog import upsert_tle_records
@@ -106,3 +113,18 @@ def test_concurrent_syncs_dont_collide(client: TestClient) -> None:
         t.join()
     assert errors == []
     assert len(_rows()) == 7
+
+
+def test_downlink_frequencies_need_sources() -> None:
+    data = json.loads(PACKET_TEMPLATES_FILE.read_text(encoding="utf-8"))
+    iss = next(s for s in data["satellites"] if s["norad_id"] == ISS)
+    assert iss["downlink_frequency_hz"] == 145_825_000 and iss["downlink_sources"]
+
+    iss["downlink_sources"] = []
+    with pytest.raises(ValidationError, match="needs a source"):
+        PacketTemplatesFile.model_validate(data)
+
+    iss["downlink_sources"] = [{"title": "x", "url": "https://example.org"}]
+    iss["downlink_mhz"] = 145.8  # a typo is an error, not silently ignored
+    with pytest.raises(ValidationError, match="downlink_mhz"):
+        PacketTemplatesFile.model_validate(data)

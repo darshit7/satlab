@@ -54,6 +54,7 @@ from app.packets.templates import (
     read_telemetry,
 )
 from app.sim.channel import downlink, light_time_s, packet_rng
+from app.sim.linkbudget import doppler_hz
 
 ILLUMINATION_CODE = {"sunlit": 0, "penumbra": 1, "eclipse": 2}
 
@@ -96,6 +97,10 @@ class ContactLook:
     range_m: float
     margin_db: float | None  # None without a link profile, or below the horizon
     has_link: bool  # a published link budget: the channel is modelled
+    range_rate_m_s: float = 0.0
+    # From the link state, when there is a link profile: its frequency and Doppler shift.
+    link_frequency_hz: float | None = None
+    link_doppler_hz: float | None = None
 
 
 # ---------- what the runtime writes ----------
@@ -226,6 +231,7 @@ class CommsRuntime:
         if look is None:
             return None
         light = light_time_s(look.range_m) if look.elevation_deg >= 0 else None
+        frequency, doppler = self._downlink_doppler(look, sat)
         if sat is None:
             return ContactState(
                 norad_id=look.norad_id,
@@ -233,6 +239,8 @@ class CommsRuntime:
                 downlink=None,
                 channel_modelled=look.has_link,
                 one_way_light_time_s=light,
+                downlink_frequency_hz=frequency,
+                doppler_hz=doppler,
             )
         replayed = bool(sat.replayed)
         state = (
@@ -249,7 +257,23 @@ class CommsRuntime:
             channel_modelled=look.has_link and not replayed,
             one_way_light_time_s=light,
             archive=self._archive.status(look.norad_id) if replayed else None,
+            downlink_frequency_hz=frequency,
+            doppler_hz=doppler,
         )
+
+    @staticmethod
+    def _downlink_doppler(
+        look: ContactLook, sat: SatelliteTemplates | None
+    ) -> tuple[float | None, float | None]:
+        """The downlink frequency and its Doppler shift: the link state's when the satellite has
+        a link profile (one computation), else from its seeded frequency; none without either."""
+        if look.link_frequency_hz is not None:
+            return look.link_frequency_hz, look.link_doppler_hz
+        if sat is None or sat.downlink is None:
+            return None, None
+        frequency = sat.downlink.frequency_hz
+        shift = float(doppler_hz(look.range_rate_m_s, frequency))
+        return frequency, round(shift, 1) if math.isfinite(shift) else None
 
     # ----- commands -----
 

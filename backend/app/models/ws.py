@@ -82,6 +82,9 @@ class SatelliteState(BaseModel):
     range_rate_m_s: float
     above_mask: bool  # elevation ≥ the horizon mask: "in view" (geometric, not naked-eye)
     link: LinkState | None = None  # null: no published RF parameters for this satellite
+    # The selection only (null otherwise): Earth central angle from the sub-point to the rim of
+    # the ground area from which the satellite is above the horizon mask (its footprint).
+    footprint_radius_deg: float | None = None
 
 
 Illumination = Literal["sunlit", "penumbra", "eclipse"]
@@ -176,6 +179,20 @@ class ContactState(BaseModel):
     channel_modelled: bool  # a published link budget drives bit errors
     one_way_light_time_s: float | None  # null below the horizon
     archive: ArchiveStatus | None = None
+    # The downlink the station listens on (the link profile's, else the seed's) and its Doppler
+    # shift, received minus transmitted; null when the satellite has neither.
+    downlink_frequency_hz: float | None = None
+    doppler_hz: float | None = None
+
+
+class SunState(BaseModel):
+    """Where the Sun is overhead (WGS84), for day/night shading, and how fast that point moves in
+    sim time: clients advance it by the estimated sim time between snapshots."""
+
+    subsolar_lat_deg: float
+    subsolar_lon_deg: float
+    lat_rate_deg_s: float
+    lon_rate_deg_s: float
 
 
 class Snapshot(BaseModel):
@@ -193,6 +210,20 @@ class Snapshot(BaseModel):
     health: HealthState | None = None  # of the selected satellite
     contact: ContactState | None = None  # with the selected satellite
     automation: AutomationState | None = None  # while a booked pass holds the antenna
+    sun: SunState | None = None
+    # The elevation floor the session filter applies to the satellites shown: max(horizon mask,
+    # the filter's minimum elevation). Tracked and selected satellites are shown below it too.
+    shown_min_elevation_deg: float | None = None
+
+
+class TrackCrossing(BaseModel):
+    """Where the orbit crosses this station's horizon mask, refined like a pass's AOS / LOS."""
+
+    time: datetime
+    kind: Literal["aos", "los"]
+    lon_deg: float
+    lat_deg: float
+    alt_m: float
 
 
 class GroundTrackMessage(BaseModel):
@@ -208,6 +239,10 @@ class GroundTrackMessage(BaseModel):
     # satellite above its horizon mask there (the in-view part of the orbit, drawn bright).
     alt_m: list[float] | None = None
     above_mask: list[bool] | None = None
+    rag: list[Rag] | None = None  # link state at each point; null without a link profile
+    # Exact mask crossings, each between the two samples whose ``above_mask`` differ; null when
+    # SGP4 dropped a sample (the points are then not evenly spaced).
+    crossings: list[TrackCrossing] | None = None
 
 
 class PassArcMessage(BaseModel):

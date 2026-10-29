@@ -4,7 +4,15 @@ catalog ingest and swapped in with it (immutable)."""
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
-from app.packets.templates import CommandTemplate, TelemetryTemplate
+from app.packets.templates import CommandTemplate, SourceRef, TelemetryTemplate
+
+
+@dataclass(frozen=True)
+class Downlink:
+    """A satellite's downlink frequency from the seed, with its sources."""
+
+    frequency_hz: float
+    sources: tuple[SourceRef, ...]
 
 
 @dataclass(frozen=True)
@@ -13,6 +21,7 @@ class SatelliteTemplates:
     # (packet_template.id, template)
     telemetry: tuple[tuple[int, TelemetryTemplate], ...]
     commands: tuple[tuple[int, CommandTemplate], ...]
+    downlink: Downlink | None = None  # seeded; satellites with a link profile use its frequency
 
     def telemetry_named(self, name: str) -> tuple[int, TelemetryTemplate] | None:
         return next(((i, t) for i, t in self.telemetry if t.name == name), None)
@@ -37,9 +46,11 @@ class CommsTable:
 
     @classmethod
     def build(
-        cls, rows: Iterable[tuple[int, int, TelemetryTemplate | CommandTemplate]]
+        cls,
+        rows: Iterable[tuple[int, int, TelemetryTemplate | CommandTemplate]],
+        downlinks: Mapping[int, Downlink] | None = None,
     ) -> "CommsTable":
-        """From (template id, NORAD ID, template) rows."""
+        """From (template id, NORAD ID, template) rows, and the seeded downlinks by NORAD ID."""
         telemetry: dict[int, list[tuple[int, TelemetryTemplate]]] = {}
         commands: dict[int, list[tuple[int, CommandTemplate]]] = {}
         for template_id, norad_id, template in rows:
@@ -51,7 +62,9 @@ class CommsTable:
                 commands[norad_id].append((template_id, template))
         return cls(
             {
-                n: SatelliteTemplates(n, tuple(telemetry[n]), tuple(commands[n]))
+                n: SatelliteTemplates(
+                    n, tuple(telemetry[n]), tuple(commands[n]), (downlinks or {}).get(n)
+                )
                 for n in telemetry
                 if telemetry[n]  # a satellite with no telemetry template has no comms
             }

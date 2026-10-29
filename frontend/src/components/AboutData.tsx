@@ -25,7 +25,9 @@ export function AboutData() {
         <p>
           <span className="font-semibold text-gray-900 dark:text-gray-100">The globe. </span>
           Its imagery is Natural Earth II; its cone shows where a satellite is above the mask (and, for the
-          selection, where its link margin is green), not what you could see.
+          selection, where its link margin is green), not what you could see. The selection’s footprint is the
+          ground from which it is above the mask. Day and night follow the Sun computed for the sim time, on a
+          geometric terminator with no twilight.
         </p>
         <p>
           <span className="font-semibold text-gray-900 dark:text-gray-100">Links and systems. </span>

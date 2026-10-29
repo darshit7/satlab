@@ -48,6 +48,8 @@ from app.models.ws import (
     SatelliteType,
     SetFilter,
     Snapshot,
+    SunState,
+    TrackCrossing,
     UpcomingMessage,
     UpcomingPass,
 )
@@ -67,14 +69,16 @@ from app.sim.geometry import (
     Observer,
     geodetic,
     ground_track,
+    mask_footprint_deg,
     observe,
     off_nadir_deg,
 )
 from app.sim.linkbudget import RAG_NAMES, RED, LinkTable, RagThresholds, strong_link_bands
-from app.sim.passes import Arc, UpcomingSweep, pass_arcs
+from app.sim.passes import UpcomingSweep, mask_crossings, pass_arcs
 from app.sim.propagate import Elements, Epochs, epochs
 from app.sim.scheduler import AutomationRecord, PassAutomation, ScheduledCommand
 from app.sim.subsystems import HealthTracker
+from app.sim.sun import subsolar_point
 
 log = logging.getLogger(__name__)
 
@@ -94,6 +98,8 @@ _SWEEP_BUDGET_SHARE = 0.3
 # Strong-link bands are cached per profile and satellite radius rounded to this many metres.
 _BAND_RADIUS_STEP_M = 1000.0
 _BAND_CACHE_SIZE = 256
+# The subsolar point's rates come from its motion over this much sim time.
+_SUN_RATE_STEP_S = 60.0
 
 
 @dataclass(frozen=True)
@@ -183,6 +189,7 @@ class Subscriber:
 @dataclass
 class _TrackState:
     elements: Elements
+    links_version: int  # the link profiles that coloured it
     center: datetime
     message: GroundTrackMessage
 
@@ -216,6 +223,7 @@ class _Look:
     elevation_deg: float
     above_mask: bool
     range_m: float
+    range_rate_m_s: float
     off_nadir_deg: float
     link: LinkState | None
 
@@ -453,7 +461,7 @@ class SessionRuntime:
             if target.pinned and target.norad_id in streamed:
                 elements = target.elements or self._lookup(target.norad_id)
                 if elements is not None:
-                    self._maybe_update_track(elements, sim_time)
+                    self._maybe_update_track(elements, fleet.links, sim_time)
 
         # 4. Rising soon.
         busy = time.perf_counter() - started > _SWEEP_BUDGET_SHARE * self._tick_period_s
@@ -488,6 +496,8 @@ class SessionRuntime:
             health=health,
             contact=self.comms.contact,
             automation=self.automation.state(sim_time),
+            sun=sun_state(sim_time),
+            shown_min_elevation_deg=min_elev,
         )
         self.tick += 1
         self._publish(snapshot)
@@ -607,6 +617,10 @@ class SessionRuntime:
                 name, tle_epoch = target.elements.name, target.elements.epoch
                 c = classify(name, target.norad_id)
                 kind, sar = c.type, c.is_sar_capable
+            selected = target.norad_id == self.selected
+            footprint = (
+                round(float(mask_footprint_deg(r_itrf[k], self._mask_deg)), 4) if selected else None
+            )
             states.append(
                 SatelliteState(
                     norad_id=target.norad_id,
@@ -623,9 +637,10 @@ class SessionRuntime:
                     range_rate_m_s=round(rate, 3),
                     above_mask=el >= self._mask_deg,
                     link=links.get(k),
+                    footprint_radius_deg=footprint,
                 )
             )
-            if target.norad_id == self.selected:
+            if selected:
                 off_nadir = off_nadir_deg(r_itrf[k], self._station.itrf_m)
                 self._selected_look = _Look(
                     target.satrec,
@@ -633,6 +648,7 @@ class SessionRuntime:
                     el,
                     el >= self._mask_deg,
                     rng,
+                    rate,
                     float(off_nadir),
                     links.get(k),
                 )
@@ -709,6 +725,9 @@ class SessionRuntime:
             range_m=look.range_m,
             margin_db=look.link.margin_db if look.link is not None else None,
             has_link=look.link is not None,
+            range_rate_m_s=look.range_rate_m_s,
+            link_frequency_hz=look.link.frequency_hz if look.link is not None else None,
+            link_doppler_hz=look.link.doppler_hz if look.link is not None else None,
         )
 
     def _selected_health(self, links: LinkTable, sim_time: datetime) -> HealthState | None:
@@ -784,7 +803,14 @@ class SessionRuntime:
                     start_time=arc.start,
                     end_time=arc.end,
                     points=arc.points,
-                    rag=self._arc_rag(links, target.norad_id, arc),
+                    rag=self._rag_along(
+                        links,
+                        target.norad_id,
+                        range_m=arc.range_m,
+                        range_rate_m_s=arc.range_rate_m_s,
+                        elevation_deg=np.array([el for _, el in arc.points]),
+                        off_nadir=arc.off_nadir_deg,
+                    ),
                 )
                 self._publish(message)
             self._arcs[target.norad_id] = _ArcState(
@@ -797,17 +823,27 @@ class SessionRuntime:
                 message=message,
             )
 
-    def _arc_rag(self, links: LinkTable, norad_id: int, arc: Arc) -> list[Rag] | None:
-        """The link state at each arc point: the same evaluation as the snapshot's."""
+    def _rag_along(
+        self,
+        links: LinkTable,
+        norad_id: int,
+        *,
+        range_m: NDArray[np.float64],
+        range_rate_m_s: NDArray[np.float64],
+        elevation_deg: NDArray[np.float64],
+        off_nadir: NDArray[np.float64],
+    ) -> list[Rag] | None:
+        """The link state at each point of an arc or a track: the same evaluation as the
+        snapshot's. None without a link profile."""
         profile = links.by_norad.get(norad_id)
-        if profile is None or not arc.points:
+        if profile is None or len(range_m) == 0:
             return None
         ev = links.evaluate(
-            np.full(len(arc.points), profile),
-            range_m=arc.range_m,
-            range_rate_m_s=arc.range_rate_m_s,
-            elevation_deg=np.array([el for _, el in arc.points]),
-            off_nadir_deg=arc.off_nadir_deg,
+            np.full(len(range_m), profile),
+            range_m=range_m,
+            range_rate_m_s=range_rate_m_s,
+            elevation_deg=elevation_deg,
+            off_nadir_deg=off_nadir,
             mask_deg=self._mask_deg,
             thresholds=self._thresholds,
         )
@@ -827,9 +863,13 @@ class SessionRuntime:
 
     # ----- ground tracks -----
 
-    def _maybe_update_track(self, elements: Elements, sim_time: datetime) -> None:
+    def _maybe_update_track(self, elements: Elements, links: LinkTable, sim_time: datetime) -> None:
         state = self._tracks.get(elements.norad_id)
-        if state is not None and state.elements is elements:
+        if (
+            state is not None
+            and state.elements is elements
+            and state.links_version == links.version
+        ):
             offset = sim_time - state.center
             limit = timedelta(seconds=elements.period_s * _TRACK_REFRESH_ORBITS)
             if timedelta(0) <= offset <= limit:
@@ -837,6 +877,25 @@ class SessionRuntime:
         track = ground_track(
             elements, sim_time, self.config.ground_track_points, self._station, self._mask_deg
         )
+        crossings = None
+        if track.complete:
+            crossings = [
+                TrackCrossing(
+                    time=c.time,
+                    kind="aos" if c.rising else "los",
+                    lon_deg=round(c.lon_deg, 4),
+                    lat_deg=round(c.lat_deg, 4),
+                    alt_m=round(c.alt_m, 1),
+                )
+                for c in mask_crossings(
+                    elements.satellite.model,
+                    self._station,
+                    track.start,
+                    track.offsets_s,
+                    track.above_mask,
+                    self._mask_deg,
+                )
+            ]
         message = GroundTrackMessage(
             norad_id=elements.norad_id,
             start_time=track.start,
@@ -845,8 +904,17 @@ class SessionRuntime:
             points=track.points,
             alt_m=track.alt_m,
             above_mask=track.above_mask,
+            rag=self._rag_along(
+                links,
+                elements.norad_id,
+                range_m=track.range_m,
+                range_rate_m_s=track.range_rate_m_s,
+                elevation_deg=track.elevation_deg,
+                off_nadir=track.off_nadir_deg,
+            ),
+            crossings=crossings,
         )
-        self._tracks[elements.norad_id] = _TrackState(elements, sim_time, message)
+        self._tracks[elements.norad_id] = _TrackState(elements, links.version, sim_time, message)
         self._publish(message)
 
     # ----- rising soon -----
@@ -934,3 +1002,15 @@ class SessionRuntime:
                     fleet_size,
                     self._tick_period_s * 1000,
                 )
+
+
+def sun_state(sim_time: datetime) -> SunState:
+    """The subsolar point now, and its rates over the next ``_SUN_RATE_STEP_S`` of sim time."""
+    lat, lon = subsolar_point(epochs(sim_time, (0.0, _SUN_RATE_STEP_S)))
+    lon_step = (float(lon[1] - lon[0]) + 180.0) % 360.0 - 180.0  # across the antimeridian
+    return SunState(
+        subsolar_lat_deg=round(float(lat[0]), 4),
+        subsolar_lon_deg=round(float(lon[0]), 4),
+        lat_rate_deg_s=round(float(lat[1] - lat[0]) / _SUN_RATE_STEP_S, 9),
+        lon_rate_deg_s=round(lon_step / _SUN_RATE_STEP_S, 9),
+    )

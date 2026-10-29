@@ -181,6 +181,10 @@ class SatelliteCommsOut(BaseModel):
     satellite_name: str
     telemetry: list[TelemetryTemplateOut]
     commands: list[CommandTemplateOut]  # empty: receive-only (no published command set)
+    # Seeded downlink frequency and its sources; null for satellites with a link profile, whose
+    # frequency is the profile's (/api/link-profiles).
+    downlink_frequency_hz: float | None = None
+    downlink_sources: list[LinkSourceOut] = []
 
 
 class PacketTemplatesOut(BaseModel):

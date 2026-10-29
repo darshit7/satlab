@@ -3,8 +3,9 @@
 // satellite's strong-link elevation bands from its link budget) and the height from its streamed
 // position; nothing here decides a link state.
 
-/** Above the cone surfaces the satellite is in view (mask) or in the green-margin region (strong). */
-export type ConeKind = 'mask' | 'strong'
+/** Above the cone surfaces the satellite is in view (mask), in the green-margin region (strong), or
+ *  above the Overhead filter's minimum elevation, when that is higher than the mask (shown). */
+export type ConeKind = 'mask' | 'strong' | 'shown'
 
 export interface ConeShape {
   kind: ConeKind
@@ -39,9 +40,10 @@ function shape(kind: ConeKind, elevationDeg: number, stationRadiusM: number, sat
 }
 
 /**
- * The outer cone (above the horizon mask) and the inner strong-link cone surfaces (one per band
- * edge below the zenith), each ending where it meets the satellite's altitude shell: the rim is
- * where a satellite at that height crosses the boundary (AOS / LOS for the outer one). When the
+ * The outer cone (above the horizon mask), the inner strong-link cone surfaces (one per band edge
+ * below the zenith) and, when the Overhead filter shows only satellites above a higher elevation
+ * (`shownDeg`), that floor's cone; each ends where it meets the satellite's altitude shell: the rim
+ * is where a satellite at that height crosses the boundary (AOS / LOS for the outer one). When the
  * link is green right from the mask, the strong-link surface is the mask's and replaces it.
  */
 export function coneShapes(
@@ -49,6 +51,7 @@ export function coneShapes(
   strongBandsDeg: readonly (readonly [number, number])[],
   stationRadiusM: number,
   satRadiusM: number,
+  shownDeg?: number | null,
 ): ConeShape[] {
   if (!(satRadiusM > stationRadiusM && stationRadiusM > 0)) return []
   const mask = Math.max(0, maskDeg)
@@ -60,6 +63,42 @@ export function coneShapes(
   const shapes = [
     ...(edges.some((edge) => edge - mask < SAME_SURFACE_DEG) ? [] : [shape('mask', mask, stationRadiusM, satRadiusM)]),
     ...edges.map((edge) => shape('strong', edge, stationRadiusM, satRadiusM)),
+    ...(shownDeg != null && shownDeg - mask >= SAME_SURFACE_DEG && shownDeg < ZENITH_EDGE_DEG
+      ? [shape('shown', shownDeg, stationRadiusM, satRadiusM)]
+      : []),
   ]
   return shapes.filter((s) => Number.isFinite(s.heightM) && Number.isFinite(s.rimRadiusM))
+}
+
+export interface ConeSurface {
+  /** East-north-up metres from the station: the apex, then the rim ring. */
+  positions: Float64Array
+  /** Triangles (apex, rim i, rim i + 1). */
+  indices: Uint16Array
+  /** Per vertex, 0–1: `apexAlpha` at the apex fading to `rimAlpha` at the rim. */
+  alphas: Float32Array
+}
+
+/**
+ * The side of a cone, open at the rim (no lid), as one fan from the apex: the translucent cone,
+ * fading from the station upwards.
+ */
+export function coneSurface(shape: ConeShape, apexAlpha: number, rimAlpha = 0, slices = 96): ConeSurface {
+  const positions = new Float64Array((slices + 1) * 3)
+  const alphas = new Float32Array(slices + 1).fill(rimAlpha)
+  alphas[0] = apexAlpha
+  for (let i = 0; i < slices; i++) {
+    const a = (2 * Math.PI * i) / slices
+    positions.set([shape.rimRadiusM * Math.sin(a), shape.rimRadiusM * Math.cos(a), shape.heightM], (i + 1) * 3)
+  }
+  const indices = new Uint16Array(slices * 3)
+  for (let i = 0; i < slices; i++) indices.set([0, i + 1, ((i + 1) % slices) + 1], i * 3)
+  return { positions, indices, alphas }
+}
+
+/** Whether a point (east-north-up metres from the station) is inside the cone, below its rim:
+ *  there, a fill all around the camera would tint the whole view. */
+export function insideCone([east, north, up]: readonly [number, number, number], shape: ConeShape): boolean {
+  if (!(up > 0 && up < shape.heightM)) return false
+  return Math.atan2(up, Math.hypot(east, north)) > (shape.elevationDeg * Math.PI) / 180
 }
