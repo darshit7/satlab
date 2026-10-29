@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { ClockBar } from './components/ClockBar'
 import { Notices } from './components/Notices'
 import { TiltedGridBackground } from './components/ui/TiltedGridBackground'
+import { startEngagementClock, track } from './lib/analytics'
 import { useMission } from './store/mission'
 import { useUi } from './store/ui'
 import { Inspector } from './views/Inspector/Inspector'
@@ -16,14 +17,18 @@ export default function App() {
   useEffect(() => {
     if (booted) return // StrictMode runs effects twice in dev
     booted = true
+    startEngagementClock()
     const { loadStations, loadLinkProfiles, loadPacketTemplates } = useMission.getState()
     void loadLinkProfiles()
     void loadPacketTemplates()
     void loadStations().then(() => {
       // Resume where the last session observed from: a custom location, or a preset that still exists.
       const { stations, site, startSession } = useMission.getState()
-      if (site && ('location' in site || stations.some((s) => s.id === site.station_id))) void startSession(site)
-      else useUi.getState().openPanel('station') // first visit: start by choosing where to observe from
+      const preset = site && 'station_id' in site ? stations.find((s) => s.id === site.station_id) : undefined
+      if (site && ('location' in site || preset)) {
+        void startSession(site)
+        track('session-start', { how: 'resumed', station: preset?.name ?? 'Custom location' })
+      } else useUi.getState().openPanel('station') // first visit: start by choosing where to observe from
     })
   }, [])
 

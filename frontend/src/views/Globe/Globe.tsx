@@ -188,7 +188,7 @@ function coneFillGeometry(shape: ConeShape, color: Color): Geometry {
  * ~20 fps frame loop. Presentation only: positions, in-view flags and crossings, link colours, cone
  * angles, the footprint radius and the Sun all come from the server.
  */
-export function Globe({ onError }: { onError: () => void }) {
+export function Globe({ onError }: { onError: (error?: unknown) => void }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const onErrorRef = useRef(onError)
   useEffect(() => {
@@ -210,14 +210,14 @@ export function Globe({ onError }: { onError: () => void }) {
         maximumRenderTimeChange: Infinity,
         showRenderLoopErrors: false,
       })
-    } catch {
-      onErrorRef.current() // no usable WebGL after all
+    } catch (error) {
+      onErrorRef.current(error) // no usable WebGL after all
       return
     }
     const scene = widget.scene
     const globe = scene.globe
     scene.fog.enabled = false
-    const failed = () => onErrorRef.current()
+    const failed = (_scene: unknown, error: unknown) => onErrorRef.current(error)
     scene.renderError.addEventListener(failed)
 
     // Day and night from the server's Sun (its direction is set every frame), never Cesium's own

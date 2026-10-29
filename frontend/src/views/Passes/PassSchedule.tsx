@@ -3,6 +3,7 @@ import { useEffect } from 'react'
 import { Button } from '../../components/ui/Button'
 import { cn } from '../../components/ui/cn'
 import { Dialog } from '../../components/ui/Dialog'
+import { trackOnce } from '../../lib/analytics'
 import { passesAround } from '../../lib/passes'
 import { formatAge, formatCountdown, formatLocalTime, formatUtcTime } from '../../lib/time'
 import { useSimNow } from '../../lib/useSimNow'
@@ -87,7 +88,13 @@ export function NextPass() {
             Jump
           </Button>
         )}
-        <Button disabled={!data && !current?.error} onClick={() => setPassesOpen(true)}>
+        <Button
+          disabled={!data && !current?.error}
+          onClick={() => {
+            trackOnce('pass-schedule-open')
+            setPassesOpen(true)
+          }}
+        >
           All passes
         </Button>
       </span>

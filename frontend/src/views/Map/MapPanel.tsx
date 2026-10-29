@@ -1,6 +1,7 @@
 import { Globe as GlobeIcon, Map as MapIcon } from 'lucide-react'
-import { Component, lazy, Suspense, useCallback, useState, type ReactNode } from 'react'
+import { Component, lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Button } from '../../components/ui/Button'
+import { captureError, trackOnce } from '../../lib/analytics'
 import { setMapMode, supportsWebGL, useMapMode, type MapMode } from '../../lib/mapMode'
 import { useMission } from '../../store/mission'
 import { GroundTrackMap } from '../GroundTrack/GroundTrackMap'
@@ -9,13 +10,13 @@ import { GroundTrackMap } from '../GroundTrack/GroundTrackMap'
 const Globe = lazy(() => import('../Globe/Globe').then((m) => ({ default: m.Globe })))
 
 /** Falls back to 2D if the globe's chunk can't load or it throws while rendering. */
-class GlobeBoundary extends Component<{ onError: () => void; children: ReactNode }, { failed: boolean }> {
+class GlobeBoundary extends Component<{ onError: (error: unknown) => void; children: ReactNode }, { failed: boolean }> {
   state = { failed: false }
   static getDerivedStateFromError() {
     return { failed: true }
   }
-  componentDidCatch() {
-    this.props.onError()
+  componentDidCatch(error: unknown) {
+    this.props.onError(error)
   }
   render() {
     return this.state.failed ? null : this.props.children
@@ -39,7 +40,13 @@ export function MapPanel() {
   const can3d = webgl && !globeFailed
   const mode: MapMode = preference === '3d' && can3d ? '3d' : '2d'
 
-  const onGlobeError = useCallback(() => {
+  useEffect(() => {
+    if (!webgl) trackOnce('globe-unavailable', { reason: 'no-webgl' })
+  }, [webgl])
+
+  const onGlobeError = useCallback((error?: unknown) => {
+    if (error !== undefined) captureError(error, 'globe')
+    trackOnce('globe-unavailable', { reason: 'failed' })
     setGlobeFailed((already) => {
       if (!already) useMission.getState().notify('The 3D globe could not start in this browser; showing the 2D map.')
       return true
@@ -78,7 +85,10 @@ export function MapPanel() {
               aria-pressed={mode === option}
               disabled={unavailable}
               title={unavailable ? (webgl ? 'The 3D globe failed to start' : '3D needs WebGL') : `${label} view`}
-              onClick={() => setMapMode(option)}
+              onClick={() => {
+                if (option !== mode) trackOnce('map-mode', { mode: option })
+                setMapMode(option)
+              }}
             >
               <Icon size={16} strokeWidth={1.5} />
               {label}

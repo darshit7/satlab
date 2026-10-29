@@ -54,10 +54,12 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-          # Public by design (it ends up in the page): only the web image uses it. A repository
+          # Public by design (they end up in the page): only the web image uses them. A repository
           # variable: this job has no environment, so environment variables aren't visible here.
+          # The release tags the errors Umami captures with the deployed commit.
           build-args: |
             NEXT_UMAMI_ID=${{ vars.NEXT_UMAMI_ID }}
+            SATLAB_RELEASE=${{ github.sha }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,scope=${{ matrix.image }},mode=max
 

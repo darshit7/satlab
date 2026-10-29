@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 import { api } from '../api/client'
+import { track, trackOnce } from '../lib/analytics'
 import { appendPackets, mergeStatuses } from '../lib/comms'
 import { DEFAULT_FILTERS, sanitizeFilters } from '../lib/filters'
 import { followAutomation, mergeAlarms, shouldAnnounce } from '../lib/schedule'
@@ -17,6 +18,7 @@ import type {
 } from '../types/api'
 import type {
   AlarmMessage,
+  CommandStatus,
   CommandStatusMessage,
   GroundTrackMessage,
   PacketMessage,
@@ -117,6 +119,10 @@ let pendingPackets: PacketMessage[] = []
 let pendingStatuses: CommandStatusMessage[] = []
 // The booked pass the client last followed (pass automation turns the antenna, and the selection).
 let lastAutomationKey: string | null = null
+// Commands whose outcome has been reported to analytics.
+const reportedCommands = new Set<number>()
+const isFinal = (status: CommandStatus): status is 'acked' | 'failed' | 'held' | 'aborted' =>
+  status === 'acked' || status === 'failed' || status === 'held' || status === 'aborted'
 
 const inRange = (v: unknown, min: number, max: number): v is number =>
   typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max
@@ -167,6 +173,8 @@ export const useMission = create<MissionState>()(
         socket?.send({ type: 'set_tracked', norad_ids: get().tracked.map((s) => s.norad_id) })
       const sendSelected = () => socket?.send({ type: 'set_selected', norad_id: get().selectedId })
       const sendFilters = () => socket?.send({ type: 'set_filter', ...get().filters })
+      const satellite = (noradId: number) =>
+        get().snapshot?.satellites.find((s) => s.norad_id === noradId) ?? get().tracked.find((s) => s.norad_id === noradId)
 
       const onSnapshot = (message: Snapshot) => {
         const present = new Set(message.satellites.map((s) => s.norad_id))
@@ -223,9 +231,15 @@ export const useMission = create<MissionState>()(
           case 'packet':
             pendingPackets.push(message)
             break
-          case 'command_status':
+          case 'command_status': {
             pendingStatuses.push(message)
+            const { status, command_id: id } = message
+            if (isFinal(status) && !reportedCommands.has(id)) {
+              reportedCommands.add(id)
+              track('command-result', { status })
+            }
             break
+          }
           case 'alarm': {
             const announce = shouldAnnounce(message, get().alarms)
             set((s) => ({ alarms: mergeAlarms(s.alarms, [message]) }))
@@ -285,11 +299,15 @@ export const useMission = create<MissionState>()(
         },
 
         sendCommand: (noradId, command, params) => {
-          socket?.send({ type: 'send_command', norad_id: noradId, command, params })
+          if (!socket) return
+          socket.send({ type: 'send_command', norad_id: noradId, command, params })
+          track('command-send', { satellite: satellite(noradId)?.name ?? `#${noradId}`, command, when: 'now' })
         },
 
         scheduleCommand: (noradId, command, params, aosTime) => {
-          socket?.send({ type: 'schedule_command', norad_id: noradId, command, params, aos_time: aosTime })
+          if (!socket) return
+          socket.send({ type: 'schedule_command', norad_id: noradId, command, params, aos_time: aosTime })
+          track('command-send', { satellite: satellite(noradId)?.name ?? `#${noradId}`, command, when: 'pass' })
         },
 
         cancelCommand: (commandId) => {
@@ -331,6 +349,7 @@ export const useMission = create<MissionState>()(
             if (generation !== sessionGeneration) return
             set({ connection: 'closed' })
             get().notify(`Could not start a mission session: ${String(err)}`)
+            trackOnce('session-failed')
             return
           }
           if (generation !== sessionGeneration) {
@@ -351,7 +370,10 @@ export const useMission = create<MissionState>()(
               // e.g. the server ended the session; start a fresh one at the same place
               if (socket === current) setTimeout(() => void get().startSession(site), 1000)
             },
-            onServerBusy: () => get().notify('Mission control is at capacity. Retrying shortly…'),
+            onServerBusy: () => {
+              get().notify('Mission control is at capacity. Retrying shortly…')
+              trackOnce('server-busy')
+            },
           })
           socket = current
           current.connect()
@@ -361,6 +383,7 @@ export const useMission = create<MissionState>()(
           if (!get().tracked.some((s) => s.norad_id === sat.norad_id)) {
             set((s) => ({ tracked: [...s.tracked, sat] }))
             sendTracked()
+            trackOnce('satellite-track', { name: sat.name })
           }
           get().select(sat.norad_id)
         },
@@ -379,6 +402,9 @@ export const useMission = create<MissionState>()(
           if (selectedId === get().selectedId) return
           set({ selectedId })
           sendSelected()
+          // Only the visitor calls this: pass automation sets the selection directly.
+          const sat = selectedId !== null ? satellite(selectedId) : undefined
+          if (sat) trackOnce('satellite-select', { name: sat.name, type: sat.type ?? 'unknown' })
         },
 
         setFilters: (change) => {
