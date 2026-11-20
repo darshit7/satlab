@@ -55,7 +55,8 @@ def _on_include(app: Sphinx, relative_path: Path, parent: str, content: list[str
         return
 
     def missing(target: str) -> None:
-        logger.warning(f"{rel} (included in {parent}) links to a missing file: {target}")
+        if app.config.satlab_check_repo_links:
+            logger.warning(f"{rel} (included in {parent}) links to a missing file: {target}")
 
     content[0] = links.rewrite_repo_links(
         content[0], path, repo, PUBLISHED, app.config.satlab_repo_blob, missing
@@ -92,6 +93,7 @@ def _check_output(app: Sphinx, exception: Exception | None) -> None:
 def setup(app: Sphinx) -> dict[str, object]:
     """Register the config value and the event handlers."""
     app.add_config_value("satlab_repo_blob", "", "env")
+    app.add_config_value("satlab_check_repo_links", True, "env")
     app.connect("builder-inited", _generate)
     app.connect("include-read", _on_include)
     app.connect("autodoc-process-signature", _model_signature)

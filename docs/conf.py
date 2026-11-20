@@ -190,3 +190,7 @@ notfound_urls_prefix = BASE_PATH
 
 # ---------- satlab_reference (docs/_ext) ----------
 satlab_repo_blob = f"{GITHUB_REPO}/blob/main/"
+# Included files (README, AGENTS.md) link to repo files, which become GitHub links; a link to a file
+# that doesn't exist is a warning. Off where the checkout is partial: the web image's build context
+# is an allow-list (frontend/Dockerfile sets DOCS_CHECK_REPO_LINKS=0). CI's docs job checks them.
+satlab_check_repo_links = os.environ.get("DOCS_CHECK_REPO_LINKS", "1") != "0"
