@@ -1,4 +1,4 @@
-import { focusRing } from './Button'
+import { focusRing } from './buttonClasses'
 
 /** Text inputs and selects: rounded-lg, hairline ring, house focus ring. */
 export const inputClass = [

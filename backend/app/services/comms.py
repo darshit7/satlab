@@ -28,6 +28,13 @@ _PURGE_EVERY_S = 3600.0
 
 
 class CommsWriter:
+    """Persists what the comms runtimes produce (frames, command statuses, alarms) off the loop.
+
+    The tick only offers records to a bounded queue (``offer``); a worker writes them in batches
+    on a thread. Past ``max_telemetry_frames_per_session`` frames still stream but aren't stored,
+    and an hourly purge drops the comms rows of sessions that ended long ago.
+    """
+
     def __init__(self, settings: Settings, session_factory: sessionmaker[Session]) -> None:
         self.settings = settings
         self._sessions = session_factory
@@ -46,6 +53,7 @@ class CommsWriter:
     # ----- producer side (the sim loop) -----
 
     def offer(self, record: Record | AutomationRecord) -> None:
+        """Queue a record without blocking; when the queue is full, records are dropped (logged)."""
         try:
             self._queue.put_nowait(record)
             self._dropping = False
@@ -57,9 +65,11 @@ class CommsWriter:
     # ----- lifecycle -----
 
     def start(self) -> None:
+        """Start the writer (a background task)."""
         self._task = asyncio.create_task(self._run(), name="comms-writer")
 
     async def stop(self) -> None:
+        """Stop the worker, then write what is still queued."""
         if self._task is not None:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

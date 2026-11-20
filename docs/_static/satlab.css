@@ -1,0 +1,52 @@
+/* Warm Notebook touches the Furo variables in conf.py can't reach (design-system.md §4–§5):
+   rounded surfaces, the growing underline on links, and diagrams that size to their content. */
+
+.highlight,
+.highlight pre,
+.admonition,
+.table-wrapper,
+.sig,
+pre.mermaid,
+.sidebar-search {
+  border-radius: 0.5rem;
+}
+
+.admonition {
+  overflow: hidden;
+}
+
+/* sphinxcontrib-mermaid fixes every diagram at 500px; let them take their natural height (each
+   still caps its width at its natural size, so a small diagram isn't blown up). */
+pre.mermaid > svg,
+.mermaid-container > pre > svg {
+  height: auto !important;
+}
+
+pre.mermaid {
+  background: var(--color-code-background);
+  padding: 1rem;
+}
+
+.satlab-app-link {
+  display: block;
+  margin: 0 var(--sidebar-item-spacing-horizontal) 0.5rem;
+  font-weight: 600;
+}
+
+.satlab-app-link::after {
+  content: " →";
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  article a.reference {
+    background-image: linear-gradient(var(--color-brand-content), var(--color-brand-content));
+    background-position: 0 100%;
+    background-repeat: no-repeat;
+    background-size: 0 1px;
+    transition: background-size 150ms ease;
+  }
+
+  article a.reference:hover {
+    background-size: 100% 1px;
+  }
+}

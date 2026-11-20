@@ -15,20 +15,22 @@ from app.packets.crc import crc16_x25
 from app.packets.errors import DecodeError
 
 MAX_DIGIPEATERS = 8
-MAX_INFO_BYTES = 256  # N1, the default maximum information field
+MAX_INFO_BYTES = 256  #: N1, the default maximum information field
 UI_CONTROL = 0x03
 NO_LAYER_3 = 0xF0
 
 _ADDRESS_BYTES = 7
 _CALLSIGN = re.compile(r"^[A-Z0-9]{1,6}$")
-_MIN_FRAME = 2 * _ADDRESS_BYTES + 2  # destination, source, control, PID
+_MIN_FRAME = 2 * _ADDRESS_BYTES + 2  #: destination, source, control, PID
 
 
 @dataclass(frozen=True)
 class Address:
+    """An AX.25 address: callsign (1-6 letters or digits), SSID (0-15) and its flag bit."""
+
     callsign: str
     ssid: int = 0
-    # Digipeaters: "has been repeated" (H). Destination/source: the command/response bit (C).
+    #: Digipeaters: "has been repeated" (H). Destination/source: the command/response bit (C).
     flag: bool = False
 
     def __post_init__(self) -> None:
@@ -41,6 +43,8 @@ class Address:
 
 @dataclass(frozen=True)
 class UiFrame:
+    """A UI (unnumbered information) frame: addresses, protocol id and information field."""
+
     destination: Address
     source: Address
     digipeaters: tuple[Address, ...]
@@ -60,6 +64,7 @@ def _encode_address(address: Address, last: bool) -> bytes:
 
 
 def encode_ui(frame: UiFrame, *, fcs: bool) -> bytes:
+    """The frame's bytes (no flags, no bit stuffing), with the FCS appended when ``fcs``."""
     if len(frame.digipeaters) > MAX_DIGIPEATERS:
         raise ValueError("too many digipeaters")
     if len(frame.info) > MAX_INFO_BYTES:

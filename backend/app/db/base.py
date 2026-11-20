@@ -3,7 +3,7 @@
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from functools import lru_cache
-from typing import Any
+from typing import Any, override
 
 from sqlalchemy import Dialect, String, create_engine, event
 from sqlalchemy.dialects.postgresql import TIMESTAMP
@@ -24,11 +24,13 @@ class UTCDateTime(TypeDecorator[datetime]):
     impl = String(32)
     cache_ok = True
 
+    @override
     def load_dialect_impl(self, dialect: Dialect) -> TypeEngine[datetime]:
         if dialect.name == "postgresql":
             return dialect.type_descriptor(TIMESTAMP(timezone=True))
         return dialect.type_descriptor(String(32))
 
+    @override
     def process_bind_param(self, value: datetime | None, dialect: Dialect) -> str | datetime | None:
         if value is None:
             return None
@@ -39,6 +41,7 @@ class UTCDateTime(TypeDecorator[datetime]):
             return value
         return value.isoformat(timespec="microseconds")
 
+    @override
     def process_result_value(
         self, value: str | datetime | None, dialect: Dialect
     ) -> datetime | None:
@@ -50,11 +53,16 @@ class UTCDateTime(TypeDecorator[datetime]):
 
 
 class Base(DeclarativeBase):
-    pass
+    """Declarative base of every ORM model: its metadata is the schema Alembic migrates."""
 
 
 @lru_cache
 def get_engine() -> Engine:
+    """The process's engine for ``SATLAB_DATABASE_URL``, created on first use.
+
+    SQLite gets foreign keys and WAL on every connection; Postgres (Neon) gets a small pool that
+    pre-pings and recycles connections, because the compute suspends when idle.
+    """
     url = make_url(get_settings().database_url)
     if url.get_backend_name() == "sqlite":
         engine = create_engine(url, connect_args={"check_same_thread": False})
@@ -81,6 +89,7 @@ def _sqlite_pragmas(dbapi_connection: Any, _record: Any) -> None:
 
 @lru_cache
 def get_sessionmaker() -> sessionmaker[Session]:
+    """Session factory on the engine; objects stay usable after commit (no expiry)."""
     return sessionmaker(bind=get_engine(), expire_on_commit=False)
 
 

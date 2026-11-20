@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "lint": "oxlint src && tsc -b",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "docs:vendor": "node scripts/docs-vendor.mjs"
   },
   "dependencies": {
     "@cesium/core": "0.1.0",
@@ -31,6 +32,7 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
+    "mermaid": "^11.17.2",
     "oxlint": "^1.81.0",
     "tailwindcss": "^4.3.3",
     "typescript": "~6.0.2",

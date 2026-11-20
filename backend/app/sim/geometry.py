@@ -37,11 +37,14 @@ Floats = NDArray[np.float64]
 
 @dataclass(frozen=True)
 class Observer:
-    lat_deg: float
-    lon_deg: float
-    alt_m: float = 0.0
+    """A place on the WGS84 ellipsoid that looks at the sky (the session's location)."""
+
+    lat_deg: float  #: geodetic latitude
+    lon_deg: float  #: longitude, east positive
+    alt_m: float = 0.0  #: height above the ellipsoid
 
     def to_skyfield(self) -> GeographicPosition:
+        """The same place as a skyfield position (the reference path)."""
         return wgs84.latlon(self.lat_deg, self.lon_deg, elevation_m=self.alt_m)
 
     @cached_property
@@ -66,6 +69,8 @@ class Observer:
 
 @dataclass(frozen=True)
 class SubPoint:
+    """The point on the ground under a satellite, and the satellite's height above it."""
+
     lat_deg: float
     lon_deg: float
     alt_m: float
@@ -73,13 +78,16 @@ class SubPoint:
 
 @dataclass(frozen=True)
 class LookAngles:
-    azimuth_deg: float  # clockwise from true north, [0, 360)
-    elevation_deg: float  # above the geometric horizon; negative = below
-    range_m: float  # slant range observer → satellite
-    range_rate_m_s: float  # d(range)/dt; negative = approaching
+    """Where a satellite is in an observer's sky, and how fast its range changes."""
+
+    azimuth_deg: float  #: clockwise from true north, [0, 360)
+    elevation_deg: float  #: above the geometric horizon; negative = below
+    range_m: float  #: slant range observer → satellite
+    range_rate_m_s: float  #: d(range)/dt; negative = approaching
 
 
 def sub_point(satellite: EarthSatellite, t: Time) -> SubPoint:
+    """Sub-satellite point by skyfield (the reference ``geodetic`` is tested against)."""
     position = wgs84.geographic_position_of(satellite.at(t))
     return SubPoint(
         lat_deg=float(position.latitude.degrees),
@@ -89,6 +97,7 @@ def sub_point(satellite: EarthSatellite, t: Time) -> SubPoint:
 
 
 def look_angles(satellite: EarthSatellite, observer: GeographicPosition, t: Time) -> LookAngles:
+    """Look angles by skyfield (the reference ``observe`` is tested against)."""
     topocentric = (satellite - observer).at(t)
     elevation, azimuth, distance = topocentric.altaz()
     *_, range_rate = topocentric.frame_latlon_and_rates(observer)
@@ -125,7 +134,7 @@ class Observation:
     elevation_deg: Floats
     range_m: Floats
     range_rate_m_s: Floats
-    r_itrf_m: Floats  # [n_sats, n_times, 3]
+    r_itrf_m: Floats  #: [n_sats, n_times, 3]
     ok: NDArray[np.bool_]
 
 
@@ -240,15 +249,15 @@ class GroundTrack:
 
     start: datetime
     end: datetime
-    points: list[tuple[float, float]]  # (lon_deg, lat_deg)
-    alt_m: list[float]  # height above the WGS84 ellipsoid, per point
-    above_mask: list[bool]  # per point: above the observer's horizon mask (the in-view part)
-    offsets_s: Floats  # seconds from ``start``
+    points: list[tuple[float, float]]  #: (lon_deg, lat_deg)
+    alt_m: list[float]  #: height above the WGS84 ellipsoid, per point
+    above_mask: list[bool]  #: per point: above the observer's horizon mask (the in-view part)
+    offsets_s: Floats  #: seconds from ``start``
     elevation_deg: Floats
     range_m: Floats
     range_rate_m_s: Floats
     off_nadir_deg: Floats
-    complete: bool  # no sample dropped: still evenly spaced in time
+    complete: bool  #: no sample dropped: still evenly spaced in time
 
 
 def ground_track(

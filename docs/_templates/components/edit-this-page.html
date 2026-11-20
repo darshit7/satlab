@@ -1,0 +1,8 @@
+{#- No edit link where the page has no source file in the repo: the generated API reference
+    stubs, viewcode's highlighted source pages and the 404. -#}
+{% extends "!components/edit-this-page.html" %}
+{% block link_available -%}
+{%- if not (pagename.startswith("reference/api/_autosummary/") or pagename.startswith("_modules/") or pagename == "404") -%}
+{{ super() }}
+{%- endif -%}
+{%- endblock %}

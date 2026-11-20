@@ -1,5 +1,5 @@
 import { X } from 'lucide-react'
-import { focusRing } from '../../components/ui/Button'
+import { focusRing } from '../../components/ui/buttonClasses'
 import { cn } from '../../components/ui/cn'
 import { useMission } from '../../store/mission'
 

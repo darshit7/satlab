@@ -7,6 +7,8 @@ import { loadEnv, type Plugin } from 'vite'
 import { defineConfig } from 'vitest/config'
 
 const backend = process.env.SATLAB_BACKEND_URL ?? 'http://localhost:8000'
+// The docs preview (sphinx-autobuild, docs/how-to/write-docs.md), so the header's Docs link works in dev.
+const docs = process.env.SATLAB_DOCS_URL ?? 'http://127.0.0.1:8001'
 
 // The app lives under https://<domain>/satlab/ (page, assets, REST and WebSocket).
 const BASE = '/satlab/'
@@ -112,6 +114,7 @@ export default defineConfig(({ mode }) => {
       proxy: {
         [`${BASE}api`]: { target: backend, rewrite: stripBase },
         [`${BASE}ws`]: { target: backend.replace(/^http/, 'ws'), ws: true, rewrite: stripBase },
+        [`${BASE}docs`]: { target: docs, rewrite: (path) => path.slice(`${BASE}docs`.length) || '/' },
       },
     },
     test: {

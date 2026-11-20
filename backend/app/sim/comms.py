@@ -6,6 +6,7 @@ the mask, has packet templates and the clock runs no faster than comms can follo
 
 Downlink, per periodic template, on an absolute sim-time grid (multiples of its interval since the
 Unix epoch, like the subsystem model), at most ``max_packets_per_tick`` per tick:
+
 * simulated satellites encode housekeeping from the modelled subsystem health; the frame goes
   through the channel (bit errors from the real link margin) and the station decodes what arrives;
 * SatNOGS-fed satellites replay real archived frames, cycling through the archive.
@@ -74,16 +75,26 @@ class ArchivedFrame:
 
 
 class FrameArchive(Protocol):
-    def frames(self, norad_id: int, template: str) -> Sequence[ArchivedFrame]: ...
+    """Where replayed frames come from (``services.satnogs.SatnogsArchive``): in-memory reads."""
 
-    def status(self, norad_id: int) -> ArchiveStatus: ...
+    def frames(self, norad_id: int, template: str) -> Sequence[ArchivedFrame]:
+        """The satellite's archived frames that decode with ``template``."""
+        ...
+
+    def status(self, norad_id: int) -> ArchiveStatus:
+        """What the UI says about the archive for this satellite."""
+        ...
 
 
 class NoArchive:
+    """No archive at all (tests, or no SatNOGS token): nothing to replay."""
+
     def frames(self, norad_id: int, template: str) -> Sequence[ArchivedFrame]:
+        """Always empty."""
         return ()
 
     def status(self, norad_id: int) -> ArchiveStatus:
+        """Always ``not_configured``."""
         return "not_configured"
 
 
@@ -95,12 +106,11 @@ class ContactLook:
     elevation_deg: float
     above_mask: bool
     range_m: float
-    margin_db: float | None  # None without a link profile, or below the horizon
-    has_link: bool  # a published link budget: the channel is modelled
+    margin_db: float | None  #: None without a link profile, or below the horizon
+    has_link: bool  #: a published link budget: the channel is modelled
     range_rate_m_s: float = 0.0
-    # From the link state, when there is a link profile: its frequency and Doppler shift.
-    link_frequency_hz: float | None = None
-    link_doppler_hz: float | None = None
+    link_frequency_hz: float | None = None  #: the link profile's downlink frequency, if any
+    link_doppler_hz: float | None = None  #: the link state's Doppler shift, if any
 
 
 # ---------- what the runtime writes ----------
@@ -108,6 +118,8 @@ class ContactLook:
 
 @dataclass(frozen=True)
 class FrameRecord:
+    """A frame for ``telemetry_frame`` (written by ``services.comms.CommsWriter``)."""
+
     session_id: int
     norad_id: int
     template_id: int | None
@@ -122,9 +134,11 @@ class FrameRecord:
 
 @dataclass(frozen=True)
 class StatusRecord:
+    """A command's new status for the ``command`` row."""
+
     command_id: int
     status: CommandStatus
-    check: dict[str, object] | None = None  # the system check at AOS, for a booked command
+    check: dict[str, object] | None = None  #: the system check at AOS, for a booked command
 
 
 Record = FrameRecord | StatusRecord
@@ -143,13 +157,14 @@ class OutgoingCommand:
     sent_at: datetime | None = None
     uplink: bytes | None = None
     response_due: datetime | None = None
-    # released by pass automation: the pass it was booked for and the check that let it go
-    scheduled_pass: ScheduledPass | None = None
-    check: SystemCheck | None = None
+    scheduled_pass: ScheduledPass | None = None  #: released by pass automation: its pass
+    check: SystemCheck | None = None  #: and the system check that let it go
 
 
 @dataclass(frozen=True)
 class CommsConfig:
+    """The runtime's limits (from the settings)."""
+
     max_time_scale: float = 60.0
     max_packets_per_tick: int = 4
     recent_packets: int = 50
@@ -160,6 +175,13 @@ def _fields_out(fields: Sequence[DecodedField] | None) -> list[DecodedFieldOut] 
 
 
 class CommsRuntime:
+    """One session's communications with the satellite in contact, stepped by the tick.
+
+    Owns the contact state, the beacon schedule and replay cursors, and the commands on their
+    way up; emits ``packet`` and ``command_status`` messages and hands records to the writer.
+    No I/O: everything it reads is in memory.
+    """
+
     def __init__(
         self,
         session_id: int,
@@ -186,6 +208,7 @@ class CommsRuntime:
         return list(self._recent)
 
     def can_command(self, norad_id: int) -> bool:
+        """Whether a command for ``norad_id`` can go up now (it is the active contact)."""
         return (
             self.contact is not None
             and self.contact.norad_id == norad_id
@@ -193,6 +216,7 @@ class CommsRuntime:
         )
 
     def submit(self, command: OutgoingCommand) -> CommandStatusMessage:
+        """Queue a stored command for the next tick in contact; returns its ``queued`` status."""
         self._outgoing.append(command)
         return self._status_message(command, "queued", None, command.issued_at)
 
@@ -208,6 +232,10 @@ class CommsRuntime:
         time_scale: float,
         paused: bool,
     ) -> list[BaseModel]:
+        """One tick: update the contact, send what is due up and down, report what happened.
+
+        Out of contact (or too fast), commands that were waiting are aborted and beacons stop.
+        """
         sat = table.by_norad.get(look.norad_id) if look is not None else None
         self.contact = self._contact(look, sat, time_scale=time_scale, paused=paused)
         active = self.contact is not None and self.contact.state == "active"

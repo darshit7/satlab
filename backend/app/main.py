@@ -71,20 +71,27 @@ from app.sim.loop import Subscriber
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(levelname)-9s %(name)s: %(message)s")
 
-WS_CLOSE_POLICY_VIOLATION = 1008  # foreign Origin, or flooding
-WS_CLOSE_AUTH_REQUIRED = 4401  # no valid ``auth`` message in time
-WS_CLOSE_SESSION_UNAVAILABLE = 4404  # unknown, ended, or not this token's session
-WS_CLOSE_SERVER_BUSY = 4503  # at max_active_sessions; the client retries with backoff
+WS_CLOSE_POLICY_VIOLATION = 1008  #: foreign Origin, or flooding
+WS_CLOSE_AUTH_REQUIRED = 4401  #: no valid ``auth`` message in time
+WS_CLOSE_SESSION_UNAVAILABLE = 4404  #: unknown, ended, or not this token's session
+WS_CLOSE_SERVER_BUSY = 4503  #: at max_active_sessions; the client retries with backoff
 CUSTOM_LOCATION_NAME = "Custom location"
 
 
 def run_migrations() -> None:
+    """Upgrade the database to the latest Alembic revision (``SATLAB_AUTO_MIGRATE``)."""
     cfg = AlembicConfig(str(BACKEND_DIR / "alembic.ini"))
     command.upgrade(cfg, "head")
 
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Start-up and shutdown of the API process.
+
+    Migrates (if enabled), seeds the stations, reclassifies the catalog, then builds the
+    long-lived services and starts their background tasks (catalog refresh, SatNOGS archive,
+    comms writer). On shutdown the sessions end first, then the services stop.
+    """
     settings = get_settings()
     settings.cache_dir.mkdir(parents=True, exist_ok=True)
     if settings.auto_migrate:
@@ -146,14 +153,17 @@ SessionToken = Annotated[
 
 
 def get_catalog(request: Request) -> CatalogService:
+    """FastAPI dependency: the process's catalog service."""
     return request.app.state.catalog
 
 
 def get_sessions(request: Request) -> SessionManager:
+    """FastAPI dependency: the process's session manager."""
     return request.app.state.sessions
 
 
 def get_passes(request: Request) -> PassService:
+    """FastAPI dependency: the process's pass-prediction service."""
     return request.app.state.passes
 
 
@@ -164,6 +174,7 @@ Passes = Annotated[PassService, Depends(get_passes)]
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
+    """Liveness check (used by the container platform and the smoke test)."""
     return {"status": "ok"}
 
 
@@ -172,6 +183,7 @@ def health() -> dict[str, str]:
 
 @app.get("/api/stations", response_model=list[GroundStationOut])
 def list_stations(db: Db) -> list[GroundStation]:
+    """The preset ground stations, in picker order."""
     return list(db.scalars(select(GroundStation).order_by(GroundStation.id)))
 
 
@@ -273,6 +285,11 @@ async def search_satellites(
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     remote: bool = False,
 ) -> SatelliteSearchResult:
+    """Search the local catalog by name or NORAD id.
+
+    With ``remote=true`` Celestrak is asked too (rate-limited across all clients); its results
+    are added to the catalog.
+    """
     results, remote_searched = await catalog.search(q, limit, remote)
     return SatelliteSearchResult(
         query=q,
@@ -283,6 +300,7 @@ async def search_satellites(
 
 @app.get("/api/satellites/{norad_id}", response_model=SatelliteOut)
 def get_satellite(norad_id: int, db: Db) -> Satellite:
+    """One satellite of the local catalog."""
     sat = db.get(Satellite, norad_id)
     if sat is None:
         raise HTTPException(404, f"satellite {norad_id} not in local catalog")
@@ -291,6 +309,7 @@ def get_satellite(norad_id: int, db: Db) -> Satellite:
 
 @app.get("/api/catalog/status", response_model=CatalogStatus)
 async def catalog_status(catalog: Catalog) -> CatalogStatus:
+    """How many satellites the catalog holds and when it was last refreshed."""
     return CatalogStatus(
         satellite_count=await catalog.status_count(),
         group=catalog.settings.catalog_group,
@@ -348,6 +367,7 @@ def _session_not_found(session_id: int) -> HTTPException:
 
 @app.get("/api/sessions/{session_id}", response_model=MissionSessionOut)
 def get_session(session_id: int, db: Db, token: SessionToken = None) -> MissionSession:
+    """A mission session (needs its ``X-Session-Token``)."""
     session = db.get(MissionSession, session_id)
     if session is None or not session_token_matches(session, token):
         raise _session_not_found(session_id)
@@ -356,6 +376,7 @@ def get_session(session_id: int, db: Db, token: SessionToken = None) -> MissionS
 
 @app.post("/api/sessions/{session_id}/end", status_code=204)
 async def end_session(session_id: int, sessions: Sessions, token: SessionToken = None) -> None:
+    """End a mission session: its loop stops and its waiting commands are aborted."""
     if await sessions.owned(session_id, token) is None:
         raise _session_not_found(session_id)
     await sessions.end(session_id)
@@ -405,6 +426,12 @@ async def _receive_token(ws: WebSocket, timeout_s: float) -> str | None:
 
 @app.websocket("/ws/sessions/{session_id}")
 async def session_stream(ws: WebSocket, session_id: int) -> None:
+    """The live socket of one mission session.
+
+    Checks the browser ``Origin``, then waits for the ``auth`` message; attaches to the session
+    and pumps its messages out while it validates, rate-limits and handles what the client
+    sends. Close codes: ``WS_CLOSE_*``.
+    """
     settings = get_settings()
     # CORS doesn't cover WebSockets: any page can open one, so check where a browser came from.
     # Non-browser clients send no Origin; they gain nothing a browser page could exploit.

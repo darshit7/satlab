@@ -1,0 +1,33 @@
+# The web image builds from the repository root (the docs need docs/ and the backend's code), so
+# this is an allow-list: nothing enters the build context unless it's listed here. .env files,
+# notes/ and deploy/ (private) never can.
+*
+
+!frontend
+frontend/node_modules
+frontend/dist
+frontend/coverage
+frontend/.env
+frontend/.env.*
+frontend/*.local
+frontend/**/*.tsbuildinfo
+frontend/Dockerfile
+frontend/Dockerfile.dockerignore
+
+!backend/pyproject.toml
+!backend/uv.lock
+!backend/app
+!backend/migrations/versions
+backend/**/__pycache__
+
+!docs
+docs/_build
+docs/_static/vendor
+docs/reference/_generated
+docs/reference/api/_autosummary
+docs/**/__pycache__
+
+!AGENTS.md
+!README.md
+!design-system.md
+!.env.example

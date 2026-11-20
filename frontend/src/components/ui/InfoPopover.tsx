@@ -1,6 +1,6 @@
 import { Info } from 'lucide-react'
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
-import { focusRing } from './Button'
+import { focusRing } from './buttonClasses'
 import { cn } from './cn'
 
 interface Props {

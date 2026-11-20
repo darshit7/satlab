@@ -1,4 +1,4 @@
-"""Mission-session orchestration: owns live ``SessionRuntime``s and applies client commands."""
+"""Mission-session orchestration: owns each live session's ``SessionRuntime``, applies commands."""
 
 import asyncio
 import hashlib
@@ -50,7 +50,7 @@ log = logging.getLogger(__name__)
 
 
 class SessionUnavailable(Exception):
-    pass
+    """Unknown, ended, or not this token's session (one answer for all three)."""
 
 
 class ServerBusy(Exception):
@@ -62,7 +62,7 @@ class _SavedCommand:
     command_id: int
     norad_id: int
     template_id: int | None
-    name: str  # the command's template name
+    name: str  #: the command's template name
     params: CommandParams
     scheduled_aos: datetime
     sim_time: datetime
@@ -84,6 +84,7 @@ def new_session_token() -> tuple[str, str]:
 
 
 def hash_session_token(token: str) -> str:
+    """What the database keeps of a token: its SHA-256, hex."""
     return hashlib.sha256(token.encode()).hexdigest()
 
 
@@ -95,6 +96,14 @@ def session_token_matches(session: MissionSession, token: str | None) -> bool:
 
 
 class SessionManager:
+    """Owns the live mission sessions of this process.
+
+    Attaching a WebSocket starts the session's runtime (its sim loop) if needed, within
+    ``max_active_sessions``; a session with no subscriber ends after ``session_idle_grace_s``.
+    Client commands arrive here already validated, are checked against the session's limits and
+    applied to its runtime.
+    """
+
     def __init__(
         self,
         settings: Settings,
@@ -127,6 +136,8 @@ class SessionManager:
         return row if row is not None and session_token_matches(row, token) else None
 
     async def attach(self, session_id: int, token: str) -> tuple[SessionRuntime, Subscriber]:
+        """Subscribe to a session, starting its runtime (and restoring its booked commands)
+        if it isn't running. Raises ``SessionUnavailable`` or ``ServerBusy``."""
         async with self._lock:
             row = await self.owned(session_id, token)
             if row is None:
@@ -304,6 +315,7 @@ class SessionManager:
         return runtime.clock.now() if runtime is not None else None
 
     async def detach(self, runtime: SessionRuntime, sub: Subscriber) -> None:
+        """Unsubscribe; the last one out starts the idle timer."""
         runtime.unsubscribe(sub)
         if runtime.subscriber_count == 0:
             self._idle_timers[runtime.session_id] = asyncio.create_task(
@@ -319,6 +331,7 @@ class SessionManager:
             await self.end(session_id)
 
     async def end(self, session_id: int) -> None:
+        """Stop the session's runtime and mark it ended; its waiting commands are aborted."""
         self._command_budgets.pop(session_id, None)
         if (runtime := self._runtimes.pop(session_id, None)) is not None:
             await runtime.stop()
@@ -349,6 +362,7 @@ class SessionManager:
     # ----- client commands -----
 
     async def handle(self, runtime: SessionRuntime, message: ClientCommand) -> None:
+        """Apply one (validated) client message to the session."""
         match message:
             case SetTracked():
                 await self._set_tracked(runtime, message)

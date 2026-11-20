@@ -17,16 +17,20 @@ class Downlink:
 
 @dataclass(frozen=True)
 class SatelliteTemplates:
+    """One satellite's templates, each paired with its ``packet_template`` row id."""
+
     norad_id: int
-    # (packet_template.id, template)
+    #: (packet_template.id, template)
     telemetry: tuple[tuple[int, TelemetryTemplate], ...]
     commands: tuple[tuple[int, CommandTemplate], ...]
-    downlink: Downlink | None = None  # seeded; satellites with a link profile use its frequency
+    downlink: Downlink | None = None  #: seeded; satellites with a link profile use its frequency
 
     def telemetry_named(self, name: str) -> tuple[int, TelemetryTemplate] | None:
+        """The telemetry template called ``name``, with its row id, if the satellite has it."""
         return next(((i, t) for i, t in self.telemetry if t.name == name), None)
 
     def command_named(self, name: str) -> tuple[int, CommandTemplate] | None:
+        """The command template called ``name``, with its row id, if the satellite has it."""
         return next(((i, c) for i, c in self.commands if c.name == name), None)
 
     @property
@@ -42,6 +46,8 @@ class SatelliteTemplates:
 
 @dataclass(frozen=True, eq=False)
 class CommsTable:
+    """Every satellite's templates by NORAD id: what the comms runtime can talk to."""
+
     by_norad: Mapping[int, SatelliteTemplates] = field(default_factory=dict)
 
     @classmethod

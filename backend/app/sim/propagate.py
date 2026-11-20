@@ -40,6 +40,7 @@ class Elements:
 
 
 def elements_from_tle(name: str, line1: str, line2: str) -> Elements:
+    """Parse a TLE into ``Elements`` (raises ``ValueError`` for unusable elements)."""
     satellite = EarthSatellite(line1, line2, name, TS)
     mean_motion_rad_min = satellite.model.no_kozai
     if mean_motion_rad_min <= 0:
@@ -56,6 +57,7 @@ def elements_from_tle(name: str, line1: str, line2: str) -> Elements:
 
 
 def to_time(when: datetime) -> Time:
+    """An aware datetime as a skyfield ``Time``."""
     return TS.from_datetime(when.astimezone(UTC))
 
 
@@ -84,6 +86,7 @@ class Epochs:
         return len(self.offsets_s)
 
     def at(self, i: int) -> datetime:
+        """The ``i``-th instant as a datetime."""
         return self.start + timedelta(seconds=float(self.offsets_s[i]))
 
 
@@ -94,6 +97,7 @@ def _dut1_s(start: datetime) -> float:
 
 
 def epochs(start: datetime, offsets_s: Sequence[float] | NDArray[np.float64] = (0.0,)) -> Epochs:
+    """Instants at ``offsets_s`` seconds from ``start`` (default: just ``start``)."""
     start = start.astimezone(UTC)
     offsets = np.atleast_1d(np.asarray(offsets_s, dtype=np.float64))
     if offsets.size == 0:
@@ -137,6 +141,7 @@ def epochs_unix(t_unix_s: Sequence[float] | NDArray[np.float64]) -> Epochs:
 
 
 def linspace_epochs(start: datetime, end: datetime, n_points: int) -> Epochs:
+    """``n_points`` instants evenly spaced from ``start`` to ``end`` inclusive."""
     return epochs(start, np.linspace(0.0, (end - start).total_seconds(), n_points))
 
 

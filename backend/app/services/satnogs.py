@@ -41,11 +41,19 @@ class _CachedFrame(BaseModel):
 
 class _CacheFile(BaseModel):
     norad_id: int
-    fetched_at: float  # Unix seconds
+    fetched_at: float  #: Unix seconds
     frames: list[_CachedFrame] = Field(max_length=1000)
 
 
 class SatnogsArchive:
+    """Real archived frames for the satellites whose downlink is replayed from SatNOGS.
+
+    Refreshes each such satellite at most every ``satnogs_refresh_hours`` within one global
+    request budget (backing off on 429), keeps only frames that decode cleanly with a template,
+    caches the raw frames on disk (validated on load) and swaps them in per satellite. The sim
+    loop only reads ``frames`` and ``status``: in-memory lookups.
+    """
+
     def __init__(
         self, settings: Settings, catalog: CatalogService, client: SatnogsClient | None = None
     ) -> None:
@@ -67,9 +75,11 @@ class SatnogsArchive:
     # ----- FrameArchive (read by the sim loop) -----
 
     def frames(self, norad_id: int, template: str) -> Sequence[ArchivedFrame]:
+        """The satellite's archived frames that decode with ``template`` (may be empty)."""
         return self._frames.get(norad_id, {}).get(template, ())
 
     def status(self, norad_id: int) -> ArchiveStatus:
+        """What the UI says about the archive for this satellite."""
         if not self._client.configured:
             return "not_configured"
         if self._frames.get(norad_id):
@@ -79,9 +89,11 @@ class SatnogsArchive:
     # ----- lifecycle -----
 
     def start(self) -> None:
+        """Load the disk cache, then refresh in the background."""
         self._task = asyncio.create_task(self._run(), name="satnogs-archive")
 
     async def stop(self) -> None:
+        """Cancel the background task and close the client."""
         if self._task is not None:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -102,6 +114,8 @@ class SatnogsArchive:
     # ----- refresh -----
 
     async def refresh_stale(self) -> None:
+        """Refresh every replayed satellite whose frames are older than the refresh interval, while
+        the request budget lasts."""
         max_age_s = self.settings.satnogs_refresh_hours * 3600
         for norad_id in self._catalog.fleet.comms.replayed_ids:
             fetched_at = self._raw.get(norad_id, (0.0, []))[0]
@@ -112,6 +126,7 @@ class SatnogsArchive:
             await self.refresh(norad_id)
 
     async def refresh(self, norad_id: int) -> None:
+        """Fetch one satellite's recent frames, keep the decodable ones and cache them."""
         try:
             frames = await self._client.frames(
                 norad_id,

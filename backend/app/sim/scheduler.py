@@ -58,8 +58,10 @@ KEPT_ALARMS = 50
 
 @dataclass(frozen=True)
 class PassSearch:
-    passes: list[Span]  # complete passes (AOS and LOS both found), in time order
-    always_visible: bool  # above the mask throughout: no AOS to wait for
+    """The passes a booking can choose from, over a horizon."""
+
+    passes: list[Span]  #: complete passes (AOS and LOS both found), in time order
+    always_visible: bool  #: above the mask throughout: no AOS to wait for
 
 
 def search_passes(
@@ -70,6 +72,7 @@ def search_passes(
     duration_s: float,
     step_s: float,
 ) -> PassSearch:
+    """One satellite's complete passes over ``observer`` in ``duration_s`` from ``start``."""
     [spans] = find_spans([satrec], observer, start, duration_s, step_s, mask_deg)
     return PassSearch(
         passes=[s for s in spans if s.aos is not None and s.los is not None],
@@ -152,6 +155,8 @@ def _red_details(health: HealthState, red: Sequence[Subsystem]) -> list[str]:
 
 @dataclass(frozen=True)
 class BookedPass:
+    """The pass a command is booked for (as the server predicted it)."""
+
     norad_id: int
     satellite_name: str
     aos: datetime
@@ -160,9 +165,11 @@ class BookedPass:
 
     @property
     def key(self) -> tuple[int, datetime]:
+        """Identifies the pass: satellite and AOS."""
         return (self.norad_id, self.aos)
 
     def out(self) -> ScheduledPass:
+        """As the contract sends it."""
         return ScheduledPass(aos_time=self.aos, los_time=self.los, max_elev_deg=self.max_elev_deg)
 
 
@@ -184,8 +191,8 @@ class _Window:
 
     booked: BookedPass
     checked: bool = False
-    released: int = 0  # commands the check released or held
-    saw_aos: bool = False  # a tick fell inside the pass
+    released: int = 0  #: commands the check released or held
+    saw_aos: bool = False  #: a tick fell inside the pass
 
 
 @dataclass(frozen=True)
@@ -197,6 +204,8 @@ class ClockCatch:
 
 @dataclass(frozen=True)
 class AlarmRecord:
+    """A new alarm for the ``alarm`` table."""
+
     session_id: int
     seq: int
     sim_time: datetime
@@ -208,6 +217,8 @@ class AlarmRecord:
 
 @dataclass(frozen=True)
 class AlarmAckRecord:
+    """An alarm the operator acknowledged."""
+
     session_id: int
     seq: int
 
@@ -224,6 +235,14 @@ def _names(commands: Sequence[ScheduledCommand]) -> str:
 
 
 class PassAutomation:
+    """A session's pass automation: commands booked for future passes, sent at AOS if the
+    system check finds no subsystem red, held with a critical alarm otherwise.
+
+    From ``lead_s`` before AOS until LOS it holds the antenna (the selection); a clock faster
+    than comms can follow drops to real time before AOS. One antenna, so passes of different
+    satellites can't overlap. Stepped by the tick; no I/O (records go to ``sink``).
+    """
+
     def __init__(
         self,
         session_id: int,
@@ -244,10 +263,12 @@ class PassAutomation:
 
     @property
     def pending_count(self) -> int:
+        """Commands waiting for their pass."""
         return len(self._booked)
 
     @property
     def alarms(self) -> list[AlarmMessage]:
+        """The session's recent alarms (oldest first)."""
         return list(self._alarms)
 
     def pending_statuses(self) -> list[CommandStatusMessage]:
@@ -275,12 +296,14 @@ class PassAutomation:
         return None
 
     def book(self, command: ScheduledCommand) -> CommandStatusMessage:
+        """Book a stored command for its pass (``conflict`` was checked); returns ``scheduled``."""
         # a command for the pass automation already holds the antenna for is checked with it
         self._booked.append(command)
         self._booked.sort(key=lambda c: (c.booked.aos, c.command_id))
         return self._status(command, "scheduled", None, command.issued_at)
 
     def cancel(self, command_id: int, sim_time: datetime) -> CommandStatusMessage | None:
+        """Abort a waiting command (the operator cancelled it); None if it isn't waiting."""
         command = next((c for c in self._booked if c.command_id == command_id), None)
         if command is None:
             return None
@@ -288,6 +311,7 @@ class PassAutomation:
         return self._finish(command, "aborted", "cancelled by the operator", sim_time)
 
     def ack(self, seq: int) -> AlarmMessage | None:
+        """Mark alarm ``seq`` acknowledged (once; recorded); None if there is no such alarm."""
         for i, alarm in enumerate(self._alarms):
             if alarm.alarm_id == seq:
                 if not alarm.acknowledged:
@@ -460,6 +484,7 @@ class PassAutomation:
         return out, released
 
     def state(self, sim_time: datetime) -> AutomationState | None:
+        """What the snapshot says while a booked pass holds the antenna; None otherwise."""
         window = self._window
         if window is None or not (window.booked.aos - self.lead <= sim_time < window.booked.los):
             return None

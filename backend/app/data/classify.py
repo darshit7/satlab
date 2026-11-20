@@ -27,6 +27,8 @@ class _RulesFile(BaseModel):
 
 @dataclass(frozen=True)
 class Classification:
+    """A satellite's type and whether it carries a SAR instrument."""
+
     type: SatelliteType
     is_sar_capable: bool
 
@@ -67,6 +69,7 @@ def _rules() -> tuple[_Rule, ...]:
 
 
 def classify(name: str, norad_id: int) -> Classification:
+    """The first rule (in seed order) that matches the name or NORAD id; ``other`` if none."""
     name = name.strip()
     for rule in _rules():
         if rule.matches(name, norad_id):

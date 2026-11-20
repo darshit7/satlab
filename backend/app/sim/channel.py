@@ -40,27 +40,32 @@ def bpsk_ber(eb_n0_db: float) -> float:
     return 0.5 * math.erfc(math.sqrt(10 ** (eb_n0_db / 10)))
 
 
-E_REF_DB = _eb_n0_for(REFERENCE_BER)  # ≈ 9.59 dB
+E_REF_DB = _eb_n0_for(REFERENCE_BER)  #: ≈ 9.59 dB
 
 
 def ber_for_margin(margin_db: float) -> float:
+    """Modelled bit error rate at a link margin (0 dB gives ``REFERENCE_BER``)."""
     return bpsk_ber(E_REF_DB + margin_db)
 
 
 def light_time_s(range_m: float) -> float:
+    """One-way light time over a slant range (real physics)."""
     return range_m / C_M_S
 
 
 def packet_rng(session_id: int, sequence: int) -> np.random.Generator:
+    """The random generator of one packet: the same packet always draws the same bit flips."""
     return np.random.default_rng([session_id, sequence])
 
 
 @dataclass(frozen=True)
 class Delivery:
-    delivered: bool  # False: no line of sight
-    frame: bytes  # as received (possibly corrupted)
-    bit_errors: int | None  # None: channel not modelled
-    ber: float | None
+    """What arrived at the station: the (possibly corrupted) frame and its modelled errors."""
+
+    delivered: bool  #: False: no line of sight
+    frame: bytes  #: as received (possibly corrupted)
+    bit_errors: int | None  #: None: channel not modelled
+    ber: float | None  #: the modelled bit error rate; None: channel not modelled
 
 
 def downlink(

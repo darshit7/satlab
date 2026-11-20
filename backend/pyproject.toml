@@ -27,6 +27,16 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "ruff>=0.17.0",
 ]
+# The documentation site (docs/): not a default group, so `uv sync` and the images skip it.
+# Install with `uv sync --group docs`. Sphinx 9.2 needs Python 3.13; 9.1 is the 3.12 line.
+docs = [
+    "furo>=2025.12.19",
+    "myst-parser>=5.2.0",
+    "sphinx>=9.1,<9.2",
+    "sphinx-autobuild>=2025.8.25",
+    "sphinx-notfound-page>=1.1.0",
+    "sphinxcontrib-mermaid>=2.1.1,<3",  # 3.x drops mermaid_use_local (the vendored Mermaid)
+]
 
 [tool.ruff]
 line-length = 100
@@ -34,7 +44,17 @@ target-version = "py312"
 extend-exclude = ["migrations/versions"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+# D1: every public module, class, function and method has a docstring (the docs site's API
+# reference is generated from them). Magic methods and __init__ are covered by the class's.
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "D1"]
+ignore = ["D105", "D107"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D1"]
+"migrations/**" = ["D1"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

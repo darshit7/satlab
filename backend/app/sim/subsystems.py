@@ -53,11 +53,15 @@ Floats = NDArray[np.float64]
 
 
 class PowerModel(BaseModel):
-    design_dod_pct: float = Field(gt=0, le=100)  # at the end of the orbit's longest eclipse
-    recharge_factor: float = Field(gt=0, le=10)
+    """Battery sized for the orbit's longest eclipse (generic, labelled modelled)."""
+
+    design_dod_pct: float = Field(gt=0, le=100)  #: at the end of the orbit's longest eclipse
+    recharge_factor: float = Field(gt=0, le=10)  #: full sun recharges this much faster than needed
 
 
 class ThermalModel(BaseModel):
+    """First-order thermal lag towards a sunlit or eclipse equilibrium, and the operating band."""
+
     sunlit_eq_c: float = Field(ge=-150, le=150)
     eclipse_eq_c: float = Field(ge=-150, le=150)
     tau_s: float = Field(gt=0, le=1e6)
@@ -72,15 +76,21 @@ class ThermalModel(BaseModel):
 
 
 class StorageModel(BaseModel):
+    """On-board storage: hours to fill without a contact, seconds of downlink to empty it."""
+
     fill_hours: float = Field(gt=0, le=1000)
     capacity_downlink_s: float = Field(gt=0, le=1e6)
 
 
 class AttitudeModel(BaseModel):
+    """Antenna coverage around nadir (used when there is no link profile to quote it)."""
+
     half_beamwidth_deg: float = Field(gt=0, le=90)
 
 
 class TypeModel(BaseModel):
+    """The four modelled subsystems' parameters for one satellite type."""
+
     power: PowerModel
     thermal: ThermalModel
     storage: StorageModel
@@ -98,6 +108,8 @@ class _StorageThresholds(BaseModel):
 
 
 class Thresholds(BaseModel):
+    """Where each modelled subsystem turns amber and red."""
+
     power_soc_pct: _PowerThresholds
     storage_fill_pct: _StorageThresholds
     thermal_amber_beyond_band_c: float = Field(ge=0, le=100)
@@ -105,12 +117,15 @@ class Thresholds(BaseModel):
 
 
 class SubsystemModels(BaseModel):
+    """``subsystem_models.json`` resolved: thresholds, the default and per-type models."""
+
     version: int = Field(ge=1)
     thresholds: Thresholds
     default: TypeModel
     by_type: dict[SatelliteType, TypeModel]
 
     def for_type(self, kind: SatelliteType) -> TypeModel:
+        """The model for a satellite type (its overrides merged into the default)."""
         return self.by_type.get(kind, self.default)
 
 
@@ -145,6 +160,8 @@ def subsystem_models(path: Path = SUBSYSTEM_MODELS_FILE) -> SubsystemModels:
 
 @dataclass(frozen=True)
 class Integrated:
+    """The integrated state at the end of the window."""
+
     soc_pct: float
     temperature_c: float
     fill_pct: float | None
@@ -213,6 +230,7 @@ def integrate(
 
 
 def power_rag(soc_pct: float, t: Thresholds) -> Rag:
+    """Battery state of charge → RAG."""
     p = t.power_soc_pct
     return (
         "green"
@@ -222,6 +240,7 @@ def power_rag(soc_pct: float, t: Thresholds) -> Rag:
 
 
 def thermal_rag(temp_c: float, model: ThermalModel, t: Thresholds) -> Rag:
+    """Green inside the band, amber a little outside it, red beyond."""
     outside = max(model.band_min_c - temp_c, temp_c - model.band_max_c, 0.0)
     if outside == 0:
         return "green"
@@ -229,6 +248,7 @@ def thermal_rag(temp_c: float, model: ThermalModel, t: Thresholds) -> Rag:
 
 
 def storage_rag(fill_pct: float, t: Thresholds) -> Rag:
+    """Storage fill → RAG (a full buffer loses data)."""
     s = t.storage_fill_pct
     return (
         "green"
@@ -238,6 +258,7 @@ def storage_rag(fill_pct: float, t: Thresholds) -> Rag:
 
 
 def attitude_rag(off_nadir: float, half_beamwidth_deg: float, t: Thresholds) -> Rag:
+    """Green while the station is inside the beam, amber just outside, red beyond."""
     beyond = off_nadir - half_beamwidth_deg
     if beyond <= 0:
         return "green"
@@ -254,6 +275,7 @@ def rollup(rags: list[Rag | None]) -> Rag | None:
 
 
 def illumination(fraction: float) -> Illumination:
+    """Sunlit, penumbra or eclipse, from the visible fraction of the solar disc."""
     return "sunlit" if fraction >= _SUNLIT else "eclipse" if fraction <= _ECLIPSE else "penumbra"
 
 
@@ -262,8 +284,8 @@ def illumination(fraction: float) -> Illumination:
 
 @dataclass(frozen=True)
 class _Inputs:
-    key: tuple[object, ...]  # satellite, its elements and the link profiles
-    k_end: int  # last grid index (instant k_end * step_s)
+    key: tuple[object, ...]  #: satellite, its elements and the link profiles
+    k_end: int  #: last grid index (instant k_end * step_s)
     sunlit: Floats
     downlink: NDArray[np.bool_] | None
 
@@ -346,6 +368,7 @@ class HealthTracker:
         off_nadir: float,
         link: LinkState | None,
     ) -> HealthState | None:
+        """The satellite's health at ``sim_time``; None for elements that can't propagate."""
         if satrec.no_kozai <= 0:
             return None
         t = sim_time.timestamp()
