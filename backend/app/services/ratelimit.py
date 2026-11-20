@@ -4,6 +4,8 @@ import time
 
 
 class TokenBucket:
+    """Refills continuously at ``rate`` per second up to ``burst``; each request takes one."""
+
     def __init__(self, rate: float, burst: int) -> None:
         self.rate = rate
         self.burst = burst

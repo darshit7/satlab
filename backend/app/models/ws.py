@@ -24,25 +24,29 @@ SATELLITE_TYPES: tuple[SatelliteType, ...] = (
     "other",
 )
 
-# Bound on any client-sent NORAD list (the handler applies the configured, smaller limit).
+#: Bound on any client-sent NORAD list (the handler applies the configured, smaller limit).
 MAX_CLIENT_NORAD_IDS = 100
-# Longest "rising within" the filter accepts; the rising-soon sweep window is sized from it.
+#: Longest "rising within" the filter accepts; the rising-soon sweep window is sized from it.
 MAX_RISING_WITHIN_MIN = 60
 NoradId = Annotated[int, Field(ge=1, le=999_999_999)]
 
-# Link and subsystem health (AGENTS.md §7): green > 6 dB margin, amber 0-6 dB, red below.
+#: Link and subsystem health (AGENTS.md §7): green > 6 dB margin, amber 0-6 dB, red below.
 Rag = Literal["green", "amber", "red"]
 
 # ---------- server → client ----------
 
 
 class ClockState(BaseModel):
+    """The session's sim clock: how fast it runs (a multiple of real time) and if it is paused."""
+
     time_scale: float
     paused: bool
 
 
 class ObserverState(BaseModel):
-    station_id: int | None  # null for a custom (session-only) location
+    """Where the session observes from, and the horizon mask that defines "in view"."""
+
+    station_id: int | None  #: null for a custom (session-only) location
     name: str
     lat_deg: float
     lon_deg: float
@@ -56,34 +60,35 @@ class LinkState(BaseModel):
 
     frequency_hz: float
     data_rate_bps: float
-    ebn0_db: float | None  # null below the horizon: no line of sight
-    margin_db: float | None  # Eb/N0 minus the required Eb/N0
-    doppler_hz: float  # received minus transmitted frequency; positive while approaching
-    rag: Rag  # red below the horizon mask, whatever the margin
-    # Elevations where the margin would be green at the satellite's current altitude: the inner
-    # "strong-link" region of the sky. Empty when it never is.
+    ebn0_db: float | None  #: null below the horizon: no line of sight
+    margin_db: float | None  #: Eb/N0 minus the required Eb/N0
+    doppler_hz: float  #: received minus transmitted frequency; positive while approaching
+    rag: Rag  #: red below the horizon mask, whatever the margin
+    #: Elevations where the margin would be green at the satellite's current altitude: the inner
+    #: "strong-link" region of the sky. Empty when it never is.
     strong_link_elev_bands_deg: list[tuple[float, float]]
 
 
 class SatelliteState(BaseModel):
+    """One streamed satellite at the snapshot's sim time: where it is, where it is in the
+    observer's sky, and its link state."""
+
     norad_id: int
     name: str
     type: SatelliteType
     is_sar_capable: bool
     tle_epoch: datetime
-    # sub-satellite point (WGS84)
-    lat_deg: float
-    lon_deg: float
-    alt_m: float
-    # topocentric look angles from the observer
-    azimuth_deg: float
-    elevation_deg: float
-    range_m: float
-    range_rate_m_s: float
-    above_mask: bool  # elevation ≥ the horizon mask: "in view" (geometric, not naked-eye)
-    link: LinkState | None = None  # null: no published RF parameters for this satellite
-    # The selection only (null otherwise): Earth central angle from the sub-point to the rim of
-    # the ground area from which the satellite is above the horizon mask (its footprint).
+    lat_deg: float  #: sub-satellite point, WGS84 geodetic latitude
+    lon_deg: float  #: sub-satellite point, longitude
+    alt_m: float  #: height above the WGS84 ellipsoid
+    azimuth_deg: float  #: look angle from the observer, clockwise from true north
+    elevation_deg: float  #: look angle from the observer, above the local horizon
+    range_m: float  #: slant range from the observer
+    range_rate_m_s: float  #: rate of change of the range; positive while receding
+    above_mask: bool  #: elevation ≥ the horizon mask: "in view" (geometric, not naked-eye)
+    link: LinkState | None = None  #: null: no published RF parameters for this satellite
+    #: The selection only (null otherwise): Earth central angle from the sub-point to the rim of
+    #: the ground area from which the satellite is above the horizon mask (its footprint).
     footprint_radius_deg: float | None = None
 
 
@@ -91,39 +96,49 @@ Illumination = Literal["sunlit", "penumbra", "eclipse"]
 
 
 class PowerHealth(BaseModel):
+    """Battery state of charge, from a generic power model driven by the real eclipse geometry."""
+
     rag: Rag
-    soc_pct: float  # battery state of charge
-    sunlit_fraction: float  # of the solar disc, now (real geometry)
+    soc_pct: float  #: battery state of charge
+    sunlit_fraction: float  #: of the solar disc, now (real geometry)
     illumination: Illumination
     modelled: bool = True
 
 
 class ThermalHealth(BaseModel):
+    """Temperature relaxing towards a sunlit or eclipse equilibrium, against an operating band."""
+
     rag: Rag
     temperature_c: float
-    band_min_c: float  # operating band
+    band_min_c: float  #: operating band
     band_max_c: float
     modelled: bool = True
 
 
 class StorageHealth(BaseModel):
-    rag: Rag | None  # null without a link profile: nothing to downlink at
+    """On-board data: filling between contacts, drained by downlink while this station sees it."""
+
+    rag: Rag | None  #: null without a link profile: nothing to downlink at
     fill_pct: float | None
     activity: Literal["filling", "downlinking", "full"] | None
     modelled: bool = True
 
 
 class AttitudeHealth(BaseModel):
-    rag: Rag | None  # null below the horizon mask: the station isn't in view to point at
-    off_nadir_deg: float | None  # the station's angle off the satellite's nadir
-    half_beamwidth_deg: float  # antenna coverage (the link profile's, when there is one)
+    """Whether the station is inside the antenna's coverage (nadir pointing assumed)."""
+
+    rag: Rag | None  #: null below the horizon mask: the station isn't in view to point at
+    off_nadir_deg: float | None  #: the station's angle off the satellite's nadir
+    half_beamwidth_deg: float  #: antenna coverage (the link profile's, when there is one)
     modelled: bool = True
 
 
 class RfHealth(BaseModel):
-    rag: Rag | None  # null: no published RF parameters
+    """The downlink margin at this station: the link state, as a subsystem."""
+
+    rag: Rag | None  #: null: no published RF parameters
     margin_db: float | None
-    modelled: bool = False  # from the published link budget
+    modelled: bool = False  #: from the published link budget
 
 
 class HealthState(BaseModel):
@@ -135,7 +150,7 @@ class HealthState(BaseModel):
     """
 
     norad_id: int
-    model_version: int  # of app/data/seed/subsystem_models.json
+    model_version: int  #: of app/data/seed/subsystem_models.json
     rollup: Rag | None
     power: PowerHealth
     thermal: ThermalHealth
@@ -175,14 +190,14 @@ class ContactState(BaseModel):
 
     norad_id: int
     state: ContactStatus
-    downlink: Literal["simulated", "satnogs"] | None  # null without templates
-    channel_modelled: bool  # a published link budget drives bit errors
-    one_way_light_time_s: float | None  # null below the horizon
+    downlink: Literal["simulated", "satnogs"] | None  #: null without templates
+    channel_modelled: bool  #: a published link budget drives bit errors
+    one_way_light_time_s: float | None  #: null below the horizon
     archive: ArchiveStatus | None = None
-    # The downlink the station listens on (the link profile's, else the seed's) and its Doppler
-    # shift, received minus transmitted; null when the satellite has neither.
+    #: The downlink the station listens on (the link profile's, else the seed's); null when the
+    #: satellite has neither.
     downlink_frequency_hz: float | None = None
-    doppler_hz: float | None = None
+    doppler_hz: float | None = None  #: its Doppler shift, received minus transmitted
 
 
 class SunState(BaseModel):
@@ -205,14 +220,14 @@ class Snapshot(BaseModel):
     wall_time: datetime
     clock: ClockState
     observer: ObserverState
-    visible_count: int  # satellites above the mask before the session filter
+    visible_count: int  #: satellites above the mask before the session filter
     satellites: list[SatelliteState]
-    health: HealthState | None = None  # of the selected satellite
-    contact: ContactState | None = None  # with the selected satellite
-    automation: AutomationState | None = None  # while a booked pass holds the antenna
+    health: HealthState | None = None  #: of the selected satellite
+    contact: ContactState | None = None  #: with the selected satellite
+    automation: AutomationState | None = None  #: while a booked pass holds the antenna
     sun: SunState | None = None
-    # The elevation floor the session filter applies to the satellites shown: max(horizon mask,
-    # the filter's minimum elevation). Tracked and selected satellites are shown below it too.
+    #: The elevation floor the session filter applies to the satellites shown: max(horizon mask,
+    #: the filter's minimum elevation). Tracked and selected satellites are shown below it too.
     shown_min_elevation_deg: float | None = None
 
 
@@ -234,14 +249,14 @@ class GroundTrackMessage(BaseModel):
     start_time: datetime
     end_time: datetime
     period_s: float
-    points: list[tuple[float, float]]  # (lon_deg, lat_deg)
-    # Aligned with ``points``: height above the WGS84 ellipsoid, and whether this station sees the
-    # satellite above its horizon mask there (the in-view part of the orbit, drawn bright).
-    alt_m: list[float] | None = None
+    points: list[tuple[float, float]]  #: (lon_deg, lat_deg)
+    alt_m: list[float] | None = None  #: aligned with ``points``: height above the WGS84 ellipsoid
+    #: Aligned with ``points``: whether this station sees the satellite above its horizon mask
+    #: there (the in-view part of the orbit, drawn bright).
     above_mask: list[bool] | None = None
-    rag: list[Rag] | None = None  # link state at each point; null without a link profile
-    # Exact mask crossings, each between the two samples whose ``above_mask`` differ; null when
-    # SGP4 dropped a sample (the points are then not evenly spaced).
+    rag: list[Rag] | None = None  #: link state at each point; null without a link profile
+    #: Exact mask crossings, each between the two samples whose ``above_mask`` differ; null when
+    #: SGP4 dropped a sample (the points are then not evenly spaced).
     crossings: list[TrackCrossing] | None = None
 
 
@@ -259,18 +274,20 @@ class PassArcMessage(BaseModel):
     max_elev_deg: float
     start_time: datetime
     end_time: datetime
-    points: list[tuple[float, float]]  # (azimuth_deg, elevation_deg)
-    rag: list[Rag] | None = None  # link state at each point; null without a link profile
+    points: list[tuple[float, float]]  #: (azimuth_deg, elevation_deg)
+    rag: list[Rag] | None = None  #: link state at each point; null without a link profile
 
 
 class UpcomingPass(BaseModel):
+    """A satellite that will rise above the mask soon: its AOS and approximate peak."""
+
     norad_id: int
     name: str
     type: SatelliteType
     is_sar_capable: bool
     aos_time: datetime
     aos_az_deg: float
-    max_elev_deg: float  # approximate: from the sweep's coarse time grid
+    max_elev_deg: float  #: approximate: from the sweep's coarse time grid
 
 
 class UpcomingMessage(BaseModel):
@@ -284,11 +301,13 @@ class UpcomingMessage(BaseModel):
     status: Literal["computing", "ready", "paused"]
     window_start: datetime | None
     window_end: datetime | None
-    total: int  # matching satellites before the ``passes`` cap
+    total: int  #: matching satellites before the ``passes`` cap
     passes: list[UpcomingPass]
 
 
 class DecodedFieldOut(BaseModel):
+    """One decoded value of a telemetry frame, with its unit."""
+
     name: str
     value: int | float | str | None
     unit: str | None = None
@@ -311,7 +330,7 @@ class PacketMessage(BaseModel):
     """
 
     type: Literal["packet"] = "packet"
-    seq: int  # per session
+    seq: int  #: per session
     norad_id: int
     direction: Literal["up", "down"]
     kind: PacketKind
@@ -321,20 +340,20 @@ class PacketMessage(BaseModel):
     source: Literal["simulated", "satnogs"]
     sim_time: datetime
     size_bytes: int
-    raw_hex: str  # the frame as sent (up) or received (down)
+    raw_hex: str  #: the frame as sent (up) or received (down)
     delivered: bool
-    crc_ok: bool | None  # null when nothing readable arrived
-    bit_errors: int | None  # null: channel not modelled
-    ber: float | None  # modelled bit error rate at this margin
+    crc_ok: bool | None  #: null when nothing readable arrived
+    bit_errors: int | None  #: null: channel not modelled
+    ber: float | None  #: modelled bit error rate at this margin
     margin_db: float | None
     one_way_light_time_s: float | None
-    decoded: list[DecodedFieldOut] | None  # null when the check failed or nothing arrived
+    decoded: list[DecodedFieldOut] | None  #: null when the check failed or nothing arrived
     layout_sourced: bool
     command_id: int | None = None
     origin: SatnogsOrigin | None = None
 
 
-# scheduled: waiting for its pass; held: the system check at AOS found a subsystem red (not sent).
+#: scheduled: waiting for its pass; held: the system check at AOS found a subsystem red (not sent).
 CommandStatus = Literal["scheduled", "queued", "sent", "acked", "failed", "aborted", "held"]
 Subsystem = Literal["power", "thermal", "storage", "attitude", "rf"]
 SUBSYSTEMS: tuple[Subsystem, ...] = ("power", "thermal", "storage", "attitude", "rf")
@@ -361,6 +380,9 @@ class SystemCheck(BaseModel):
 
 
 class CommandStatusMessage(BaseModel):
+    """A command's status changed (queued, sent, acked, failed, held, ...); booked commands
+    carry their pass and, from AOS on, the system check that released or held them."""
+
     type: Literal["command_status"] = "command_status"
     command_id: int
     norad_id: int
@@ -368,8 +390,8 @@ class CommandStatusMessage(BaseModel):
     status: CommandStatus
     reason: str | None = None
     sim_time: datetime
-    scheduled_pass: ScheduledPass | None = None  # booked for a pass (not sent live)
-    check: SystemCheck | None = None  # the check at AOS that released or held it
+    scheduled_pass: ScheduledPass | None = None  #: booked for a pass (not sent live)
+    check: SystemCheck | None = None  #: the check at AOS that released or held it
 
 
 AlarmSeverity = Literal["info", "warning", "critical"]
@@ -390,6 +412,8 @@ class AlarmMessage(BaseModel):
 
 
 class ErrorMessage(BaseModel):
+    """A message the server couldn't act on, or a limit it applied; the text is safe to show."""
+
     type: Literal["error"] = "error"
     message: str
 
@@ -444,12 +468,13 @@ class SetFilter(BaseModel):
         default_factory=lambda: list(SATELLITE_TYPES), max_length=len(SATELLITE_TYPES)
     )
     sar_only: bool = False
-    # Only satellites with a link profile; of those in view, only with margin ≥ the amber threshold.
+    #: Only satellites with a link profile; of those in view, only those with a margin at or above
+    #: the amber threshold.
     link_ok_only: bool = False
-    # Only satellites with packet templates: the ones comms works with (some are receive-only).
+    #: Only satellites with packet templates: the ones comms works with (some are receive-only).
     comms_only: bool = False
-    # Effective threshold is max(horizon mask, this). For rising-soon passes it applies to the
-    # pass's (approximate) maximum elevation.
+    #: Effective threshold is max(horizon mask, this). For rising-soon passes it applies to the
+    #: pass's (approximate) maximum elevation.
     min_elevation_deg: float = Field(default=0.0, ge=0.0, le=90.0)
     rising_within_min: int = Field(default=30, ge=0, le=MAX_RISING_WITHIN_MIN)
 
@@ -498,6 +523,8 @@ class CancelCommand(BaseModel):
 
 
 class AckAlarm(BaseModel):
+    """Acknowledge an alarm by its per-session number."""
+
     type: Literal["ack_alarm"] = "ack_alarm"
     alarm_id: int = Field(ge=1)
 

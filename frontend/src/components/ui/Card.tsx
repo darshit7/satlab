@@ -1,6 +1,6 @@
 import { ChevronDown } from 'lucide-react'
 import { useId, type ReactNode } from 'react'
-import { focusRing } from './Button'
+import { focusRing } from './buttonClasses'
 import { cn } from './cn'
 import { GradientBorder } from './GradientBorder'
 import { TiltedGridBackground } from './TiltedGridBackground'

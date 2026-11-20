@@ -1,0 +1,200 @@
+# Which docs pages explain which code. See how-to/write-docs.md ("The sync map").
+#
+# When you change a file, update the pages its entries list, in the same change (AGENTS.md golden
+# rule 11). backend/tests/test_docs_sync.py fails when a source file isn't covered by any entry, an
+# entry's path matches nothing, or a page doesn't exist; so a new module, view or deploy file needs
+# a decision about which page explains it.
+#
+# paths: repo-relative globs; a trailing "/" means everything under that directory.
+# pages: docnames (paths under docs/ without the extension).
+
+# ---------- backend: API surface and contract ----------
+
+[[entry]]
+paths = ["backend/app/main.py"]
+pages = ["architecture/session-lifecycle", "reference/rest", "reference/websocket"]
+
+[[entry]]
+paths = ["backend/app/models/ws.py"]
+pages = ["reference/websocket", "how-to/change-ws-contract", "architecture/tick"]
+
+[[entry]]
+paths = ["backend/app/models/api.py"]
+pages = ["reference/rest"]
+
+[[entry]]
+paths = ["backend/app/config.py"]
+pages = ["reference/settings", "how-to/add-setting"]
+
+# ---------- backend: persistence ----------
+
+[[entry]]
+paths = ["backend/app/db/base.py", "backend/app/db/models.py", "backend/migrations/"]
+pages = ["architecture/persistence", "reference/database", "how-to/add-migration"]
+
+[[entry]]
+paths = ["backend/app/services/comms.py"]
+pages = ["architecture/persistence", "simulation/comms"]
+
+# ---------- backend: the simulation ----------
+
+[[entry]]
+paths = ["backend/app/sim/loop.py", "backend/app/sim/clock.py"]
+pages = ["architecture/tick"]
+
+[[entry]]
+paths = ["backend/app/sim/propagate.py", "backend/app/sim/fleet.py"]
+pages = ["simulation/orbits"]
+
+[[entry]]
+paths = ["backend/app/sim/geometry.py"]
+pages = ["simulation/geometry"]
+
+[[entry]]
+paths = ["backend/app/sim/passes.py", "backend/app/services/passes.py"]
+pages = ["simulation/passes"]
+
+[[entry]]
+paths = ["backend/app/sim/linkbudget.py"]
+pages = ["simulation/link-budget"]
+
+[[entry]]
+paths = ["backend/app/sim/subsystems.py", "backend/app/sim/sun.py"]
+pages = ["simulation/subsystems"]
+
+[[entry]]
+paths = ["backend/app/sim/comms.py", "backend/app/sim/channel.py", "backend/app/packets/*.py"]
+pages = ["simulation/comms"]
+
+[[entry]]
+paths = ["backend/app/packets/templates.py", "backend/app/packets/table.py"]
+pages = ["how-to/add-packet-template"]
+
+[[entry]]
+paths = ["backend/app/sim/scheduler.py"]
+pages = ["simulation/automation"]
+
+[[entry]]
+paths = ["backend/app/services/sessions.py"]
+pages = ["architecture/session-lifecycle", "simulation/automation"]
+
+# ---------- backend: data ----------
+
+[[entry]]
+paths = [
+  "backend/app/services/catalog.py",
+  "backend/app/data/celestrak.py",
+  "backend/app/data/classify.py",
+  "backend/app/data/seed.py",
+]
+pages = ["architecture/data-flow"]
+
+[[entry]]
+paths = ["backend/app/services/satnogs.py", "backend/app/data/satnogs.py"]
+pages = ["architecture/data-flow", "simulation/comms"]
+
+[[entry]]
+paths = ["backend/app/services/ratelimit.py"]
+pages = ["architecture/security"]
+
+[[entry]]
+paths = ["backend/app/data/seed/link_profiles.json"]
+pages = ["simulation/link-budget", "how-to/add-link-profile"]
+
+[[entry]]
+paths = ["backend/app/data/seed/packet_templates.json"]
+pages = ["simulation/comms", "how-to/add-packet-template"]
+
+[[entry]]
+paths = ["backend/app/data/seed/satellite_types.json"]
+pages = ["how-to/add-type-rule"]
+
+[[entry]]
+paths = ["backend/app/data/seed/subsystem_models.json"]
+pages = ["simulation/subsystems"]
+
+[[entry]]
+paths = ["backend/app/data/seed/ground_stations.json"]
+pages = ["getting-started/ui-tour"]
+
+# ---------- frontend ----------
+
+[[entry]]
+paths = [
+  "frontend/src/App.tsx",
+  "frontend/src/main.tsx",
+  "frontend/src/store/",
+  "frontend/src/ws/",
+  "frontend/src/api/",
+  "frontend/src/lib/",
+  "frontend/vite.config.ts",
+]
+pages = ["architecture/frontend"]
+
+[[entry]]
+paths = ["frontend/src/types/"]
+pages = ["architecture/frontend", "how-to/change-ws-contract"]
+
+[[entry]]
+paths = ["frontend/src/index.css", "frontend/src/components/"]
+pages = ["architecture/frontend", "project/design-system", "getting-started/ui-tour"]
+
+[[entry]]
+paths = [
+  "frontend/src/views/Map/",
+  "frontend/src/views/Globe/",
+  "frontend/src/views/GroundTrack/",
+]
+pages = ["getting-started/ui-tour", "architecture/frontend", "simulation/geometry"]
+
+[[entry]]
+paths = [
+  "frontend/src/views/Sky/",
+  "frontend/src/views/SkyPlot/",
+  "frontend/src/views/AllSky/",
+  "frontend/src/views/Passes/",
+]
+pages = ["getting-started/ui-tour", "simulation/passes"]
+
+[[entry]]
+paths = [
+  "frontend/src/views/Inspector/",
+  "frontend/src/views/Readout/",
+  "frontend/src/views/Indicators/",
+]
+pages = ["getting-started/ui-tour", "simulation/subsystems", "simulation/link-budget"]
+
+[[entry]]
+paths = ["frontend/src/views/Comms/"]
+pages = ["getting-started/ui-tour", "simulation/comms"]
+
+[[entry]]
+paths = ["frontend/src/views/Scheduler/"]
+pages = ["getting-started/ui-tour", "simulation/automation"]
+
+[[entry]]
+paths = [
+  "frontend/src/views/Mission/",
+  "frontend/src/views/Location/",
+  "frontend/src/views/Catalog/",
+  "frontend/src/views/Visible/",
+]
+pages = ["getting-started/ui-tour"]
+
+# ---------- build, deploy and the docs themselves ----------
+
+[[entry]]
+paths = [
+  "backend/Dockerfile",
+  "frontend/Dockerfile",
+  "frontend/Dockerfile.dockerignore",
+  "frontend/nginx/",
+  "frontend/scripts/",
+  "scripts/smoke.sh",
+  ".github/workflows/",
+]
+pages = ["architecture/deployment", "how-to/deploy-and-rollback"]
+
+[[entry]]
+paths = ["docs/conf.py", "docs/_ext/", "frontend/scripts/docs-vendor.mjs"]
+pages = ["how-to/write-docs"]

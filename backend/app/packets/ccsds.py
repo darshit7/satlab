@@ -13,26 +13,30 @@ from app.packets.crc import crc16_ccitt_false
 from app.packets.errors import DecodeError
 
 PRIMARY_HEADER_BYTES = 6
-MAX_APID = 0x7FE  # 0x7FF is the idle packet
+MAX_APID = 0x7FE  #: 0x7FF is the idle packet
 MAX_SEQUENCE_COUNT = 0x3FFF
 UNSEGMENTED = 0b11
-CUC_BYTES = 6  # 4 octets of seconds, 2 of binary fraction
+CUC_BYTES = 6  #: 4 octets of seconds, 2 of binary fraction
 
 PacketType = Literal["tm", "tc"]
 
 
 @dataclass(frozen=True)
 class SpacePacket:
+    """A space packet's header fields and user data (unsegmented: one packet per message)."""
+
     apid: int
     packet_type: PacketType
     sequence_count: int
-    # Secondary header time (CUC, seconds since the Unix epoch: an agency-defined epoch, as
-    # CCSDS 301.0 allows); None without a secondary header.
+    #: Secondary header time (CUC, seconds since the Unix epoch: an agency-defined epoch, as
+    #: CCSDS 301.0 allows); None without a secondary header.
     time: datetime | None
     user_data: bytes
 
 
 def encode_space_packet(packet: SpacePacket, *, error_control: bool) -> bytes:
+    """The packet's bytes: primary header, CUC time if set, user data and, if ``error_control``,
+    the CRC-16. Raises ``ValueError`` for values the header can't hold."""
     if not 0 <= packet.apid <= MAX_APID or not 0 <= packet.sequence_count <= MAX_SEQUENCE_COUNT:
         raise ValueError("APID or sequence count out of range")
     data = b""

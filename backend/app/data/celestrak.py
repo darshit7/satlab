@@ -13,6 +13,8 @@ from sgp4.api import Satrec
 
 @dataclass(frozen=True)
 class TleRecord:
+    """One element set as Celestrak sent it: its NORAD id, name and the two TLE lines."""
+
     norad_id: int
     name: str
     line1: str
@@ -52,6 +54,12 @@ def parse_tle_text(text: str) -> list[TleRecord]:
 
 
 class CelestrakClient:
+    """Async client for Celestrak's GP endpoint, always in TLE format.
+
+    Every fetch raises ``CelestrakNotice`` instead of returning nothing, and lets HTTP errors
+    through (``httpx.HTTPStatusError``); throttling is the caller's job (``CatalogService``).
+    """
+
     def __init__(self, base_url: str, timeout_s: float, client: httpx.AsyncClient | None = None):
         self._base_url = base_url
         self._client = client or httpx.AsyncClient(
@@ -61,6 +69,7 @@ class CelestrakClient:
         )
 
     async def aclose(self) -> None:
+        """Close the underlying HTTP client."""
         await self._client.aclose()
 
     async def _get(self, **params: str | int) -> list[TleRecord]:
@@ -73,10 +82,13 @@ class CelestrakClient:
         return records
 
     async def fetch_group(self, group: str) -> list[TleRecord]:
+        """Every element set of a Celestrak group (e.g. ``active``)."""
         return await self._get(GROUP=group)
 
     async def fetch_by_catnr(self, norad_id: int) -> list[TleRecord]:
+        """The element set of one satellite, by NORAD catalog number."""
         return await self._get(CATNR=norad_id)
 
     async def search_by_name(self, name: str) -> list[TleRecord]:
+        """Element sets whose name contains ``name`` (Celestrak's own matching)."""
         return await self._get(NAME=name)

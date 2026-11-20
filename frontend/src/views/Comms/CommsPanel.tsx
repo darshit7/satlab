@@ -1,6 +1,7 @@
 import { ArrowDown, ArrowUp, CalendarClock, Radio, Send, Volume2, VolumeX } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { Button, focusRing } from '../../components/ui/Button'
+import { Button } from '../../components/ui/Button'
+import { focusRing } from '../../components/ui/buttonClasses'
 import { Card } from '../../components/ui/Card'
 import { cn } from '../../components/ui/cn'
 import { inputClass } from '../../components/ui/Field'

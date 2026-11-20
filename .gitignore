@@ -145,5 +145,13 @@ logs/
 # =====================================================================
 # Miscellaneous
 # =====================================================================
-docs/
-deploy/
+# Private, local-only: the design doc (notes/) and deploy runbooks (deploy/). Anchored so
+# they don't hide same-named folders deeper in the tree (e.g. docs/how-to/deploy*).
+/notes/
+/deploy/
+
+# Docs site build output and generated/vendored inputs (docs/ itself is tracked)
+docs/_build/
+docs/_static/vendor/
+docs/reference/_generated/
+docs/reference/api/_autosummary/

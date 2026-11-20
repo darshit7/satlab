@@ -24,6 +24,10 @@ SEED_DIR = Path(__file__).parent / "seed"
 
 
 def seed_ground_stations(db: Session) -> int:
+    """Add the seed's stations that aren't in the table yet (by name); returns how many.
+
+    Existing rows are never changed, so editing a seeded station does nothing to them.
+    """
     data = json.loads((SEED_DIR / "ground_stations.json").read_text(encoding="utf-8"))
     existing = set(db.scalars(select(GroundStation.name)))
     added = 0
@@ -42,6 +46,8 @@ OffsetDb = Annotated[float, Field(ge=-40.0, le=40.0)]
 
 
 class LinkSource(BaseModel):
+    """A cited source of a link profile: title and https URL."""
+
     title: str = Field(min_length=1, max_length=300)
     url: str = Field(pattern=r"^https://[^\s<>\"']+$", max_length=500)
 
@@ -57,6 +63,9 @@ class LinkCheck(BaseModel):
 
 
 class LinkProfileSpec(BaseModel):
+    """One satellite's published downlink budget as seeded, with its sources, the derivation of
+    every value that isn't quoted directly, and the source's own worked margins (``checks``)."""
+
     norad_id: int = Field(ge=1, le=999_999_999)
     satellite_name: str = Field(max_length=100)
     label: str = Field(min_length=1, max_length=200)
@@ -83,6 +92,7 @@ class LinkProfileSpec(BaseModel):
         return self
 
     def to_model(self) -> LinkProfileModel:
+        """The link-budget model the simulation evaluates."""
         return LinkProfileModel(
             norad_id=self.norad_id,
             label=self.label,
@@ -100,6 +110,8 @@ class LinkProfileSpec(BaseModel):
 
 
 class LinkProfilesFile(BaseModel):
+    """``link_profiles.json``: versioned, dated, one profile per satellite."""
+
     version: int = Field(ge=1)
     verified_on: date
     profiles: list[LinkProfileSpec] = Field(max_length=200)
@@ -117,6 +129,7 @@ LINK_PROFILES_FILE = SEED_DIR / "link_profiles.json"
 
 @lru_cache
 def link_profile_specs(path: Path = LINK_PROFILES_FILE) -> LinkProfilesFile:
+    """The link-profile seed, validated (cached: read once per process)."""
     return LinkProfilesFile.model_validate_json(path.read_bytes())
 
 
@@ -218,6 +231,8 @@ _template_adapter: TypeAdapter[TelemetryTemplate | CommandTemplate] = TypeAdapte
 
 
 class TemplateSet(BaseModel):
+    """A reusable set of telemetry and command templates (several satellites can share one)."""
+
     telemetry: list[TelemetryTemplate] = Field(min_length=1, max_length=16)
     commands: list[CommandTemplate] = Field(default_factory=list, max_length=16)
 
@@ -237,6 +252,8 @@ class TemplateSet(BaseModel):
 
 
 class SatelliteTemplatesSpec(BaseModel):
+    """Which template set a satellite uses, and the (cited) frequency it downlinks on."""
+
     model_config = ConfigDict(extra="forbid")
 
     norad_id: int = Field(ge=1, le=999_999_999)
@@ -255,6 +272,8 @@ class SatelliteTemplatesSpec(BaseModel):
 
 
 class PacketTemplatesFile(BaseModel):
+    """``packet_templates.json``: the template sets and the satellites assigned to them."""
+
     version: int = Field(ge=1)
     verified_on: date
     template_sets: dict[Name, TemplateSet] = Field(max_length=32)
@@ -293,6 +312,7 @@ _TEMPLATE_COLUMNS = ("framing", "spec", "version", "active")
 
 @lru_cache
 def packet_template_specs(path: Path = PACKET_TEMPLATES_FILE) -> PacketTemplatesFile:
+    """The packet-template seed, validated (cached: read once per process)."""
     return PacketTemplatesFile.model_validate_json(path.read_bytes())
 
 

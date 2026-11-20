@@ -32,8 +32,11 @@ jobs:
         include:
           - image: satlab-api
             context: backend
+            file: backend/Dockerfile
+          # The repo root: the web image also builds the docs (frontend/Dockerfile.dockerignore).
           - image: satlab-web
-            context: frontend
+            context: .
+            file: frontend/Dockerfile
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -45,6 +48,7 @@ jobs:
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
           push: true
           # Deploys pin the SHA tag, so every merge is a distinct revision and rollback is
           # `az containerapp update --image ghcr.io/<owner>/<image>:<older sha>`.

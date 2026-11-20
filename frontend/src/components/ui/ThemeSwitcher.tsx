@@ -1,7 +1,7 @@
 import { Monitor, Moon, Sun } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { setThemePreference, useResolvedTheme, useThemePreference, type ThemePreference } from '../../lib/theme'
-import { focusRing } from './Button'
+import { buttonClasses, focusRing } from './buttonClasses'
 import { cn } from './cn'
 
 const OPTIONS: { value: ThemePreference; label: string; Icon: typeof Sun }[] = [
@@ -41,7 +41,7 @@ export function ThemeSwitcher() {
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className={cn('rounded p-1.5 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100', focusRing)}
+        className={buttonClasses('header')}
       >
         <CurrentIcon size={20} strokeWidth={1.5} />
       </button>

@@ -23,9 +23,9 @@ from app.packets.ax25 import MAX_DIGIPEATERS, MAX_INFO_BYTES, Address, UiFrame, 
 from app.packets.ccsds import MAX_APID, SpacePacket, decode_space_packet, encode_space_packet
 from app.packets.errors import DecodeError
 
-MAX_FRAME_BYTES = 512  # largest frame any template may produce or accept
+MAX_FRAME_BYTES = 512  #: largest frame any template may produce or accept
 MAX_FIELDS = 64
-APRS_MAX_TEXT = 67  # APRS message text, without the {id
+APRS_MAX_TEXT = 67  #: APRS message text, without the {id
 
 Name = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,31}$")]
 CommandName = Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]{0,31}$")]
@@ -60,6 +60,8 @@ class _Strict(BaseModel):
 
 
 class SourceRef(_Strict):
+    """A cited source of a template or a frequency: title and https URL."""
+
     title: str = Field(min_length=1, max_length=300)
     url: str = Field(pattern=r"^https://[^\s<>\"']+$", max_length=500)
 
@@ -68,30 +70,37 @@ class SourceRef(_Strict):
 
 
 class Callsign(_Strict):
+    """An AX.25 callsign and SSID, as written in the seed."""
+
     model_config = ConfigDict(frozen=True)
 
     callsign: str = Field(pattern=r"^[A-Z0-9]{1,6}$")
     ssid: int = Field(default=0, ge=0, le=15)
 
     def address(self, flag: bool = False) -> Address:
+        """The codec's ``Address`` for this callsign."""
         return Address(self.callsign, self.ssid, flag)
 
 
 class Ax25Framing(_Strict):
+    """AX.25 UI framing: addresses, digipeater path and whether frames carry the FCS."""
+
     type: Literal["ax25"] = "ax25"
-    # Telemetry: the satellite's callsign (None: frames from anyone, e.g. through a digipeater).
-    # Commands: the operator's (a placeholder; nothing is transmitted).
+    #: Telemetry: the satellite's callsign (None: frames from anyone, e.g. through a digipeater).
+    #: Commands: the operator's (a placeholder; nothing is transmitted).
     source: Callsign | None = None
     destination: Callsign | None = None
     path: list[Callsign] = Field(default_factory=list, max_length=MAX_DIGIPEATERS)
-    fcs: bool = False  # frames carry the FCS (SatNOGS archives frames without it)
+    fcs: bool = False  #: frames carry the FCS (SatNOGS archives frames without it)
 
 
 class CcsdsFraming(_Strict):
+    """CCSDS space-packet framing: APID, time-code secondary header and error control."""
+
     type: Literal["ccsds"] = "ccsds"
     apid: int = Field(ge=0, le=MAX_APID)
-    time_code: bool = True  # CUC secondary header
-    error_control: bool = True  # CRC-16 packet error control
+    time_code: bool = True  #: CUC secondary header
+    error_control: bool = True  #: CRC-16 packet error control
 
 
 Framing = Annotated[Ax25Framing | CcsdsFraming, Field(discriminator="type")]
@@ -138,16 +147,20 @@ class _Scaled(_Strict):
 
 
 class BinaryField(_Scaled):
+    """A fixed-size integer at a fixed offset of a binary payload."""
+
     type: Literal["u8", "s8", "u16", "s16", "u32", "s32", "u48"]
     format: Literal["number", "hex", "unix_time"] = "number"
-    match: int | None = None  # fixed value that identifies this message
-    source: SimSource | None = None  # what a simulated satellite encodes here
+    match: int | None = None  #: fixed value that identifies this message
+    source: SimSource | None = None  #: what a simulated satellite encodes here
 
     @property
     def size(self) -> int:
+        """Bytes the field takes."""
         return _BINARY[self.type][0]
 
     def bounds(self) -> tuple[int, int]:
+        """The smallest and largest raw value the field can hold."""
         size, signed = _BINARY[self.type]
         return (
             (-(1 << (8 * size - 1)), (1 << (8 * size - 1)) - 1)
@@ -156,6 +169,7 @@ class BinaryField(_Scaled):
         )
 
     def shown(self, raw: int) -> DecodedValue:
+        """The raw value as displayed: hex, a UTC time or the scaled reading."""
         if self.format == "hex":
             return f"0x{raw:0{2 * self.size}X}"
         if self.format == "unix_time":
@@ -167,12 +181,15 @@ class BinaryField(_Scaled):
 
 
 class BinaryPayload(_Strict):
+    """Fixed fields at fixed offsets, little- or big-endian."""
+
     encoding: Literal["binary"] = "binary"
     endian: Literal["le", "be"]
     fields: list[BinaryField] = Field(min_length=1, max_length=MAX_FIELDS)
 
     @property
     def size(self) -> int:
+        """Bytes of the whole payload."""
         return sum(f.size for f in self.fields)
 
     @model_validator(mode="after")
@@ -188,15 +205,19 @@ class BinaryPayload(_Strict):
 
 
 class CsvField(_Scaled):
+    """One comma-separated value of a text beacon."""
+
     kind: Literal["int", "float", "hex", "text"]
 
 
 class CsvPayload(_Strict):
+    """A text beacon: a type tag, then comma-separated ASCII values (as CroCube sends)."""
+
     encoding: Literal["csv"] = "csv"
     tags: list[Annotated[str, Field(pattern=r"^[A-Za-z0-9]{1,8}$")]] = Field(
         min_length=1, max_length=4
     )
-    fields: list[CsvField] = Field(min_length=1, max_length=MAX_FIELDS)  # after the tag
+    fields: list[CsvField] = Field(min_length=1, max_length=MAX_FIELDS)  #: after the tag
 
     @model_validator(mode="after")
     def _check(self) -> Self:
@@ -205,6 +226,8 @@ class CsvPayload(_Strict):
 
 
 class AprsPayload(_Strict):
+    """APRS text in an AX.25 information field; decoded into its type and message."""
+
     encoding: Literal["aprs"] = "aprs"
 
 
@@ -214,16 +237,19 @@ Payload = Annotated[BinaryPayload | CsvPayload | AprsPayload, Field(discriminato
 
 
 class TelemetryTemplate(_Strict):
+    """A frame the satellite sends: framing, payload layout, cadence and where frames come from
+    (simulated from the modelled subsystems, or replayed from SatNOGS)."""
+
     kind: Literal["telemetry"] = "telemetry"
     name: Name
     label: Label
     framing: Framing
     payload: Payload
-    # How often the satellite sends it (from the source, or modelled); replayed frames keep it.
-    # None: sent only in response to a command (an acknowledgement).
+    #: How often the satellite sends it (from the source, or modelled); replayed frames keep it.
+    #: None: sent only in response to a command (an acknowledgement).
     interval_s: float | None = Field(default=None, ge=5.0, le=3600.0)
     downlink: Literal["simulated", "satnogs"]
-    layout_sourced: bool  # false: an illustrative layout, labelled as such
+    layout_sourced: bool  #: false: an illustrative layout, labelled as such
     sources: list[SourceRef] = Field(min_length=1, max_length=10)
 
     @model_validator(mode="after")
@@ -244,6 +270,8 @@ class TelemetryTemplate(_Strict):
 
 
 class CommandParam(_Strict):
+    """A command parameter: an integer in a range, or text of a bounded length and charset."""
+
     name: Name
     label: Label
     type: Literal["int", "text"]
@@ -260,18 +288,20 @@ class CommandParam(_Strict):
 
 
 class CommandTemplate(_Strict):
+    """A command the simulated uplink can send, its parameters, and what answers it."""
+
     kind: Literal["command"] = "command"
     name: CommandName
     label: Label
     framing: Framing
-    opcode: int | None = Field(default=None, ge=0, le=255)  # CCSDS telecommands
+    opcode: int | None = Field(default=None, ge=0, le=255)  #: CCSDS telecommands
     params: list[CommandParam] = Field(default_factory=list, max_length=8)
-    # What comes back down: an acknowledgement, a telemetry packet, or (through a digipeater)
-    # the command frame itself, repeated.
+    #: What comes back down: an acknowledgement, a telemetry packet, or (through a digipeater)
+    #: the command frame itself, repeated.
     response: Literal["ack", "telemetry", "digipeat"]
     response_template: Name | None = None
-    effect: Literal["beacon_interval"] | None = None  # changes this session's beacon cadence
-    response_delay_s: float = Field(default=1.0, ge=0.0, le=10.0)  # on-board processing, modelled
+    effect: Literal["beacon_interval"] | None = None  #: changes this session's beacon cadence
+    response_delay_s: float = Field(default=1.0, ge=0.0, le=10.0)  #: on-board processing, modelled
     layout_sourced: bool
     sources: list[SourceRef] = Field(min_length=1, max_length=10)
 
@@ -302,11 +332,14 @@ def _unique(names: Sequence[str], what: str) -> None:
 
 @dataclass(frozen=True)
 class DecodedField:
+    """One decoded reading of a frame."""
+
     name: str
     value: DecodedValue
     unit: str | None = None
 
     def as_json(self) -> dict[str, DecodedValue]:
+        """The reading as stored in ``telemetry_frame.decoded`` and sent to the client."""
         return {"name": self.name, "value": self.value, "unit": self.unit}
 
 
@@ -400,6 +433,7 @@ def _decode_aprs(data: bytes) -> list[DecodedField]:
 def decode_payload(
     payload: BinaryPayload | CsvPayload | AprsPayload, data: bytes
 ) -> list[DecodedField]:
+    """Decode a payload with its template; raises ``DecodeError`` if it isn't that message."""
     match payload:
         case BinaryPayload():
             return _decode_binary(payload, data)

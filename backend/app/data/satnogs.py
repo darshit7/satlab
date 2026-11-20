@@ -26,6 +26,8 @@ class SatnogsUnavailable(Exception):
 
 
 class SatnogsRateLimited(SatnogsUnavailable):
+    """SatNOGS answered 429; ``retry_after_s`` is how long it asked us to wait."""
+
     def __init__(self, retry_after_s: float) -> None:
         super().__init__("rate limited")
         self.retry_after_s = retry_after_s
@@ -46,6 +48,8 @@ class TelemetryRecord(BaseModel):
 
 @dataclass(frozen=True)
 class Frame:
+    """A raw archived frame and where it was received (for the public SatNOGS pages)."""
+
     raw: bytes
     observation_id: int | None
     station_id: int | None
@@ -53,6 +57,12 @@ class Frame:
 
 
 class SatnogsClient:
+    """Read-only client for the SatNOGS DB telemetry API.
+
+    The token goes only in the ``Authorization`` header; responses are streamed with a size cap,
+    pagination follows ``next`` only to the configured endpoint, and redirects are never followed.
+    """
+
     def __init__(
         self,
         url: str,
@@ -74,9 +84,11 @@ class SatnogsClient:
 
     @property
     def configured(self) -> bool:
+        """Whether a token is set (without one the archive is off)."""
         return self._token is not None and bool(self._token.get_secret_value())
 
     async def aclose(self) -> None:
+        """Close the underlying HTTP client."""
         await self._client.aclose()
 
     def _same_endpoint(self, url: str) -> bool:

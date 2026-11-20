@@ -1,11 +1,12 @@
-import { Pause, Play } from 'lucide-react'
+import { BookOpen, Pause, Play } from 'lucide-react'
 import { trackOnce } from '../lib/analytics'
+import { appUrl } from '../lib/basePath'
 import { formatLocal, formatUtc } from '../lib/time'
 import { useSimNow } from '../lib/useSimNow'
 import { useMission } from '../store/mission'
 import type { ConnectionStatus } from '../ws/sessionSocket'
 import { AboutData } from './AboutData'
-import { Button } from './ui/Button'
+import { Button, ButtonLink } from './ui/Button'
 import { cn } from './ui/cn'
 import { ThemeSwitcher } from './ui/ThemeSwitcher'
 
@@ -92,6 +93,11 @@ export function ClockBar() {
         </span>
         {/* positioned: the About popover aligns with this group's (the header's) right edge */}
         <div className="relative flex items-center gap-1">
+          {/* a new tab: this one keeps its session (it ends a minute after its last tab closes) */}
+          <ButtonLink variant="header" external href={appUrl('/docs/')} title="Documentation (opens in a new tab)" onClick={() => trackOnce('docs-open')}>
+            <BookOpen size={20} strokeWidth={1.5} aria-hidden />
+            <span className="max-sm:sr-only">Docs</span>
+          </ButtonLink>
           <AboutData />
           <ThemeSwitcher />
         </div>

@@ -104,6 +104,8 @@ _SUN_RATE_STEP_S = 60.0
 
 @dataclass(frozen=True)
 class RuntimeConfig:
+    """The settings a session runtime uses (a frozen copy of those ``Settings`` fields)."""
+
     tick_hz: float = 2.0
     ground_track_points: int = 240
     horizon_mask_deg: float = 5.0
@@ -125,6 +127,7 @@ class RuntimeConfig:
 
     @classmethod
     def from_settings(cls, s: Settings) -> "RuntimeConfig":
+        """Copy the same-named fields of the settings."""
         return cls(**{name: getattr(s, name) for name in cls.__dataclass_fields__})
 
 
@@ -151,6 +154,7 @@ class Subscriber:
         self._ready = asyncio.Event()
 
     def offer(self, message: BaseModel) -> None:
+        """Store a message for the next ``drain`` (coalescing or queueing it by kind)."""
         match message:
             case Snapshot():
                 self._snapshot = message
@@ -167,6 +171,8 @@ class Subscriber:
         self._ready.set()
 
     async def drain(self) -> list[BaseModel]:
+        """Wait for news, then take everything pending, in the order a client must apply it:
+        errors, tracks and arcs, events, the rising-soon list, then the snapshot."""
         await self._ready.wait()
         self._ready.clear()
         # geometry first, so the snapshot that uses it never arrives ahead of it
@@ -189,15 +195,15 @@ class Subscriber:
 @dataclass
 class _TrackState:
     elements: Elements
-    links_version: int  # the link profiles that coloured it
+    links_version: int  #: the link profiles that coloured it
     center: datetime
     message: GroundTrackMessage
 
 
 @dataclass
 class _ArcState:
-    epoch_key: tuple[float, float]  # the TLE it was computed from
-    links_version: int  # and the link profiles that coloured it
+    epoch_key: tuple[float, float]  #: the TLE it was computed from
+    links_version: int  #: and the link profiles that coloured it
     computed_at: datetime
     valid_until: datetime
     message: PassArcMessage | None
@@ -211,7 +217,7 @@ class _Target:
     satrec: Satrec
     row: int | None = None
     elements: Elements | None = None
-    pinned: bool = False  # tracked or selected
+    pinned: bool = False  #: tracked or selected
 
 
 @dataclass(frozen=True)
@@ -233,6 +239,13 @@ def _epoch_key(satrec: Satrec) -> tuple[float, float]:
 
 
 class SessionRuntime:
+    """One live mission session: its clock, selection, filter, comms and pass automation, and
+    the loop that ticks them ``tick_hz`` times a second and publishes to every subscriber.
+
+    Reads only in-memory state (the fleet, the elements registry, the SatNOGS archive); records
+    for the database go to ``sink``, which must not block.
+    """
+
     def __init__(
         self,
         session_id: int,
@@ -304,6 +317,8 @@ class SessionRuntime:
     # ----- subscribers -----
 
     def subscribe(self) -> Subscriber:
+        """A new mailbox, primed with what a (re)connecting client needs: tracks, arcs, the
+        rising-soon list, the recent packets and the booked commands and alarms."""
         sub = Subscriber()
         for state in self._tracks.values():
             sub.offer(state.message)
@@ -320,10 +335,12 @@ class SessionRuntime:
         return sub
 
     def unsubscribe(self, sub: Subscriber) -> None:
+        """Stop publishing to ``sub``."""
         self._subscribers.discard(sub)
 
     @property
     def subscriber_count(self) -> int:
+        """Connected clients (the session ends some time after the last one leaves)."""
         return len(self._subscribers)
 
     def _publish(self, message: BaseModel) -> None:
@@ -331,10 +348,12 @@ class SessionRuntime:
             sub.offer(message)
 
     def publish_error(self, message: str) -> None:
+        """Tell every client something it asked for couldn't be done (or was limited)."""
         self._publish(ErrorMessage(message=message))
 
     @property
     def station(self) -> Observer:
+        """Where the session observes from."""
         return self._station
 
     def submit_command(self, command: OutgoingCommand) -> None:
@@ -346,12 +365,14 @@ class SessionRuntime:
         self._publish(self.automation.book(command))
 
     def cancel_command(self, command_id: int) -> bool:
+        """Cancel a command waiting for its pass; False if it isn't waiting."""
         message = self.automation.cancel(command_id, self.clock.now())
         if message is not None:
             self._publish(message)
         return message is not None
 
     def ack_alarm(self, alarm_id: int) -> bool:
+        """Acknowledge an alarm (again is fine); False if the session has no such alarm."""
         message = self.automation.ack(alarm_id)
         if message is not None:
             self._publish(message)
@@ -373,6 +394,7 @@ class SessionRuntime:
         self._failed &= keep
 
     def set_tracked(self, norad_ids: list[int]) -> None:
+        """Replace the tracked set (streamed with ground tracks, whatever the filter)."""
         self.tracked = list(dict.fromkeys(norad_ids))
         self._forget_unpinned_tracks()
 
@@ -387,14 +409,17 @@ class SessionRuntime:
         self._forget_unpinned_tracks()
 
     def set_filter(self, message: SetFilter) -> None:
+        """Replace the session filter (what in-view and rising-soon satellites are shown)."""
         self.filter = message
         self._upcoming_dirty = True
 
     def start(self) -> None:
+        """Start ticking (a background task)."""
         if self._task is None:
             self._task = asyncio.create_task(self._run(), name=f"sim-session-{self.session_id}")
 
     async def stop(self) -> None:
+        """Stop ticking."""
         if self._task is not None:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -418,6 +443,7 @@ class SessionRuntime:
     # ----- the tick -----
 
     def step(self) -> Snapshot:
+        """One tick (the numbered steps of the module docstring); returns the snapshot it sent."""
         started = time.perf_counter()
         # 0. Pass automation: slow a fast clock before a booked pass, turn the antenna to it.
         sim_time = self._automate_clock(self.clock.now())

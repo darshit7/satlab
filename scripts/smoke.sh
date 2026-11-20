@@ -64,6 +64,20 @@ type=$(curl -s -o /dev/null -w '%{http_code} %{content_type}' --max-time 10 "$we
   && pass "Cesium worker served as JavaScript" || fail "Cesium worker: got '$type'"
 expect 200 "globe imagery (Natural Earth II)" "$web/satlab/cesium/Assets/Textures/NaturalEarthII/tilemapresource.xml"
 expect 404 "missing Cesium file is a 404, not the SPA" "$web/satlab/cesium/Workers/no-such-worker.js"
+# The documentation site, built into the image: static pages under their own CSP.
+expect 301 "/satlab/docs redirects to /satlab/docs/" "$web/satlab/docs"
+expect 200 "docs home" "$web/satlab/docs/"
+expect 200 "a generated reference page" "$web/satlab/docs/reference/settings/"
+expect 301 "a docs page without its trailing slash redirects" "$web/satlab/docs/reference/settings"
+missing=$(curl -s -w '\n%{http_code}' --max-time 10 "$web/satlab/docs/no-such-page/" || true)
+[[ ${missing##*$'\n'} == 404 && $missing != *'id="root"'* ]] \
+  && pass "404 missing docs page is the docs' 404, not the SPA" || fail "missing docs page: not the docs' 404"
+docs_headers=$(curl -s -D - -o /dev/null --max-time 10 "$web/satlab/docs/" | tr -d '\r')
+grep -qi "^content-security-policy: .*'sha256-" <<<"$docs_headers" \
+  && ! grep -qi '^content-security-policy: .*openfreemap' <<<"$docs_headers" \
+  && pass "docs CSP: hashed inline scripts, no external host" || fail "docs CSP header"
+type=$(curl -s -o /dev/null -w '%{http_code} %{content_type}' --max-time 10 "$web/satlab/docs/_static/vendor/mermaid/mermaid.esm.min.mjs")
+[[ $type == "200 text/javascript"* ]] && pass "Mermaid (vendored) served as JavaScript" || fail "Mermaid: got '$type'"
 
 # --- API through the proxy ---
 expect 200 "API health via proxy" "$web/satlab/api/health"

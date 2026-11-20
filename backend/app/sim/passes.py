@@ -46,10 +46,10 @@ class Precision:
     culmination_s: float = 0.01
 
 
-SCHEDULE = Precision()  # the pass-schedule endpoint
-LIVE = Precision(crossing_s=0.25, culmination_s=0.5)  # sky arcs and the rising-soon sweep
+SCHEDULE = Precision()  #: the pass-schedule endpoint
+LIVE = Precision(crossing_s=0.25, culmination_s=0.5)  #: sky arcs and the rising-soon sweep
 _GOLDEN = (math.sqrt(5) - 1) / 2
-_BELOW = -90.0  # elevation used where SGP4 fails (e.g. decayed elements): never "in view"
+_BELOW = -90.0  #: elevation used where SGP4 fails (e.g. decayed elements): never "in view"
 
 Floats = NDArray[np.float64]
 Ints = NDArray[np.intp]
@@ -397,16 +397,20 @@ def pass_arcs(
 
 @dataclass(frozen=True)
 class UpcomingResult:
+    """A completed sweep: every rise in its window, as arrays aligned by rise."""
+
     fleet: Fleet
     start: datetime
-    rows: Ints  # fleet row of each rise
-    aos_s: Floats  # seconds from ``start``
+    rows: Ints  #: fleet row of each rise
+    aos_s: Floats  #: seconds from ``start``
     aos_az_deg: Floats
-    max_elev_deg: Floats  # within the sweep window (a pass running past its end is cut short)
+    max_elev_deg: Floats  #: within the sweep window (a pass running past its end is cut short)
 
 
 @dataclass(frozen=True)
 class UpcomingRise:
+    """One rise from a sweep result: the fleet row, AOS, its azimuth and the (approximate) peak."""
+
     row: int
     aos: datetime
     aos_az_deg: float
@@ -448,6 +452,8 @@ class UpcomingSweep:
         self._parts: list[tuple[Ints, Floats, Floats, Floats]] = []
 
     def valid_for(self, fleet: Fleet, now: datetime) -> bool:
+        """Whether the last result still answers "rising within" queries at ``now`` (same fleet,
+        and ``now`` not past the part of the window it covers)."""
         r = self.result
         if r is None or r.fleet is not fleet:
             return False

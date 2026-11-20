@@ -26,6 +26,8 @@ TYPE_CODE: dict[SatelliteType, int] = {t: i for i, t in enumerate(SATELLITE_TYPE
 
 @dataclass(frozen=True)
 class FleetRow:
+    """One catalogued satellite as the fleet is built from it (a ``satellite`` row with a TLE)."""
+
     norad_id: int
     name: str
     type: SatelliteType
@@ -36,15 +38,21 @@ class FleetRow:
 
 @dataclass(frozen=True, eq=False)
 class Fleet:
-    version: int  # changes whenever the catalog is rebuilt
-    norad_ids: NDArray[np.int64]
+    """The whole catalog as arrays, aligned by row, for vectorized propagation in the tick.
+
+    Immutable: rebuilt from the DB after each ingest and swapped in with one assignment, so the
+    loop never sees a half-built fleet. ``links`` and ``comms`` are aligned with the same rows.
+    """
+
+    version: int  #: changes whenever the catalog is rebuilt
+    norad_ids: NDArray[np.int64]  #: per row
     names: tuple[str, ...]
     type_codes: NDArray[np.int8]
     sar: NDArray[np.bool_]
     tle_epochs: tuple[datetime, ...]
     satrecs: tuple[Satrec, ...]
-    index: dict[int, int] = field(repr=False)
-    array: SatrecArray | None = field(repr=False)
+    index: dict[int, int] = field(repr=False)  #: NORAD id → row
+    array: SatrecArray | None = field(repr=False)  #: every row at once; None when empty
     links: LinkTable = field(repr=False)
     comms: CommsTable = field(repr=False, default_factory=CommsTable)
 
@@ -56,6 +64,8 @@ class Fleet:
         templates: Iterable[tuple[int, int, TelemetryTemplate | CommandTemplate]] = (),
         downlinks: Mapping[int, Downlink] | None = None,
     ) -> "Fleet":
+        """Parse the rows' TLEs (skipping duplicates and sets SGP4 rejects) and align the link
+        profiles and packet templates with the rows that remain."""
         kept: list[tuple[FleetRow, Satrec]] = []
         seen: set[int] = set()
         for row in rows:
@@ -87,18 +97,22 @@ class Fleet:
 
     @classmethod
     def empty(cls) -> "Fleet":
+        """A fleet with no satellites (before the first build)."""
         return cls.build(())
 
     def __len__(self) -> int:
         return len(self.satrecs)
 
     def type_of(self, i: int) -> SatelliteType:
+        """The type of row ``i``."""
         return SATELLITE_TYPES[int(self.type_codes[i])]
 
     def subset(self, rows: Sequence[int] | NDArray[np.intp]) -> SatrecArray:
+        """A ``SatrecArray`` of just these rows (to propagate a few satellites)."""
         return SatrecArray([self.satrecs[int(i)] for i in rows])
 
     def type_mask(self, types: Iterable[SatelliteType]) -> NDArray[np.bool_]:
+        """Per row: the satellite's type is one of ``types``."""
         codes = [TYPE_CODE[t] for t in types]
         return np.isin(self.type_codes, codes)
 

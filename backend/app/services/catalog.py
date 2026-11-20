@@ -37,7 +37,7 @@ from app.sim.propagate import Elements, elements_from_tle
 log = logging.getLogger(__name__)
 
 _UPSERT_CHUNK = 500
-_REMOTE_QUERY_TTL_S = 2 * 3600  # Celestrak etiquette: don't repeat identical queries for ~2 h
+_REMOTE_QUERY_TTL_S = 2 * 3600  #: Celestrak etiquette: don't repeat identical queries for ~2 h
 
 
 _UPSERT_COLUMNS = (
@@ -85,6 +85,7 @@ def upsert_tle_records(db: Session, records: Iterable[TleRecord], fetched_at: da
 
 
 def load_fleet_rows(db: Session) -> list[FleetRow]:
+    """Every satellite with a TLE, as fleet rows (classifying any row older than the rules)."""
     stmt = select(
         Satellite.norad_id,
         Satellite.name,
@@ -103,6 +104,8 @@ def load_fleet_rows(db: Session) -> list[FleetRow]:
 
 
 def search_local(db: Session, query: str, limit: int) -> list[Satellite]:
+    """Name substring or exact NORAD id, ranked: id match, exact name, prefix, then the rest
+    (shorter names first). User input only ever reaches SQL as escaped bound parameters."""
     q = query.strip()
     if not q:
         return []
@@ -132,16 +135,26 @@ class Registry:
         self._elements: dict[int, Elements] = {}
 
     def get(self, norad_id: int) -> Elements | None:
+        """The satellite's elements, if they are loaded (a dict lookup: safe in the tick)."""
         return self._elements.get(norad_id)
 
     def put(self, elements: Elements) -> None:
+        """Load (or replace) a satellite's elements."""
         self._elements[elements.norad_id] = elements
 
     def ids(self) -> set[int]:
+        """The satellites with loaded elements."""
         return set(self._elements)
 
 
 class CatalogService:
+    """The satellite catalog and everything built from it.
+
+    Keeps the ``satellite`` table fresh from Celestrak (in the background, throttled, with an
+    on-disk cache that also works offline), answers searches, resolves elements into the registry
+    and rebuilds the fleet, with its link and comms tables, after each ingest.
+    """
+
     def __init__(
         self,
         settings: Settings,
@@ -169,14 +182,17 @@ class CatalogService:
 
     @property
     def cache_file(self) -> Path:
+        """The last Celestrak group download (its mtime is when it was fetched)."""
         return self.settings.cache_dir / f"celestrak_{self.settings.catalog_group}.tle"
 
     def last_group_fetch(self) -> datetime | None:
+        """When the group was last fetched (or confirmed current), if ever."""
         if not self.cache_file.exists():
             return None
         return datetime.fromtimestamp(self.cache_file.stat().st_mtime, UTC)
 
     def start(self) -> None:
+        """Build the fleet from the DB, then keep the catalog fresh (a background task)."""
         self._task = asyncio.create_task(self._run(), name="catalog")
 
     async def _run(self) -> None:
@@ -188,6 +204,7 @@ class CatalogService:
             await self._refresh_forever()
 
     async def stop(self) -> None:
+        """Cancel the background task and close the Celestrak client."""
         if self._task:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -205,6 +222,8 @@ class CatalogService:
     # ----- group ingestion -----
 
     async def refresh_if_stale(self) -> None:
+        """Refetch the group if the cached copy is older than ``catalog_max_age_hours``; load the
+        cache into an empty table."""
         last = self.last_group_fetch()
         max_age = timedelta(hours=self.settings.catalog_max_age_hours)
         if last is None or datetime.now(UTC) - last > max_age:
@@ -214,6 +233,7 @@ class CatalogService:
             await self._ingest_text(self.cache_file.read_text(), cached_at)
 
     async def refresh_group(self) -> None:
+        """Fetch and ingest the Celestrak group now (one refresh at a time)."""
         async with self._refresh_lock:
             self.refreshing = True
             try:
@@ -306,6 +326,7 @@ class CatalogService:
             return db.scalar(select(func.count()).select_from(Satellite)) or 0
 
     async def status_count(self) -> int:
+        """How many satellites the table holds."""
         return await asyncio.to_thread(self._count)
 
     async def search(self, query: str, limit: int, remote: bool) -> tuple[list[Satellite], bool]:

@@ -26,6 +26,7 @@ from app.db.base import Base, UTCDateTime
 
 
 def utcnow() -> datetime:
+    """The current wall-clock time, timezone-aware UTC (the default of the ``*_at`` columns)."""
     return datetime.now(UTC)
 
 
@@ -33,6 +34,9 @@ def utcnow() -> datetime:
 
 
 class GroundStation(Base):
+    """A preset ground station, seeded from ``app/data/seed/ground_stations.json`` (read-only:
+    there is no API to create one; a custom location belongs to its session)."""
+
     __tablename__ = "ground_station"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -44,11 +48,17 @@ class GroundStation(Base):
 
 
 class Satellite(Base):
+    """A catalogued satellite, by NORAD id: its name, classified type and current TLE.
+
+    Bulk-loaded from Celestrak's ``active`` group and refreshed when stale; the simulation reads
+    the in-memory fleet built from these rows, never the table itself.
+    """
+
     __tablename__ = "satellite"
 
     norad_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
-    # station | weather | comms | navigation | sar | other (from data/seed/satellite_types.json)
+    #: station | weather | comms | navigation | sar | other (from data/seed/satellite_types.json)
     type: Mapped[str | None] = mapped_column(String(16))
     is_sar_capable: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
@@ -76,14 +86,14 @@ class LinkProfile(Base):
     label: Mapped[str] = mapped_column(Text, nullable=False)
     frequency_hz: Mapped[float] = mapped_column(Float, nullable=False)
     eirp_dbw: Mapped[float] = mapped_column(Float, nullable=False)
-    # [[off_nadir_deg, offset_db], ...] or null for the same EIRP in every direction
+    #: [[off_nadir_deg, offset_db], ...] or null for the same EIRP in every direction
     eirp_pattern: Mapped[list[Any] | None] = mapped_column(JSON)
     coverage_half_angle_deg: Mapped[float | None] = mapped_column(Float)
     station_gt_db_k: Mapped[float] = mapped_column(Float, nullable=False)
     system_loss_db: Mapped[float] = mapped_column(
         Float, nullable=False, default=0.0, server_default="0"
     )
-    # atmospheric + rain loss as quoted at one elevation; scaled along the slant path (cosecant)
+    #: atmospheric + rain loss as quoted at one elevation; scaled along the slant path (cosecant)
     atmospheric_loss_db: Mapped[float] = mapped_column(
         Float, nullable=False, default=0.0, server_default="0"
     )
@@ -92,7 +102,7 @@ class LinkProfile(Base):
     )
     required_ebn0_db: Mapped[float] = mapped_column(Float, nullable=False)
     data_rate_bps: Mapped[float] = mapped_column(Float, nullable=False)
-    sources: Mapped[list[Any]] = mapped_column(JSON, nullable=False)  # [{title, url}, ...]
+    sources: Mapped[list[Any]] = mapped_column(JSON, nullable=False)  #: [{title, url}, ...]
 
 
 class PacketTemplate(Base):
@@ -107,10 +117,10 @@ class PacketTemplate(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     norad_id: Mapped[int] = mapped_column(ForeignKey("satellite.norad_id"), nullable=False)
-    kind: Mapped[str] = mapped_column(String(16), nullable=False)  # telemetry | command
-    framing: Mapped[str] = mapped_column(String(16), nullable=False)  # ax25 | ccsds
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)  #: telemetry | command
+    framing: Mapped[str] = mapped_column(String(16), nullable=False)  #: ax25 | ccsds
     name: Mapped[str] = mapped_column(Text, nullable=False)
-    spec: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)  # the validated template
+    spec: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)  #: the validated template
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
 
@@ -140,7 +150,7 @@ class MissionSession(Base):
     time_scale: Mapped[float] = mapped_column(
         Float, nullable=False, default=1.0, server_default="1.0"
     )
-    # SHA-256 (hex) of the session's capability token; the token itself is never stored.
+    #: SHA-256 (hex) of the session's capability token; the token itself is never stored.
     token_hash: Mapped[str | None] = mapped_column(String(64))
 
 
@@ -173,12 +183,12 @@ class Command(Base):
     norad_id: Mapped[int] = mapped_column(ForeignKey("satellite.norad_id"), nullable=False)
     template_id: Mapped[int | None] = mapped_column(ForeignKey("packet_template.id"))
     params: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    scheduled_aos: Mapped[datetime | None] = mapped_column(UTCDateTime)  # the booked pass's AOS
-    # scheduled | queued | sent | acked | failed | aborted | held
+    scheduled_aos: Mapped[datetime | None] = mapped_column(UTCDateTime)  #: the booked pass's AOS
+    #: scheduled | queued | sent | acked | failed | aborted | held
     status: Mapped[str] = mapped_column(String(16), nullable=False)
-    sim_time: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)  # when it was issued
+    sim_time: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)  #: when it was issued
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
-    # the system check at AOS that released or held a booked command (a ``SystemCheck``)
+    #: the system check at AOS that released or held a booked command (a ``SystemCheck``)
     check_result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
 
@@ -192,14 +202,14 @@ class TelemetryFrame(Base):
     session_id: Mapped[int] = mapped_column(ForeignKey("mission_session.id"), nullable=False)
     norad_id: Mapped[int] = mapped_column(ForeignKey("satellite.norad_id"), nullable=False)
     template_id: Mapped[int | None] = mapped_column(ForeignKey("packet_template.id"))
-    command_id: Mapped[int | None] = mapped_column(ForeignKey("command.id"))  # its response
+    command_id: Mapped[int | None] = mapped_column(ForeignKey("command.id"))  #: its response
     sim_time: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     wall_time: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
-    raw: Mapped[bytes | None] = mapped_column(LargeBinary)  # the frame as received (≤ 512 bytes)
-    decoded: Mapped[list[Any] | None] = mapped_column(JSON)  # [{name, value, unit}], null if bad
-    source: Mapped[str] = mapped_column(String(16), nullable=False)  # satnogs | simulated
+    raw: Mapped[bytes | None] = mapped_column(LargeBinary)  #: the frame as received (≤ 512 bytes)
+    decoded: Mapped[list[Any] | None] = mapped_column(JSON)  #: [{name, value, unit}], null if bad
+    source: Mapped[str] = mapped_column(String(16), nullable=False)  #: satnogs | simulated
     crc_ok: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
-    origin: Mapped[dict[str, Any] | None] = mapped_column(JSON)  # SatNOGS provenance
+    origin: Mapped[dict[str, Any] | None] = mapped_column(JSON)  #: SatNOGS provenance
 
 
 class Alarm(Base):
@@ -215,8 +225,8 @@ class Alarm(Base):
     norad_id: Mapped[int | None] = mapped_column(ForeignKey("satellite.norad_id"))
     sim_time: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     wall_time: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
-    severity: Mapped[str] = mapped_column(String(16), nullable=False)  # info | warning | critical
-    # power | thermal | storage | attitude | rf
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)  #: info | warning | critical
+    #: power | thermal | storage | attitude | rf
     subsystem: Mapped[str | None] = mapped_column(String(16))
     message: Mapped[str] = mapped_column(Text, nullable=False)
     acknowledged: Mapped[bool] = mapped_column(

@@ -23,7 +23,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 C_M_S = 299_792_458.0
-BOLTZMANN_DBW_HZ_K = 10 * math.log10(1.380649e-23)  # -228.60 dBW/(Hz·K)
+BOLTZMANN_DBW_HZ_K = 10 * math.log10(1.380649e-23)  #: -228.60 dBW/(Hz·K)
 
 GREEN, AMBER, RED = 0, 1, 2
 RAG_NAMES = ("green", "amber", "red")
@@ -52,15 +52,15 @@ class LinkProfile:
     norad_id: int
     label: str
     frequency_hz: float
-    eirp_dbw: float  # with a pattern: EIRP where the pattern offset is 0 dB
+    eirp_dbw: float  #: with a pattern: EIRP where the pattern offset is 0 dB
     station_gt_db_k: float
     system_loss_db: float
     required_ebn0_db: float
     data_rate_bps: float
-    # (off-nadir °, EIRP offset dB), ascending; empty = the same EIRP in every direction
+    #: (off-nadir °, EIRP offset dB), ascending; empty = the same EIRP in every direction
     eirp_pattern: tuple[tuple[float, float], ...] = ()
     coverage_half_angle_deg: float | None = None
-    # quoted at ``atmospheric_ref_elev_deg``; scaled by sin(ref) / sin(el)
+    #: quoted at ``atmospheric_ref_elev_deg``; scaled by sin(ref) / sin(el)
     atmospheric_loss_db: float = 0.0
     atmospheric_ref_elev_deg: float = 90.0
 
@@ -77,6 +77,7 @@ class LinkProfile:
         )
 
     def pattern_db(self, off_nadir_deg: Floats) -> Floats:
+        """EIRP offset (dB) towards the station, interpolated in the pattern (held past it)."""
         if not self.eirp_pattern:
             return np.zeros_like(off_nadir_deg)
         angles, offsets = zip(*self.eirp_pattern, strict=True)
@@ -84,11 +85,14 @@ class LinkProfile:
         return np.interp(off_nadir_deg, angles, offsets)
 
     def atmospheric_db(self, elevation_deg: Floats) -> Floats:
+        """Atmospheric loss at an elevation: the quoted loss scaled by the cosecant law (the
+        longer slant path through the atmosphere), floored at a low elevation."""
         el = np.radians(np.maximum(np.asarray(elevation_deg, dtype=np.float64), _MIN_ATM_ELEV_DEG))
         scale = math.sin(math.radians(self.atmospheric_ref_elev_deg)) / np.sin(el)
         return self.atmospheric_loss_db * scale
 
     def margin_db(self, range_m: Floats, off_nadir_deg: Floats, elevation_deg: Floats) -> Floats:
+        """Link margin (dB): received Eb/N0 minus the required Eb/N0 (vectorized)."""
         return (
             self.fixed_db
             + self.pattern_db(off_nadir_deg)
@@ -193,14 +197,15 @@ class LinkTable:
 
     profiles: tuple[LinkProfile, ...]
     by_norad: Mapping[int, int]
-    version: int
-    # per fleet row: index into ``profiles`` or -1
+    version: int  #: the same profiles give the same version, so caches keyed on it survive
+    #: per fleet row: index into ``profiles`` or -1
     profile_of_row: Ints = field(repr=False)
 
     @classmethod
     def build(
         cls, profiles: Iterable[LinkProfile], fleet_index: Mapping[int, int], fleet_size: int
     ) -> "LinkTable":
+        """Align profiles with the fleet's rows (``fleet_index``: NORAD id → row)."""
         kept = tuple(profiles)
         by_norad = {p.norad_id: i for i, p in enumerate(kept)}
         profile_of_row = np.full(fleet_size, -1, dtype=np.intp)
@@ -213,6 +218,7 @@ class LinkTable:
 
     @classmethod
     def empty(cls, fleet_size: int = 0) -> "LinkTable":
+        """No profiles at all."""
         return cls.build((), {}, fleet_size)
 
     def __len__(self) -> int:

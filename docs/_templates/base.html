@@ -1,0 +1,6 @@
+{#- Furo's base, plus the theme handoff from the app. It must run before Furo's first body script
+    reads the theme, and it is a file (not inline) so the CSP needs no new hash. -#}
+{% extends "!base.html" %}
+{%- block extrahead -%}
+<script src="{{ pathto('_static/satlab-theme.js', 1) }}"></script>
+{%- endblock -%}

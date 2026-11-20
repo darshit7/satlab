@@ -24,6 +24,8 @@ type Events = {
   'map-mode': { mode: MapMode }
   'sky-expand': { view: SkyView }
   'pass-schedule-open': undefined
+  /** The header's Docs link (the docs site has no tracker of its own). */
+  'docs-open': undefined
   'clock-change': { to: string }
   'filter-on': { filter: 'sar' | 'link-ok' | 'comms' | SatelliteType }
   'sound-on': undefined

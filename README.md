@@ -35,6 +35,7 @@ follow your commands: a chirp when one goes up, a chime when its answer comes ba
 
 ## Quick start
 
+<!-- docs:quick-start:start -->
 Prerequisites: Python 3.12+ with [uv](https://docs.astral.sh/uv/), Node 20+ with [pnpm](https://pnpm.io/).
 
 ```bash
@@ -53,6 +54,7 @@ On first start the backend creates `backend/var/satlab.db` (SQLite; see below fo
 the Celestrak "active" catalog (~16k objects) in the background. Open http://localhost:5173/satlab/.
 
 Optional settings: copy [.env.example](.env.example) to `.env`.
+<!-- docs:quick-start:end -->
 
 ### Persistent database (Postgres on Neon)
 
@@ -65,8 +67,8 @@ fresh clone still runs. Setup, roles, migrations and verification are in [deploy
 
 The app runs as two containers and is live at https://satlab.darshitp.dev/satlab/ (Azure Container Apps):
 
-- **`satlab-web`** ([frontend/Dockerfile](frontend/Dockerfile)): nginx serves the Vite build at `/satlab/`
-  (`/` redirects there) and reverse-proxies `/satlab/api` and `/satlab/ws` (WebSocket upgrade) to the API
+- **`satlab-web`** ([frontend/Dockerfile](frontend/Dockerfile), built from the repo root): nginx serves the Vite
+  build at `/satlab/` (`/` redirects there) and the docs at `/satlab/docs/`, and reverse-proxies `/satlab/api` and `/satlab/ws` (WebSocket upgrade) to the API
   **with the `/satlab` prefix stripped**. It also sets the CSP and other security headers.
   `SATLAB_API_UPSTREAM` points it at the API. Build with `--build-arg NEXT_UMAMI_ID=<uuid>` to include
   the Umami tracker (custom events, Web Vitals, errors; it runs only on `satlab.darshitp.dev`), and
@@ -81,6 +83,18 @@ backend lint and tests on SQLite and Postgres, frontend lint, tests and build, a
 and smoke-tested together. Merging runs [deploy.yml](.github/workflows/deploy.yml), which pushes
 both images to GHCR, migrates the production database, rolls out to Azure Container Apps and
 smoke-tests the public URL.
+
+## Documentation
+
+The full documentation is at https://satlab.darshitp.dev/satlab/docs/ (the **Docs** link in the app's
+header). It covers how the system works and why, with diagrams, and has the Python API, REST,
+WebSocket, settings, database and seed-data references generated from the code. Its source is
+[docs/](docs/), written as docs-as-code: it changes with the code and CI builds it strictly. To build it:
+
+```bash
+pnpm -C frontend install && pnpm -C frontend docs:vendor
+cd backend && uv run --group docs sphinx-build -M dirhtml ../docs ../docs/_build -W --keep-going
+```
 
 ## Checks
 
@@ -114,6 +128,7 @@ browser ──REST──▶ FastAPI ── stations / sessions / pass schedule  
 
 ## Honesty notes
 
+<!-- docs:honesty:start -->
 - Elevation is **geometric**: "in view" (above the horizon mask, 5° by default) does not mean visible
   to the naked eye; most satellites shown are too small or unlit to see.
 - TLE accuracy degrades with age; each satellite's TLE age is shown.
@@ -123,15 +138,18 @@ browser ──REST──▶ FastAPI ── stations / sessions / pass schedule  
   ([`link_profiles.json`](backend/app/data/seed/link_profiles.json) cites every value).
 - Power, thermal, storage and attitude are **modelled** from generic parameters, driven by real eclipse
   and pass geometry; the UI labels them so.
+<!-- docs:honesty:end -->
 
 ## Data sources
 
+<!-- docs:data-sources:start -->
 - Orbital elements: [Celestrak GP](https://celestrak.org/NORAD/documentation/gp-data-formats.php)
   (please respect their fetch etiquette; the backend caches and refreshes at most every 12 h).
 - Link budgets: NOAA/NESDIS JPSS-1 and JPSS-2 HRD RF ICDs, the CMA FY-3D space-to-ground ICD and
   NOAA OSPO's GOES-R GRB link budget (links in the seed file and in the app).
 - Basemap: [OpenFreeMap](https://openfreemap.org/) © OpenMapTiles, © OpenStreetMap contributors.
 - Emoji: [Twemoji](https://github.com/jdecked/twemoji) graphics, CC-BY 4.0. Fonts: Nunito, JetBrains Mono, Playpen Sans (SIL OFL), self-hosted via Fontsource.
+<!-- docs:data-sources:end -->
 
 ## Design
 

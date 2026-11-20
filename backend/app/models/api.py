@@ -28,6 +28,8 @@ class LocationIn(BaseModel):
 
 
 class SatelliteOut(BaseModel):
+    """A catalogued satellite: name, type and the epoch of the TLE the simulation uses."""
+
     model_config = ConfigDict(from_attributes=True)
 
     norad_id: int
@@ -39,12 +41,18 @@ class SatelliteOut(BaseModel):
 
 
 class SatelliteSearchResult(BaseModel):
+    """Catalog search results; ``remote_searched`` when Celestrak was asked too (by name or
+    NORAD id, only on explicit request)."""
+
     query: str
     remote_searched: bool
     results: list[SatelliteOut]
 
 
 class CatalogStatus(BaseModel):
+    """The catalog's size and freshness: when the Celestrak group was last fetched, and whether
+    a refresh is running or last failed."""
+
     satellite_count: int
     group: str
     last_fetched_at: datetime | None
@@ -58,7 +66,7 @@ class MissionSessionCreate(BaseModel):
     station_id: int | None = None
     location: LocationIn | None = None
     name: str | None = Field(default=None, max_length=120)
-    sim_start_time: AwareDatetime | None = None  # defaults to "now"
+    sim_start_time: AwareDatetime | None = None  #: defaults to "now"
     time_scale: float = Field(default=1.0, gt=0)
 
     @model_validator(mode="after")
@@ -69,10 +77,12 @@ class MissionSessionCreate(BaseModel):
 
 
 class MissionSessionOut(BaseModel):
+    """A mission session: where it observes from (its own copy of the location) and its clock."""
+
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    station_id: int | None  # the preset the location came from, if any
+    station_id: int | None  #: the preset the location came from, if any
     location_name: str
     lat_deg: float
     lon_deg: float
@@ -93,6 +103,8 @@ class MissionSessionCreated(MissionSessionOut):
 
 
 class PassWindowOut(BaseModel):
+    """One pass over the session's location: AOS, culmination and LOS, with their azimuths."""
+
     aos_time: datetime
     los_time: datetime
     max_time: datetime
@@ -103,6 +115,8 @@ class PassWindowOut(BaseModel):
 
 
 class PassPrediction(BaseModel):
+    """A satellite's passes over the session's location in a time window (the 24 h schedule)."""
+
     session_id: int
     station_id: int | None
     norad_id: int
@@ -111,11 +125,13 @@ class PassPrediction(BaseModel):
     horizon_mask_deg: float
     start: datetime
     end: datetime
-    always_visible: bool  # above the mask for the whole window (e.g. geostationary)
+    always_visible: bool  #: above the mask for the whole window (e.g. geostationary)
     passes: list[PassWindowOut]
 
 
 class LinkSourceOut(BaseModel):
+    """A cited source (title and https URL) for seeded reference data."""
+
     title: str
     url: str
 
@@ -130,7 +146,7 @@ class LinkProfileOut(BaseModel):
     eirp_dbw: float
     station_gt_db_k: float
     system_loss_db: float
-    atmospheric_loss_db: float  # at atmospheric_ref_elev_deg, scaled by the cosecant law
+    atmospheric_loss_db: float  #: at atmospheric_ref_elev_deg, scaled by the cosecant law
     atmospheric_ref_elev_deg: float
     required_ebn0_db: float
     data_rate_bps: float
@@ -141,12 +157,14 @@ class LinkProfileOut(BaseModel):
 class LinkProfilesOut(BaseModel):
     """Every link profile in use, with the margin thresholds that map margins to RAG."""
 
-    green_margin_db: float  # green strictly above
-    amber_margin_db: float  # amber from here up to green; red below (or below the mask)
+    green_margin_db: float  #: green strictly above
+    amber_margin_db: float  #: amber from here up to green; red below (or below the mask)
     profiles: list[LinkProfileOut]
 
 
 class CommandParamOut(BaseModel):
+    """One parameter of a command template, with the bounds the server checks it against."""
+
     name: str
     label: str
     type: Literal["int", "text"]
@@ -157,16 +175,20 @@ class CommandParamOut(BaseModel):
 
 
 class TelemetryTemplateOut(BaseModel):
+    """A telemetry frame a satellite sends: its framing, cadence and where its frames come from."""
+
     name: str
     label: str
     framing: Literal["ax25", "ccsds"]
-    interval_s: float | None  # null: sent only in answer to a command
+    interval_s: float | None  #: null: sent only in answer to a command
     downlink: Literal["simulated", "satnogs"]
-    layout_sourced: bool  # false: an illustrative layout
+    layout_sourced: bool  #: false: an illustrative layout
     sources: list[LinkSourceOut]
 
 
 class CommandTemplateOut(BaseModel):
+    """A command the simulated uplink can send, its parameters and what answers it."""
+
     name: str
     label: str
     framing: Literal["ax25", "ccsds"]
@@ -177,18 +199,20 @@ class CommandTemplateOut(BaseModel):
 
 
 class SatelliteCommsOut(BaseModel):
+    """A satellite's packet templates: what can be received from it and sent to it."""
+
     norad_id: int
     satellite_name: str
     telemetry: list[TelemetryTemplateOut]
-    commands: list[CommandTemplateOut]  # empty: receive-only (no published command set)
-    # Seeded downlink frequency and its sources; null for satellites with a link profile, whose
-    # frequency is the profile's (/api/link-profiles).
+    commands: list[CommandTemplateOut]  #: empty: receive-only (no published command set)
+    #: Seeded downlink frequency; null for satellites with a link profile, whose frequency is the
+    #: profile's (/api/link-profiles).
     downlink_frequency_hz: float | None = None
-    downlink_sources: list[LinkSourceOut] = []
+    downlink_sources: list[LinkSourceOut] = []  #: where the seeded frequency comes from
 
 
 class PacketTemplatesOut(BaseModel):
     """Every satellite with packet templates (reference data, like the link profiles)."""
 
-    satnogs_configured: bool  # whether real frames can be replayed at all
+    satnogs_configured: bool  #: whether real frames can be replayed at all
     satellites: list[SatelliteCommsOut]

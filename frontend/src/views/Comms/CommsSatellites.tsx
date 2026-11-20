@@ -1,6 +1,6 @@
 import { Radio } from 'lucide-react'
 import { useMemo } from 'react'
-import { focusRing } from '../../components/ui/Button'
+import { focusRing } from '../../components/ui/buttonClasses'
 import { cn } from '../../components/ui/cn'
 import { COMMS_CAPABILITY_DETAIL, commsSatellites } from '../../lib/comms'
 import { useMission } from '../../store/mission'

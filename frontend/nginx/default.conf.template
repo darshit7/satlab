@@ -40,7 +40,7 @@ server {
 
     gzip on;
     gzip_vary on;
-    gzip_types text/css application/javascript application/json image/svg+xml;
+    gzip_types text/css application/javascript text/javascript application/json image/svg+xml;
 
     include /etc/nginx/snippets/security-headers.conf;
 
@@ -79,6 +79,31 @@ server {
         include /etc/nginx/snippets/security-headers.conf;
         add_header Cache-Control "public, max-age=86400" always;
         try_files $uri =404;
+    }
+
+    location = /satlab/docs {
+        return 301 /satlab/docs/;
+    }
+
+    # The documentation site (Sphinx, built into the image from the same commit). Static files only,
+    # no try_files: a directory redirects to its trailing slash (the pages' relative links need it)
+    # and a missing page is the docs' own 404, never the SPA. Its own CSP: no external host, and
+    # its inline scripts hashed at build time.
+    location /satlab/docs/ {
+        include /etc/nginx/snippets/docs-security-headers.conf;
+        add_header Cache-Control "no-cache" always;
+        error_page 404 /satlab/docs/404/index.html;
+
+        location /satlab/docs/_static/ {
+            include /etc/nginx/snippets/docs-security-headers.conf;
+            add_header Cache-Control "public, max-age=86400" always;
+
+            # Mermaid's ES modules (.mjs): a JavaScript MIME type, or nosniff blocks them.
+            location ~ \.mjs$ {
+                types { }
+                default_type text/javascript;
+            }
+        }
     }
 
     location /satlab/api/ {

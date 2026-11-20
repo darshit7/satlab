@@ -19,11 +19,13 @@ An end-to-end, real-time **satellite mission control simulator** (portfolio / le
 2. You cannot task Sentinel-1/Umbra on demand — simulate the workflow, then wait for the **real** next acquisition.
 3. Geometric truth ≠ naked-eye visibility — sky views show true positions; most objects aren't eye-visible.
 
-**Product/UX spec:** [docs/SATELLITE_MISSION_CONTROL_DESIGN.md](docs/SATELLITE_MISSION_CONTROL_DESIGN.md) holds the detailed feature behavior (user flows, views, the visibility cone, indicators, comms, SAR). This file wins on rules and conventions; the design doc wins on feature behavior and UX. **Before starting a phase, read the design-doc sections it cites** (§9 below).
+**Product/UX spec:** `notes/SATELLITE_MISSION_CONTROL_DESIGN.md` (private: gitignored, local only, never published or included in the docs site) holds the detailed feature behavior (user flows, views, the visibility cone, indicators, comms, SAR). This file wins on rules and conventions; the design doc wins on feature behavior and UX. **Before starting a phase, read the design-doc sections it cites** (§9 below).
 
 ---
 
 ## 2. Golden rules (do not break these)
+
+<!-- docs:golden-rules:start -->
 
 1. **One simulation engine.** All physics lives in the backend sim loop. The frontend **renders streamed state**; it never re-derives orbital positions, link margins, or pass windows. A new feature that needs physics adds a field to the tick output — never a parallel calculation in JS.
 2. **Contracts change additively.** A new snapshot, message or REST field gets a default and the TS mirror marks it optional; every migration is expand/contract-compatible with the code still running. Web/API version skew then degrades gracefully instead of breaking.
@@ -35,6 +37,8 @@ An end-to-end, real-time **satellite mission control simulator** (portfolio / le
 8. **No secrets in the repo.** API accounts (e.g. Space-Track) go in `.env` (gitignored); provide `.env.example`.
 9. **Large binaries stay out of the DB.** SAR rasters live on disk/object storage; the database stores only paths and metadata.
 10. **Everything from outside is untrusted.** Browser messages, REST input, and every byte from Celestrak, SatNOGS, STAC, KML or a downloaded raster is validated and bounded before use. See §12.
+11. **Docs change with the code.** A change updates, in the same commit, the docs pages that [docs/sync-map.toml](docs/sync-map.toml) lists for the files it touches (every public symbol has a docstring and every field or constant a `#:` comment, from which the reference pages are generated). CI builds the site strictly, and `backend/tests/test_docs_sync.py` keeps every source file mapped to a page. How: [docs/how-to/write-docs.md](docs/how-to/write-docs.md).
+<!-- docs:golden-rules:end -->
 
 ---
 
@@ -72,9 +76,17 @@ An end-to-end, real-time **satellite mission control simulator** (portfolio / le
 
 ```
 satellite-mission-control/
-├─ CLAUDE.md                 # this file
+├─ AGENTS.md                 # this file
 ├─ README.md
+├─ design-system.md          # the UI design system ("Warm Notebook")
 ├─ .env.example
+├─ docs/                     # documentation site (Sphinx + MyST + Furo), served at /satlab/docs/
+│  ├─ conf.py                # build config; scrubs SATLAB_* and .env before importing the app
+│  ├─ sync-map.toml          # which pages explain which code (tests/test_docs_sync.py)
+│  ├─ _ext/satlab_reference/ # generates the reference pages from code; link rewriting; output guard
+│  ├─ getting-started/  architecture/  simulation/  how-to/  reference/  project/
+│  └─ reference/_generated/  # (gitignored) generated at build time; _static/vendor/ likewise
+├─ notes/                    # private, gitignored: the product/UX design doc (never published)
 ├─ .github/workflows/        # ci.yml (PR checks), deploy.yml (main → GHCR → Azure Container Apps)
 ├─ scripts/smoke.sh          # end-to-end smoke test of a running web+API pair (CI and post-deploy)
 ├─ deploy/                  # deploy runbooks, gitignored/local (neon.md, azure.md)
@@ -112,26 +124,36 @@ satellite-mission-control/
 │                            #   comms writer, SatNOGS archive)
 │  └─ tests/
 └─ frontend/
-   ├─ Dockerfile             # web image: Vite build served by nginx-unprivileged
-   ├─ nginx/                 # nginx config template + security headers (CSP)
+   ├─ Dockerfile             # web image (built from the repo root): Vite build + docs, nginx-unprivileged
+   ├─ Dockerfile.dockerignore # the web image's build-context allow-list
+   ├─ nginx/                 # nginx config template + security headers (app CSP, docs CSP)
+   ├─ scripts/               # csp-script-hashes.mjs, docs-vendor.mjs (Mermaid + fonts for the docs)
    ├─ package.json           # pnpm-managed
    ├─ vite.config.ts
    └─ src/
       ├─ store/              # zustand store fed by WebSocket
       ├─ ws/                 # WS client + reconnect
+      ├─ api/                # REST client
       ├─ types/              # TS mirrors of pydantic contract
+      ├─ lib/                # projection, tweening, formatting, analytics helpers
       ├─ views/
       │  ├─ Mission/         # mission bar (station, catalog, Overhead + filter summary) + its panels
+      │  ├─ Location/        # the ground-station panel
+      │  ├─ Catalog/         # catalog search + tracked chips
+      │  ├─ Visible/         # Overhead: filters, up now, rising soon
       │  ├─ Inspector/       # right-hand column: sky dock + the selection's header, readout, systems, comms
       │  ├─ Map/             # map panel: 3D globe (default) / 2D map toggle
       │  ├─ Globe/           # Cesium 3D globe + access cone (lazy chunk)
+      │  ├─ GroundTrack/     # MapLibre 2D map
       │  ├─ Sky/             # sky dock (both sky views, small) + the enlarged sky dialog
       │  ├─ AllSky/          # observer all-sky (fisheye) view
       │  ├─ SkyPlot/         # polar az/el plot
+      │  ├─ Readout/         # the selection's header and metric tiles
+      │  ├─ Passes/          # next pass + the 24 h schedule dialog
       │  ├─ Indicators/      # RAG panel + rollup bar
       │  ├─ Comms/           # packet send/receive + animation
       │  ├─ Scheduler/       # command scheduling + alarms
-      │  └─ SAR/             # image compare + change overlay
+      │  └─ SAR/             # image compare + change overlay (Phase 7, not built yet)
       └─ components/         # shared UI
 ```
 
@@ -171,10 +193,22 @@ pnpm test                                  # vitest
 pnpm lint                                  # oxlint + tsc typecheck
 ```
 
+**Docs** (docs-as-code; the full guide is `docs/how-to/write-docs.md`)
+```bash
+pnpm -C frontend docs:vendor               # Mermaid + fonts from the frontend lockfile → docs/_static/vendor
+cd backend
+uv sync --group docs                       # the docs group (a plain `uv sync` removes it again)
+uv run --group docs sphinx-build -M dirhtml ../docs ../docs/_build -W --keep-going   # strict, as CI
+uv run --group docs pytest tests/test_docs_reference.py tests/test_docs_sync.py
+WATCHFILES_FORCE_POLLING=true uv run --group docs sphinx-autobuild ../docs ../docs/_build/dirhtml \
+  -b dirhtml --port 8001 --watch app --ignore "*/_generated/*" --ignore "*/_autosummary/*"
+                                           # preview at http://localhost:5173/satlab/docs/ (pnpm dev proxies it)
+```
+
 **Containers (Phase 2c)** — two images; build and smoke-test them locally before pushing:
 ```bash
 docker build -t satlab-api:local backend
-docker build -t satlab-web:local frontend                # --build-arg NEXT_UMAMI_ID=<uuid> (+ SATLAB_RELEASE=<sha>) for analytics
+docker build -t satlab-web:local -f frontend/Dockerfile .   # repo root: it builds the docs too; --build-arg NEXT_UMAMI_ID=<uuid> (+ SATLAB_RELEASE=<sha>) for analytics
 docker network create satlab
 docker run -d --name api --network satlab -p 8000:8000 -e SATLAB_AUTO_MIGRATE=true \
   -e SATLAB_CATALOG_AUTOLOAD=false -e SATLAB_DOCS_ENABLED=false \
@@ -186,8 +220,8 @@ scripts/smoke.sh http://localhost:8080 http://localhost:8000 http://localhost:80
 **Branches, CI and deploy (Phase 2c)**
 - All work happens on **`dev`**; `main` only receives PRs from `dev` (merge commits, never squash, so the
   branches don't diverge). `main`'s ruleset requires the CI checks `source-branch`, `backend`,
-  `backend-postgres`, `frontend` and `images` (`.github/workflows/ci.yml`; `images` builds both images and
-  runs `scripts/smoke.sh` against them).
+  `backend-postgres`, `frontend`, `docs` and `images` (`.github/workflows/ci.yml`; `docs` builds the docs
+  site strictly and runs its tests; `images` builds both images and runs `scripts/smoke.sh` against them).
 - A merge to `main` runs `.github/workflows/deploy.yml`: CI again → push `ghcr.io/darshit7/satlab-api` and
   `satlab-web` (`:<sha>`, `:latest`) → `alembic upgrade head` on Neon `production` as the owner (the release
   step) → `az containerapp update` the API, then the web app, by SHA → `scripts/smoke.sh` on the public URL.
@@ -213,6 +247,8 @@ scripts/smoke.sh http://localhost:8080 http://localhost:8000 http://localhost:80
 
 ## 6. Conventions
 
+<!-- docs:conventions:start -->
+
 - **Python:** 3.12+, full type hints, `ruff` for lint+format, `snake_case` modules/functions, `PascalCase` classes. Prefer pure functions in `sim/` (easy to unit-test against known passes).
 - **TypeScript:** strict mode; `PascalCase` components, `camelCase` vars; colocate a view's components under its `views/<View>/` folder.
 - **UI look & feel:** follow [design-system.md](design-system.md) ("Warm Notebook"). Compose `frontend/src/components/ui/` primitives; tokens live only in the `@theme` block of `src/index.css`; one emerald accent, `gray` only, rounded everywhere, both themes.
@@ -222,10 +258,15 @@ scripts/smoke.sh http://localhost:8080 http://localhost:8000 http://localhost:80
 - **JSON columns:** use SQLAlchemy `JSON` type (maps to SQLite JSON1 / Postgres JSONB). Keep flexible payloads (decoded telemetry, packet specs, system checks) here.
 - **Migrations:** every schema change is an Alembic revision; never hand-edit the DB. SQLite dev DB is disposable and gitignored.
 - **Config:** ground stations, satellite link profiles, packet templates, and thresholds come from versioned seed data / config — not hard-coded in logic.
+- **Docstrings:** every public module, class, function and method has one (`ruff` `D1`; tests and migrations exempt): a PEP 257 summary line, then prose with units in names and ``reST literals``; no `Args:`/`Returns:` sections. A method that implements a framework hook gets `@typing.override` instead. They are the docs site's API reference.
+- **Field and constant docs:** a `#:` comment, trailing or on the lines just above, documents a dataclass or pydantic field, a setting, an ORM column or a module constant; the docs' reference pages read them. A plain `#` is for group headings and implementation notes. In `Settings`, a group starts with `# Title. Description.`, which becomes a section of the settings reference.
+<!-- docs:conventions:end -->
 
 ---
 
 ## 7. Domain glossary (so you reason correctly)
+
+<!-- docs:glossary:start -->
 
 - **TLE** — two-line orbital element set; input to SGP4.
 - **SGP4** — propagator: TLE + time → position/velocity (ECI).
@@ -248,6 +289,7 @@ scripts/smoke.sh http://localhost:8080 http://localhost:8000 http://localhost:80
 - **AOI** — area of interest for imaging/comparison.
 
 **Link-budget → RAG mapping (canonical):** margin > ~6 dB = **green**; 0–6 dB = **amber**; < 0 dB or below horizon mask = **red**. (Thresholds: `SATLAB_LINK_GREEN_MARGIN_DB` / `SATLAB_LINK_AMBER_MARGIN_DB`.) A satellite without a published link budget has **no** link state, shown as "no RF data" in grey, never a guessed margin.
+<!-- docs:glossary:end -->
 
 ---
 
@@ -449,6 +491,8 @@ Still to do, when the feature arrives:
 
 ## 9. Phase plan (build in this order)
 
+<!-- docs:phases:start -->
+
 Each phase is a **vertical slice** (backend + WebSocket + UI) that runs on its own. Mark the current phase here as you go.
 
 > **Current phase: _Phase 6 — Polish_: 6a (globe & map) committed on `dev`, 6b (command sounds and contact Doppler) implemented on `dev`.** Phases 1–4b are done and deployed (4b merged in PR #10); Phase 5 (pass automation) is on `dev` awaiting its merge. 6c (TimescaleDB) follows.
@@ -470,10 +514,13 @@ Each phase is a **vertical slice** (backend + WebSocket + UI) that runs on its o
   - **6c — TimescaleDB.** `telemetry_frame` as a hypertable on Postgres where the extension exists (Apache-2 feature set on Neon); storage only.
 - **Phase 7 — SAR archive explore (Flow 1).** STAC search (Sentinel-1 RTC / Umbra) for AOI + two dates; swipe compare; v1 log-ratio change detection; flagged regions. **Enable PostGIS on the existing Neon DB** (geometry columns + GiST). DB: `sar_scene`, `change_result`.
 - **Phase 8 — SAR mission tasking (Flow 2).** Simulated tasking over the real acquisition plan; sim states tasked→acquiring→downlink→processing; STAC polling; "waiting for real data" gate; unlock compare when the real scene lands. DB: `sar_task`.
+<!-- docs:phases:end -->
 
 ---
 
 ## 10. Data sources (verify endpoints/collections at build time)
+
+<!-- docs:data-sources:start -->
 
 | Source | Use | Notes |
 |---|---|---|
@@ -485,6 +532,7 @@ Each phase is a **vertical slice** (backend + WebSocket + UI) that runs on its o
 | Umbra Open Data (AWS) | Very high-res spotlight SAR time series | STAC catalog; great for change demos. |
 
 Sentinel-1 publishes its acquisition plan as KML — use it to compute the **real** next overpass for the Phase 8 tasking gate.
+<!-- docs:data-sources:end -->
 
 ---
 
@@ -493,11 +541,14 @@ Sentinel-1 publishes its acquisition plan as KML — use it to compute the **rea
 - Unit-test `sim/geometry.py` and `sim/linkbudget.py` against **known passes** (compare az/el to a reference like skyfield examples or published pass predictions).
 - Snapshot-test RAG thresholds (margin → color).
 - Keep `sim/` functions pure where possible so they're testable without a DB or network.
-- Never commit a failing `ruff`/`pytest`/`vitest` state as "done."
+- **Docs are part of done** (golden rule 11): the pages `docs/sync-map.toml` lists for the files you touched are updated, a new file is mapped, and the strict docs build and `tests/test_docs_*.py` pass. The checklist is in `docs/how-to/write-docs.md`.
+- Never commit a failing `ruff`/`pytest`/`vitest`/docs-build state as "done."
 
 ---
 
 ## 12. Security (secure-by-default coding rules)
+
+<!-- docs:security:start -->
 
 There is no separate vulnerability-scanning step in this project's workflow. Security comes from writing code that follows these rules and from reviewing every change against them. When a rule and a convenience conflict, the rule wins; if a rule genuinely blocks the task, stop and ask rather than quietly weakening it.
 
@@ -553,6 +604,7 @@ Write every change for that public deploy.
 - **External links** use `rel="noopener noreferrer"` with `target="_blank"`, and only `https:` URLs. Never build an `href` from data without checking the scheme (no `javascript:` URLs).
 - **`localStorage` holds preferences only** (theme, last station, tracked list): nothing secret, nothing the server must trust. Every read is wrapped in `try/catch` and validated, as `src/lib/theme.ts` does.
 - **CSP:** no new inline scripts or inline event-handler attributes. The single inline pre-paint theme script in `index.html` is the documented exception: the web image's build hashes it into the nginx `Content-Security-Policy` (`frontend/scripts/csp-script-hashes.mjs`, `frontend/nginx/security-headers.conf`), so the hash can't go stale. A new external host (tiles, analytics) must be added to that CSP too; `cloud.umami.is` (script) and `gateway.umami.is` (events) are there for analytics (§12.8). WebAssembly stays blocked (no `'wasm-unsafe-eval'`): the globe's Cesium workers and imagery come from our own origin, and the one Cesium dependency that compiles wasm on import (meshoptimizer) is stubbed out of the bundle (§14, Phase 4a).
+- **The docs site** (`/satlab/docs/`) has its own CSP (`frontend/nginx/docs-security-headers.conf`): no external host at all, and `script-src` lists the hash of every distinct inline script in the built site (Furo's theme line and the Mermaid init), computed during the image build as the app's is. The docs build fails on a page with an off-origin script, an inline event handler, a `javascript:` URL or a path of the build machine (`docs/_ext/satlab_reference/guards.py`).
 
 ### 12.8 Dependencies (no extra tooling, just habits)
 - **Lockfiles are the source of truth and are committed** (`backend/uv.lock`, `frontend/pnpm-lock.yaml`). Install with `uv sync` / `pnpm install`; never `pip install` into the venv by hand.
@@ -560,12 +612,14 @@ Write every change for that public deploy.
 - **pnpm 10 doesn't run dependency install scripts by default.** Allow one (`onlyBuiltDependencies`) only deliberately, for a known package that needs it.
 - **Upgrade deliberately:** bump versions in a dedicated change and rerun the full test suite. Don't leave the code pinned to versions with known security fixes available.
 - **No CDN `<script>` tags.** Everything the frontend runs is bundled from the lockfile. The one documented exception is the Umami Cloud tracker (`https://cloud.umami.is/script.js`, `defer`): a fixed host in `vite.config.ts`, injected only into production builds and only when `NEXT_UMAMI_ID` is set (validated as a UUID), limited to `satlab.darshitp.dev` (`data-domains`), with Web Vitals (`data-performance`) and error capture (`data-errors`, tagged with `SATLAB_RELEASE`, validated as a commit SHA). Custom events go only through `src/lib/analytics.ts` (§14). Don't add others.
+- **The docs site loads nothing from a CDN either.** Mermaid and the fonts are vendored from the frontend lockfile (`pnpm docs:vendor`), the intersphinx inventories are vendored (`docs/_intersphinx/`), and MyST's math syntax stays off (it would load MathJax from a CDN). The docs' Python dependencies are the backend's `docs` group in `uv.lock`.
 
 ### 12.9 Deploy-time (in force since Phase 2c)
 - **Public without login is accepted for now** (2026-10-16), because a visitor can only drive their own simulated session: per-session capability tokens, the WS `Origin` check, per-connection rate and size limits, a cap on concurrent sessions (`SATLAB_MAX_ACTIVE_SESSIONS`), a global Celestrak budget and nginx per-IP limits bound what one client can do. **Authentication is required before any feature that writes shared state, stores user data or needs per-user ownership** (accounts, saved missions, SAR tasking quotas).
 - TLS everywhere (`wss://`, `https://`): ACA terminates TLS with a managed certificate; the API is internal-only.
 - Security headers (CSP, `X-Content-Type-Options`, `Referrer-Policy`, `frame-ancestors`) come from nginx; FastAPI's `/docs`, `/redoc` and `/openapi.json` are off in production (`SATLAB_DOCS_ENABLED=false`).
 - Containers run as a non-root user with no secrets baked into images; secrets come from the platform's secret store (ACA secrets, GitHub environment secrets).
+- **The docs site is built from code, never from configuration.** It is static, built in the web image from the same commit, and its generator reads defaults from the source; `docs/conf.py` drops every `SATLAB_*` variable and `.env` loading before it imports the app. Nothing from a deploy's settings can appear in it. FastAPI's own `/docs` stays off: the REST reference is generated at build time instead. The web image's build context is an allow-list (`frontend/Dockerfile.dockerignore`), so `.env`, `notes/` and `deploy/` can't enter it.
 
 ### 12.10 Safety boundary (non-negotiable)
 - **This software never transmits RF.** Uplink is simulated (§1). Never add code that keys a real transmitter or SDR, or sends commands to a real spacecraft or ground-station network: that is illegal without a licence and authorisation. Reading public data (SatNOGS archives, STAC) is fine; writing to those services is not part of this project.
@@ -574,6 +628,7 @@ Write every change for that public deploy.
 None open: the gaps listed here were closed before the Phase 2c public deploy (2026-10-16). Record new ones as they're found, and close them when touching that code.
 
 When you close a gap, delete its line here.
+<!-- docs:security:end -->
 
 ---
 
@@ -586,6 +641,8 @@ When you close a gap, delete its line here.
 ---
 
 ## 14. Decision log (schema / contract)
+
+<!-- docs:decisions:start -->
 
 - **Phase 1 — WebSocket contract** (`backend/app/models/ws.py` ↔ `frontend/src/types/ws.ts`). One socket per mission session at `/ws/sessions/{id}`. Server → client: `snapshot` (every tick: clock, observer, tracked `SatelliteState`s), `ground_track` (sub-point samples evenly spaced in time over −0.5…+1 orbit, re-sent when the clock leaves the window), `error`. Client → server: `set_tracked` (full replacement set), `set_clock` (`time_scale` / `paused` / `sim_time`). Close code `4404` = session ended/unknown → client starts a new session. Units in field names (`range_m`, `range_rate_m_s`, `alt_m`, `*_deg`).
 - **Client tweening**: map markers interpolate along the server-sampled `ground_track` at the estimated sim time (last `sim_time` + elapsed × `time_scale`); readouts show raw snapshot values. No orbital math in the frontend.
@@ -639,7 +696,7 @@ When you close a gap, delete its line here.
 - **Phase 6b — sound** (2026-10-30). **Cues for command traffic only**: a short rising chirp when a command goes up (as its dot leaves the station), a two-note chime when its answer (ack, response or digipeat) comes back intact (as its dot lands), a low bonk when that answer is lost or corrupted; telemetry the satellite sends on its own is silent (`lib/audio.ts` `cueFor`, by `packetOutcome`). A continuous carrier tone pitched by the Doppler shift, with a burst per frame (AX.25 frames as their own AFSK bits), was built first and dropped on the user's review: a drone through a 10-minute pass is tiring. Web Audio oscillators only (`views/Comms/commsSound.ts`; no files, worklets or dependencies; no CSP change), one engine per page created and resumed by the toggle's click (autoplay rules) and kept for the page's life; `useCommsSound` (mounted by the Communications card) follows the store's packets for the selection, starting from the newest so turning it on replays nothing, cues 250 ms apart. The on/off flag (`store/ui.ts` `sound`) is not persisted: a remembered "on" would be silent until a click. UI: a speaker toggle beside the card's (i), off on every load; a muted line under the packet strip, "Downlink 7812 MHz · Doppler −46.2 kHz", whenever the contact has a frequency; the seeded frequency's sources are linked in the footnote.
 - **Overhead filter floor drawn** (2026-10-30). The min-elevation filter used to hide satellites without anything showing where its floor was: the cone and the sky rings stayed at the mask, which still defines "in view" (in-view flags, AOS/LOS, footprint, passes) and doesn't move with the filter. `Snapshot.shown_min_elevation_deg` (optional) streams the floor the server applies to the shown set, max(mask, filter); when it is above the mask the globe adds a **shown** cone (`ConeKind 'shown'`, ink, under the same fill-and-rim treatment) with the legend row "Shown: above 60° (Overhead filter)", and both sky views draw a solid ink ring at it beside the dashed mask ring. Tracked and selected satellites are still shown below it.
 - **Umami events + engagement milestones** (2026-10-30). The tracker only counted the one pageview, `/satlab/`. Umami computes bounce rate and visit duration from pageviews only (umami-software/umami#3518), so every visit read as a bounce of 0 s. Now `src/lib/analytics.ts` is the one module that talks to `window.umami`:
-  - **Closed catalogue.** A typed `Events` map: `session-start` (how: resumed/preset/custom, preset name), `satellite-select`/`-track` (name, type), `command-send` (satellite, command, now/pass), `command-result` (final status), `panel-open`, `map-mode`, `sky-expand`, `pass-schedule-open`, `clock-change`, `filter-on`, `sound-on`, `catalog-remote-search`, `globe-unavailable`, `server-busy`, `session-failed`.
+  - **Closed catalogue.** A typed `Events` map: `session-start` (how: resumed/preset/custom, preset name), `satellite-select`/`-track` (name, type), `command-send` (satellite, command, now/pass), `command-result` (final status), `panel-open`, `map-mode`, `sky-expand`, `pass-schedule-open`, `clock-change`, `filter-on`, `sound-on`, `docs-open`, `catalog-remote-search`, `globe-unavailable`, `server-busy`, `session-failed`.
   - **Nothing personal.** No coordinates, search text, command parameters (APRS messages are free text), session ids or tokens; the types refuse them (`analytics.test.ts`).
   - **Few events.** The Hobby quota (100K/month, shared with the portfolio's website) counts every event *and every property*, so most UI events go through `trackOnce`: once per value per page load, capped at 20 values per event.
   - **Time on site.** Milestones `time-30s`, `-2m`, `-5m`, `-15m`, `-30m`, events without properties from `EngagementClock`. Active time counts while the tab is visible and there was input in the last 10 min. They're sent while the page is open (no unload beacons), and a Funnel report over them reads as retention. Virtual or heartbeat pageviews were rejected: they would flood the shared Pages list and the quota.
@@ -647,3 +704,28 @@ When you close a gap, delete its line here.
   - **Errors.** Caught globe failures are reported with `captureError` (tag `feature: globe`).
   - **Tag and build.** The tag adds `data-domains`, `data-performance`, `data-errors` and `data-release` (the commit SHA from `deploy.yml` → build arg `SATLAB_RELEASE`). No CSP change: these go to the hosts already allowed.
   - **Dev.** `pnpm dev` logs each event as `[analytics]` in the console.
+- **Documentation site, docs-as-code** (2026-11-18). A Sphinx 9.1 site (MyST Markdown pages, Furo theme) in `docs/`. It is built strictly in CI (the `docs` job, a required check) and inside the web image, served at `/satlab/docs/`, and linked from the header (**Docs**, a new tab, so the session keeps running).
+  - **Why Sphinx.** MkDocs Material and mkdocstrings went into maintenance mode in 2026, and MkDocs 2.0 drops plugins (§12.8 asks for maintained dependencies). The docstrings were already reST-flavoured.
+  - **Layout (Diátaxis).** Getting started, architecture, simulation, how-to, reference, project. Explanation pages follow one template: what, why, how it flows (Mermaid), where in the code, limits.
+  - **Generated reference** (`docs/_ext/satlab_reference`). The Python API (autodoc + recursive autosummary, viewcode). REST from `app.openapi()`. WebSocket from the message unions, `Auth` and `WS_CLOSE_*`. Settings read from source (defaults as written, never evaluated). Database from the ORM metadata: both dialects' types, a Mermaid ER diagram, the migration history. Seed data through the app's loaders. Every value is escaped.
+  - **Code changes for it, no behaviour change.**
+    - Every public symbol got a docstring; `ruff` `D1` enforces it.
+    - Field and constant comments became `#:` doc-comments, and `Settings` got `# Title. Description.` group headings.
+    - `@typing.override` on `UTCDateTime`'s hooks.
+    - `.env.example` now lists every setting (tested).
+  - **Keeping it true.**
+    - Golden rule 11.
+    - `docs/sync-map.toml` maps every source file to the pages that explain it (`tests/test_docs_sync.py`).
+    - Text that lives here, in README or in design-system.md is included through `<!-- docs:…:start/end -->` markers, not copied.
+  - **Private stays private.** The design doc moved to `notes/` (gitignored, like `deploy/`); the docs build refuses to include either and drops links into them. `docs/conf.py` drops `SATLAB_*` variables and `.env` loading before importing the app, and an output guard fails the build on machine paths, credential URLs, off-origin scripts and inline handlers.
+  - **Serving.**
+    - The web image builds from the repo root with an allow-list (`frontend/Dockerfile.dockerignore`, replacing `frontend/.dockerignore`).
+    - nginx serves `/satlab/docs/` as static files (a missing page is the docs' 404, never the SPA) under its own CSP with hashed inline scripts.
+    - Mermaid (a frontend devDependency) and the fonts are vendored from the lockfile (`pnpm docs:vendor`).
+    - `scripts/smoke.sh` checks the docs paths.
+  - **Frontend.**
+    - `ButtonLink` and `buttonClasses`, in `components/ui/buttonClasses.ts`, which now holds `focusRing`.
+    - A `header` variant, shared by Docs and the theme trigger.
+    - The `docs-open` event.
+    - A Vite dev proxy from `/satlab/docs` to `sphinx-autobuild` (`SATLAB_DOCS_URL`, default port 8001).
+<!-- docs:decisions:end -->

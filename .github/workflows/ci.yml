@@ -112,8 +112,52 @@ jobs:
       - run: pnpm test
       - run: pnpm build
 
-  # Both production images build, and work together: nginx serves the app, proxies REST and
-  # WebSocket to the API, and sends the security headers (scripts/smoke.sh).
+  # The documentation site builds strictly (any warning fails: a broken link, a reference to code
+  # that's gone, bad docstring markup) and stays mapped to the code (docs/how-to/write-docs.md).
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Vendor Mermaid and the fonts (frontend lockfile)
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile && pnpm docs:vendor
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Install (backend + docs group)
+        working-directory: backend
+        run: uv sync --frozen --group docs
+      - name: Lint the docs tooling
+        working-directory: backend
+        run: |
+          uv run --no-sync ruff check --config pyproject.toml ../docs
+          uv run --no-sync ruff format --config pyproject.toml --check ../docs
+      - name: Docs tests
+        working-directory: backend
+        env:
+          SATLAB_TEST_POSTGRES_URL: ""
+        run: uv run --no-sync pytest tests/test_docs_sync.py tests/test_docs_reference.py
+      - name: Build (strict)
+        working-directory: backend
+        run: uv run --no-sync sphinx-build -M dirhtml ../docs ../docs/_build -W --keep-going
+      - name: Inline scripts (hashed into the docs CSP)
+        working-directory: frontend
+        run: node scripts/csp-script-hashes.mjs ../docs/_build/dirhtml
+
+  # Both production images build, and work together: nginx serves the app and the docs, proxies
+  # REST and WebSocket to the API, and sends the security headers (scripts/smoke.sh).
   images:
     name: images
     runs-on: ubuntu-latest
@@ -131,7 +175,9 @@ jobs:
       - name: Build web image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
-          context: frontend
+          # The repo root: the image also builds the docs (frontend/Dockerfile.dockerignore).
+          context: .
+          file: frontend/Dockerfile
           load: true
           tags: satlab-web:ci
           cache-from: type=gha,scope=satlab-web

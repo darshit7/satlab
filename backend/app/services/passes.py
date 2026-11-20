@@ -16,10 +16,12 @@ from app.sim.passes import Span, find_spans
 
 
 class NotFound(Exception):
-    pass
+    """The session or the satellite doesn't exist (the API answers 404)."""
 
 
 class PassService:
+    """Predicts the pass schedule of one satellite over a session's location."""
+
     def __init__(
         self,
         settings: Settings,
@@ -35,6 +37,12 @@ class PassService:
     async def predict(
         self, session_id: int, norad_id: int, start: datetime | None, hours: float
     ) -> PassPrediction:
+        """Complete passes overlapping ``hours`` from ``start`` (default: the session's sim time).
+
+        The search pads both ends so a pass in progress at either end keeps its true AOS and
+        LOS. The result replaces the session's stored passes of this satellite in that window.
+        """
+
         def load() -> MissionSession | None:
             with self._sessions() as db:
                 return db.get(MissionSession, session_id)
