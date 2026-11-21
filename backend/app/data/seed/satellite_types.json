@@ -1,9 +1,10 @@
 {
-  "_comment": "Satellite type classification for the visible-set filters. Ordered rules; the first match wins and anything unmatched is 'other'. Patterns are case-insensitive regexes searched in the Celestrak object name; norad_ids match exactly. Debris and rocket bodies (e.g. 'FENGYUN 1C DEB', 'CZ-4C R/B', fetched by a remote search) are caught first. Applied on every catalog ingest and re-applied to the whole catalog at startup, so editing this file reclassifies existing rows. Watch the traps (covered in tests/test_classify.py): SENTINEL-2/3/5P/6 are not SAR, SARAL is an altimeter, GSAT0xxx is Galileo but GSAT-xx is ISRO comms, 'ISS OBJECT xx' are deployed cubesats/debris, and GLONASS flies as 'COSMOS nnnn [GLONASS-M]'.",
+  "_comment": "Satellite type classification for the visible-set filters. Ordered rules; the first match wins and anything unmatched is 'other'. Patterns are case-insensitive regexes searched in the Celestrak object name; norad_ids match exactly. Debris and rocket bodies (e.g. 'FENGYUN 1C DEB', 'CZ-4C R/B', fetched by a remote search) are caught first; `no_radio` marks them as objects comms can't talk to (no generic packet templates). Applied on every catalog ingest and re-applied to the whole catalog at startup, so editing this file reclassifies existing rows. Watch the traps (covered in tests/test_classify.py): SENTINEL-2/3/5P/6 are not SAR, SARAL is an altimeter, GSAT0xxx is Galileo but GSAT-xx is ISRO comms, 'ISS OBJECT xx' are deployed cubesats/debris, and GLONASS flies as 'COSMOS nnnn [GLONASS-M]'.",
   "rules": [
     {
       "type": "other",
       "is_sar_capable": false,
+      "no_radio": true,
       "patterns": ["\\bDEB\\b", "\\bR/B\\b", "\\bAKM\\b"],
       "norad_ids": []
     },

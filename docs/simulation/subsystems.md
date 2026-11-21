@@ -64,8 +64,11 @@ flowchart TB
   downlink to this station is possible. The station only knows its own contacts, so a satellite it
   hasn't seen for a day reads full. Without a link profile there is no downlink to model, so storage
   has no data.
-- **Attitude.** Green while the station is inside the antenna's coverage (the link profile's, or
-  the model's `half_beamwidth_deg`), amber just outside it, red beyond. No data below the mask.
+- **Attitude.** Green while the station is inside the antenna's coverage, amber just outside it,
+  red beyond. No data below the mask. The coverage is the link profile's; else, for a satellite on
+  the generic packet template, the omnidirectional antenna that set assumes
+  (`antenna_half_angle_deg`, 90°, so it can't go red in view); else the model's
+  `half_beamwidth_deg`.
 
 The thresholds, default parameters and per-type overrides are in the
 {ref}`seed data <seed-subsystem-models>`.
@@ -74,7 +77,8 @@ The thresholds, default parameters and per-type overrides are in the
 
 - The parameters are generic per satellite type, not the real spacecraft's. The ISS, for example,
   is "held" by pass automation at low elevations because the generic ±62° beam doesn't reach the
-  station below about 11°. That is accepted: it exercises the alarm path.
+  station below about 11°. That is accepted: it exercises the alarm path. The generic template's
+  omnidirectional antenna is an assumption too (typical of TT&C antennas), labelled as modelled.
 - Attitude assumes the satellite points its antenna at nadir; real attitude modes aren't
   modelled.
 

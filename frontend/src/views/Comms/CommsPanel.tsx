@@ -11,6 +11,7 @@ import { RAG_TEXT } from '../../components/ui/ragClasses'
 import { Select } from '../../components/ui/Select'
 import { trackOnce } from '../../lib/analytics'
 import {
+  commsTemplatesFor,
   formatBer,
   formatLightTime,
   formatValue,
@@ -311,7 +312,7 @@ export function CommsPanel() {
   useCommsSound()
 
   const packets = useMemo(() => allPackets.filter((p) => p.norad_id === selectedId), [allPackets, selectedId])
-  const sat = templates?.satellites.find((s) => s.norad_id === selectedId)
+  const sat = selectedId !== null ? commsTemplatesFor(templates, selectedId, contact?.templates) : null
   const recentCommands = useMemo(
     () =>
       Object.values(commandStatuses)
@@ -323,9 +324,15 @@ export function CommsPanel() {
 
   if (selectedId === null || !contact || contact.norad_id !== selectedId) return null
   if (contact.state === 'no_template') {
+    // An older server doesn't stream `templates`: there, "no template" still means no formats of
+    // its own. A current one gives every satellite the generic set but debris and rocket bodies.
+    const why =
+      contact.templates === undefined
+        ? 'No packet templates for this satellite, so the station can’t communicate with it.'
+        : 'Debris and rocket bodies carry no radio, so the station can’t communicate with this object.'
     return (
       <Card as="div" dense title="Communications">
-        <p className={cn('mb-2 text-sm', muted)}>No packet templates for this satellite, so the station can’t communicate with it.</p>
+        <p className={cn('mb-2 text-sm', muted)}>{why}</p>
         <CommsSatellites />
       </Card>
     )
@@ -345,7 +352,7 @@ export function CommsPanel() {
       titleAction={
         <span className="flex items-center gap-1">
           <InfoPopover
-            label="Satellites you can communicate with"
+            label="Satellites with their own formats"
             iconSize={16}
             buttonClassName="p-0.5"
             panelClassName="inset-x-3 top-11 max-h-[min(28rem,60vh)] origin-top-left"
@@ -367,6 +374,9 @@ export function CommsPanel() {
     >
       <PacketFlow packets={packets} active={words.active} lightTime={formatLightTime(contact.one_way_light_time_s)} />
       <DownlinkLine contact={contact} />
+      {sat?.generic && (
+        <p className={cn('mt-1 text-xs', muted)}>Generic template: no formats of its own here, so an illustrative layout.</p>
+      )}
 
       <div className="mt-3">
         {sat && sat.commands.length > 0 ? (
@@ -428,6 +438,8 @@ export function CommsPanel() {
 
       <p className={cn('mt-3 text-xs', muted)}>
         Uplink is simulated: nothing is transmitted. {downlink}{' '}
+        {sat?.generic &&
+          'This satellite publishes no packet format the simulator models, so it uses the generic template every such satellite shares, with an assumed omnidirectional antenna; without a published link budget the channel isn’t modelled, so frames arrive as sent. '}
         {uniqueSources.length > 0 && (
           <>
             Formats: <SourceLinks sources={uniqueSources} />.{' '}

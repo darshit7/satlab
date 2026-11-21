@@ -142,7 +142,9 @@ class Subscriber:
 
     MAX_EVENTS = 200
 
-    def __init__(self) -> None:
+    def __init__(self, names: Callable[[int], str | None] | None = None) -> None:
+        #: The catalog name of a NORAD id, for the command statuses and alarms that lack one.
+        self._names = names
         self._snapshot: Snapshot | None = None
         self._upcoming: UpcomingMessage | None = None
         self._tracks: dict[int, GroundTrackMessage] = {}
@@ -164,11 +166,19 @@ class Subscriber:
                 self._tracks[message.norad_id] = message
             case PassArcMessage():
                 self._arcs[message.norad_id] = message
-            case PacketMessage() | CommandStatusMessage() | AlarmMessage():
+            case CommandStatusMessage() | AlarmMessage():
+                self._events.append(self._named(message))
+            case PacketMessage():
                 self._events.append(message)
             case ErrorMessage():
                 self._errors.append(message)
         self._ready.set()
+
+    def _named[M: CommandStatusMessage | AlarmMessage](self, message: M) -> M:
+        if self._names is None or message.satellite_name is not None or message.norad_id is None:
+            return message
+        name = self._names(message.norad_id)
+        return message if name is None else message.model_copy(update={"satellite_name": name})
 
     async def drain(self) -> list[BaseModel]:
         """Wait for news, then take everything pending, in the order a client must apply it:
@@ -319,7 +329,7 @@ class SessionRuntime:
     def subscribe(self) -> Subscriber:
         """A new mailbox, primed with what a (re)connecting client needs: tracks, arcs, the
         rising-soon list, the recent packets and the booked commands and alarms."""
-        sub = Subscriber()
+        sub = Subscriber(self.satellite_name)
         for state in self._tracks.values():
             sub.offer(state.message)
         for arc in self._arcs.values():
@@ -346,6 +356,12 @@ class SessionRuntime:
     def _publish(self, message: BaseModel) -> None:
         for sub in self._subscribers:
             sub.offer(message)
+
+    def satellite_name(self, norad_id: int) -> str | None:
+        """The satellite's catalog name, if it is in the current fleet."""
+        fleet = self._fleet()
+        row = fleet.index.get(norad_id)
+        return fleet.names[row] if row is not None else None
 
     def publish_error(self, message: str) -> None:
         """Tell every client something it asked for couldn't be done (or was limited)."""
@@ -494,7 +510,7 @@ class SessionRuntime:
         self._update_upcoming(fleet, sim_time, above, advance=not busy)
 
         # 5. The selection's systems, the link with it, and the check at a booked pass's AOS.
-        health = self._selected_health(fleet.links, sim_time)
+        health = self._selected_health(fleet, sim_time)
         for message in self.comms.step(
             sim_time,
             self._contact_look(),
@@ -756,7 +772,7 @@ class SessionRuntime:
             link_doppler_hz=look.link.doppler_hz if look.link is not None else None,
         )
 
-    def _selected_health(self, links: LinkTable, sim_time: datetime) -> HealthState | None:
+    def _selected_health(self, fleet: Fleet, sim_time: datetime) -> HealthState | None:
         look = self._selected_look
         if look is None or self.selected is None:
             return None
@@ -765,11 +781,12 @@ class SessionRuntime:
                 norad_id=self.selected,
                 satrec=look.satrec,
                 kind=look.kind,
-                links=links,
+                links=fleet.links,
                 sim_time=sim_time,
                 elevation_deg=look.elevation_deg,
                 off_nadir=look.off_nadir_deg,
                 link=look.link,
+                antenna_half_angle_deg=fleet.comms.antenna_half_angle_deg(self.selected),
             )
         except Exception:
             log.exception("session %d: health of %s failed", self.session_id, self.selected)

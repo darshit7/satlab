@@ -85,7 +85,10 @@ aborted if their pass can't be found any more), and alarms and their numbering a
 
 With the current models, NOAA 20 and 21 go (RF amber passes), FengYun-3D goes (green), and the ISS
 is held at low elevations: its modelled ±62° beam doesn't reach the station below about 11°. That
-is accepted, because it exercises the alarm path.
+is accepted, because it exercises the alarm path. A satellite on the generic template (any satellite
+without templates of its own, so any pass can be booked) assumes an omnidirectional antenna: its
+attitude is green whenever it's in view, so its commands go unless power or thermal is red.
+Geostationary satellites stay in view and have no AOS, so they're commanded now, not booked.
 
 ## Where in the code
 

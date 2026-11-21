@@ -77,8 +77,10 @@ day and night smoothly between snapshots.
 
 Each subscriber has a {py:class}`~app.sim.loop.Subscriber` mailbox. Snapshots and the rising-soon
 list coalesce (a slow client gets the latest, not a backlog). Tracks and arcs coalesce per
-satellite. Packets, command statuses and alarms queue in order, up to 200. When the socket drains
-the mailbox, messages go out in the order a client must apply them:
+satellite. Packets, command statuses and alarms queue in order, up to 200; the mailbox stamps each
+status and alarm with its satellite's catalog name (`satellite_name`), so the client can name a
+satellite it has no reference data for. When the socket drains the mailbox, messages go out in the
+order a client must apply them:
 
 ```text
 errors → ground tracks → pass arcs → packets / statuses / alarms → upcoming → snapshot

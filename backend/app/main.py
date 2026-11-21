@@ -33,6 +33,7 @@ from app.models.api import (
     CatalogStatus,
     CommandParamOut,
     CommandTemplateOut,
+    GenericCommsOut,
     GroundStationOut,
     LinkProfileOut,
     LinkProfilesOut,
@@ -54,6 +55,7 @@ from app.models.ws import (
     auth_message_adapter,
     client_message_adapter,
 )
+from app.packets.templates import CommandTemplate, TelemetryTemplate
 from app.services.catalog import CatalogService
 from app.services.comms import CommsWriter
 from app.services.passes import NotFound, PassService
@@ -228,12 +230,41 @@ def list_link_profiles(db: Db) -> LinkProfilesOut:
 
 @app.get("/api/packet-templates", response_model=PacketTemplatesOut)
 def list_packet_templates(request: Request, catalog: Catalog) -> PacketTemplatesOut:
-    """Satellites with packet templates: what they send, and the commands they take."""
+    """Satellites with packet templates of their own (what they send, and the commands they
+    take), and the generic set every other satellite uses."""
     fleet = catalog.fleet
     archive: SatnogsArchive = request.app.state.archive
 
     def sources(items: list) -> list[LinkSourceOut]:
         return [LinkSourceOut(title=s.title, url=s.url) for s in items]
+
+    def telemetry(items: tuple[tuple[int, TelemetryTemplate], ...]) -> list[TelemetryTemplateOut]:
+        return [
+            TelemetryTemplateOut(
+                name=t.name,
+                label=t.label,
+                framing=t.framing.type,
+                interval_s=t.interval_s,
+                downlink=t.downlink,
+                layout_sourced=t.layout_sourced,
+                sources=sources(t.sources),
+            )
+            for _, t in items
+        ]
+
+    def commands(items: tuple[tuple[int, CommandTemplate], ...]) -> list[CommandTemplateOut]:
+        return [
+            CommandTemplateOut(
+                name=c.name,
+                label=c.label,
+                framing=c.framing.type,
+                params=[CommandParamOut.model_validate(p.model_dump()) for p in c.params],
+                response=c.response,
+                layout_sourced=c.layout_sourced,
+                sources=sources(c.sources),
+            )
+            for _, c in items
+        ]
 
     satellites = []
     for norad_id, sat in sorted(fleet.comms.by_norad.items()):
@@ -242,36 +273,23 @@ def list_packet_templates(request: Request, catalog: Catalog) -> PacketTemplates
             SatelliteCommsOut(
                 norad_id=norad_id,
                 satellite_name=fleet.names[row] if row is not None else str(norad_id),
-                telemetry=[
-                    TelemetryTemplateOut(
-                        name=t.name,
-                        label=t.label,
-                        framing=t.framing.type,
-                        interval_s=t.interval_s,
-                        downlink=t.downlink,
-                        layout_sourced=t.layout_sourced,
-                        sources=sources(t.sources),
-                    )
-                    for _, t in sat.telemetry
-                ],
-                commands=[
-                    CommandTemplateOut(
-                        name=c.name,
-                        label=c.label,
-                        framing=c.framing.type,
-                        params=[CommandParamOut.model_validate(p.model_dump()) for p in c.params],
-                        response=c.response,
-                        layout_sourced=c.layout_sourced,
-                        sources=sources(c.sources),
-                    )
-                    for _, c in sat.commands
-                ],
+                telemetry=telemetry(sat.telemetry),
+                commands=commands(sat.commands),
                 downlink_frequency_hz=sat.downlink.frequency_hz if sat.downlink else None,
                 downlink_sources=sources(list(sat.downlink.sources)) if sat.downlink else [],
             )
         )
+    generic = fleet.comms.generic
     return PacketTemplatesOut(
-        satnogs_configured=archive.status(0) != "not_configured", satellites=satellites
+        satnogs_configured=archive.status(0) != "not_configured",
+        satellites=satellites,
+        generic=GenericCommsOut(
+            telemetry=telemetry(generic.telemetry),
+            commands=commands(generic.commands),
+            antenna_half_angle_deg=generic.antenna_half_angle_deg,
+        )
+        if generic is not None
+        else None,
     )
 
 
@@ -316,6 +334,7 @@ async def catalog_status(catalog: Catalog) -> CatalogStatus:
         last_fetched_at=catalog.last_group_fetch(),
         refreshing=catalog.refreshing,
         last_error=catalog.last_error,
+        max_age_hours=catalog.settings.catalog_max_age_hours,
     )
 
 

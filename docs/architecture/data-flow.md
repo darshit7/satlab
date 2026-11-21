@@ -17,13 +17,17 @@ build immutable in-memory objects that the tick reads with plain lookups.
 - **Never block the loop.** Celestrak and SatNOGS are slow, rate-limited and sometimes down. Every
   fetch runs in a background task with a timeout, a size cap and a cache, and the loop keeps
   running on the last good copy.
-- **Respect the upstreams.** Celestrak asks clients not to re-download a group more often than
-  every ~2 hours, and SatNOGS answers 429 after about 20 quick requests. Group refreshes are
-  throttled, remote searches share one global budget across all clients, and SatNOGS refreshes
-  share another.
+- **Respect the upstreams.** Celestrak's data updates every 2 hours, and since March 2026 it
+  refuses a repeat download before then (HTTP 403, "GP data has not updated since your last
+  successful download"); 50 such errors in 2 hours get the address firewalled. SatNOGS answers 429
+  after about 20 quick requests. So a refused download is never repeated before Celestrak's next
+  update, remote searches and single-satellite fetches share one global budget across all clients,
+  and SatNOGS refreshes share another. That's also why there's no refresh button: a user can't get
+  anything newer than the server already has.
 - **Everything external is hostile input.** TLEs are checksummed and parsed defensively (a bad
-  record is skipped, not fatal). SatNOGS responses are streamed with a 2 MB cap, pagination only
-  follows links to the same endpoint, and redirects are never followed. Frames are kept only if they
+  record is skipped, not fatal), off the event loop. Celestrak responses are streamed with a byte
+  cap (`SATLAB_CELESTRAK_MAX_BYTES`), SatNOGS responses with a 2 MB cap, and redirects are never
+  followed; SatNOGS pagination only follows links to the same endpoint. Frames are kept only if they
   decode cleanly with a template.
 - **Cited, versioned reference data.** Seed files are part of the code: validated strictly when
   loaded (unknown keys are errors) and synced to the database on every catalog rebuild. A value that
@@ -53,18 +57,30 @@ flowchart TB
 **Catalog ({py:class}`~app.services.catalog.CatalogService`)**
 
 1. At startup the fleet is built from whatever the database holds (instant, and it works offline).
-2. Every `SATLAB_CATALOG_REFRESH_CHECK_MINUTES` the service checks the cached group's age. When it
+2. Every `SATLAB_CATALOG_REFRESH_CHECK_MINUTES` the service checks the group's age. When it
    is older than `SATLAB_CATALOG_MAX_AGE_HOURS`, it fetches `GROUP=active` in TLE format, writes the
    cache file, and upserts the `satellite` table in chunks. Each upsert is classified by the
    ordered type rules ({py:func}`app.data.classify.classify`).
+   - **A refused repeat download** (the 403 above) means this address got the current data less
+     than 2 hours ago. If that was our own download, the copy is current: either the cache file
+     dates from then, or a container restart lost the cache while the database kept the catalog.
+     Either way nothing is asked again before Celestrak's next update, so a restart costs at most
+     one request. The age is kept in memory as well as in the cache file's mtime.
+   - The Catalog panel shows the age and the refresh interval from `GET /api/catalog/status`
+     ("fetched 3 h ago · refreshed every 12 h"), and the last error beside a catalog that still
+     works.
 3. {py:meth}`~app.services.catalog.CatalogService.rebuild_fleet` syncs the link profiles and
    packet templates from their seed files (only for satellites already catalogued, so foreign keys
-   always hold), then builds a new {py:class}`~app.sim.fleet.Fleet` on a thread. The fleet holds
+   always hold; the generic packet-template set once, with no satellite), then builds a new
+   {py:class}`~app.sim.fleet.Fleet` on a thread, noting which objects are debris or rocket bodies
+   (no radio, so no generic templates). The fleet holds
    parallel arrays of every satellite, one `SatrecArray`, and the link profiles and packet
    templates aligned with its rows. It is swapped in with one assignment.
 4. Tracking or selecting a satellite resolves its elements into the
    {py:class}`~app.services.catalog.Registry`. That refreshes a stale TLE from Celestrak by catalog
-   number first, which is why a newly tracked satellite can take a few seconds to appear.
+   number first, which is why a newly tracked satellite can take a few seconds to appear. A
+   satellite is fetched this way at most once per Celestrak update and within the remote-search
+   budget; otherwise whatever the database holds is used.
 
 **Remote search.** Only on explicit request (and for 3+ characters or a number), the service asks
 Celestrak by name or catalog number. It skips a query it already made in the last 2 hours and
@@ -84,8 +100,9 @@ templates replay real frames:
 
 **Seeds ({py:mod}`app.data.seed`)** are read with lru-cached, validated loaders. Ground stations
 are inserted by name and never updated. Link profiles are authoritative: rows the seed drops are
-deleted. Packet templates are upserted, and rows the seed drops are marked inactive rather than
-deleted, so `command.template_id` keeps pointing at something.
+deleted. Packet templates are upserted (the generic set's rows by kind and name, with no
+satellite), and rows the seed drops are marked inactive rather than deleted, so
+`command.template_id` keeps pointing at something.
 
 ## The sources
 

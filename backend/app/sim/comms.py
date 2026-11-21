@@ -236,7 +236,7 @@ class CommsRuntime:
 
         Out of contact (or too fast), commands that were waiting are aborted and beacons stop.
         """
-        sat = table.by_norad.get(look.norad_id) if look is not None else None
+        sat = table.for_norad(look.norad_id) if look is not None else None
         self.contact = self._contact(look, sat, time_scale=time_scale, paused=paused)
         active = self.contact is not None and self.contact.state == "active"
         out: list[BaseModel] = []
@@ -287,6 +287,7 @@ class CommsRuntime:
             archive=self._archive.status(look.norad_id) if replayed else None,
             downlink_frequency_hz=frequency,
             doppler_hz=doppler,
+            templates="generic" if sat.generic else "own",
         )
 
     @staticmethod

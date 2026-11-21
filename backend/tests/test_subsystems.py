@@ -56,6 +56,7 @@ def _state(tracker: HealthTracker, fleet: Fleet, norad_id: int, when, **kw):
         elevation_deg=kw.get("elevation_deg", -10.0),
         off_nadir=kw.get("off_nadir", 80.0),
         link=None,
+        antenna_half_angle_deg=kw.get("antenna_half_angle_deg"),
     )
 
 
@@ -157,3 +158,20 @@ def test_battery_drains_in_eclipse() -> None:
 )
 def test_rollup(rags, expected) -> None:
     assert rollup(rags) == expected
+
+
+def test_attitude_beam_precedence() -> None:
+    """The link profile's coverage, else the generic packet templates' assumed antenna (90°:
+    omnidirectional), else the model's 62° default."""
+    fleet, tracker = _fleet(), _tracker()
+    low = {"elevation_deg": 6.0, "off_nadir": 67.5}  # the ISS just above a 5° mask
+    iss = _state(tracker, fleet, ISS, FLEET_2026_TIME, **low)
+    assert iss is not None
+    assert iss.attitude.half_beamwidth_deg == 62 and iss.attitude.rag == "red"
+    generic = _state(tracker, fleet, ISS, FLEET_2026_TIME, antenna_half_angle_deg=90.0, **low)
+    assert generic is not None
+    assert generic.attitude.half_beamwidth_deg == 90 and generic.attitude.rag == "green"
+
+    profile = fleet.links.profiles[fleet.links.by_norad[NOAA_20]]
+    noaa = _state(tracker, fleet, NOAA_20, FLEET_2026_TIME, antenna_half_angle_deg=90.0, **low)
+    assert noaa is not None and noaa.attitude.half_beamwidth_deg == profile.coverage_half_angle_deg

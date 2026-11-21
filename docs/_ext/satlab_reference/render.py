@@ -546,9 +546,29 @@ def seed_page() -> str:
                     " ".join(f"<{r.url}>" for r in s.downlink_sources),
                 ]
                 for s in templates.satellites
-            ],
+            ]
+            + (
+                [
+                    [
+                        "Every other satellite (debris and rocket bodies excepted)",
+                        "",
+                        code(templates.generic.template_set),
+                        "",
+                        "",
+                    ]
+                ]
+                if templates.generic
+                else []
+            ),
         )
     )
+    if templates.generic:
+        out.append(
+            f"The generic set assumes a TT&C antenna covering "
+            f"{templates.generic.antenna_half_angle_deg:g}° off nadir (90°: omnidirectional), "
+            "which the attitude check uses for those satellites. It's stored once, with no "
+            "satellite.\n"
+        )
     for name, tset in templates.template_sets.items():
         out.append(heading(3, code(name)))
         rows = [
@@ -594,12 +614,13 @@ def seed_page() -> str:
     )
     out.append(
         list_table(
-            ["#", "Type", "SAR", "Name patterns", "NORAD ids"],
+            ["#", "Type", "SAR", "No radio", "Name patterns", "NORAD ids"],
             [
                 [
                     str(i),
                     code(r.type),
                     "yes" if r.is_sar_capable else "",
+                    "yes" if r.no_radio else "",
                     ", ".join(code(p) for p in r.patterns),
                     ", ".join(code(n) for n in r.norad_ids),
                 ]

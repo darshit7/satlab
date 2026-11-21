@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
-from app.data.celestrak import CelestrakClient
+from app.data.celestrak import CelestrakClient, CelestrakTooLarge
 from app.db.base import get_sessionmaker
 from app.services.catalog import CatalogService, upsert_tle_records
 from tests.conftest import ISS_LINE1, ISS_LINE2, ISS_RECORD
@@ -88,4 +88,101 @@ async def test_remote_search_shares_one_global_budget(
     assert searched == [True, True, False]  # third distinct query: over budget, not sent
     assert len(calls) == 2
     assert await service._remote_search("alpha")  # repeats are served by the per-query cache
+    assert len(calls) == 2
+
+
+# ---------- Celestrak's one-download-per-update rule ----------
+
+NOT_UPDATED = (
+    "GP data has not updated since your last successful download of GROUP=active at {since} UTC."
+    " Data is updated once every 2 hours."
+)
+
+
+def _refused(since: datetime):
+    text = NOT_UPDATED.format(since=since.strftime("%Y-%m-%d %H:%M:%S"))
+    return lambda r: httpx.Response(403, text=text)
+
+
+async def test_refused_repeat_after_a_restart_keeps_the_database(migrated: Path) -> None:
+    """A container restart loses the cache file; Celestrak refuses the download because the last
+    container got it: the catalog in the database is current, and nothing is asked again."""
+    with get_sessionmaker()() as db:
+        upsert_tle_records(db, [ISS_RECORD], datetime.now(UTC) - timedelta(hours=1))
+    since = (datetime.now(UTC) - timedelta(hours=1)).replace(microsecond=0)
+    service, calls = make_service(_refused(since))
+    assert not service.cache_file.exists() and service.last_group_fetch() is None
+
+    await service.refresh_if_stale()
+    assert len(calls) == 1
+    assert service.last_error is None and service.last_group_fetch() == since
+    for _ in range(3):  # the 30-min checks: never repeated (each would count as an error)
+        await service.refresh_if_stale()
+    assert len(calls) == 1
+
+
+async def test_refused_without_our_data_waits_for_the_next_update(migrated: Path) -> None:
+    """Someone else on this address got the data, and we have none: no retry before Celestrak's
+    next update, and the status says so."""
+    since = (datetime.now(UTC) - timedelta(minutes=30)).replace(microsecond=0)
+    service, calls = make_service(_refused(since))
+    await service.refresh_if_stale()
+    await service.refresh_if_stale()
+    assert len(calls) == 1
+    assert (
+        service.last_error == "Celestrak refused a repeat download; retrying after its next update"
+    )
+    assert service.last_group_fetch() is None
+    assert service._group_retry_at == since + timedelta(hours=2)
+
+
+async def test_refused_with_our_own_cache_is_current(migrated: Path) -> None:
+    settings = get_settings()
+    settings.cache_dir.mkdir(parents=True, exist_ok=True)
+    cache = settings.cache_dir / f"celestrak_{settings.catalog_group}.tle"
+    cache.write_text(ISS_TEXT)
+    since = datetime.fromtimestamp(cache.stat().st_mtime, UTC).replace(microsecond=0)
+    service, calls = make_service(_refused(since))
+    await service.refresh_group()  # forced: the copy is fresh, Celestrak agrees
+    assert service.last_error is None and service.last_group_fetch() is not None
+    assert len(calls) == 1
+
+
+async def test_oversized_and_redirected_responses_are_refused(migrated: Path) -> None:
+    settings = get_settings()
+
+    def huge(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"x" * (2 * 1024 * 1024))
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(huge))
+    client = CelestrakClient(settings.celestrak_base_url, 5, client=http, max_bytes=1024 * 1024)
+    with pytest.raises(CelestrakTooLarge):
+        await client.fetch_group("active")
+
+    calls: list[httpx.Request] = []
+
+    def moved(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(301, headers={"Location": "https://elsewhere.example/gp.php"})
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(moved), follow_redirects=True)
+    client = CelestrakClient(settings.celestrak_base_url, 5, client=http)
+    with pytest.raises(httpx.HTTPStatusError):
+        await client.fetch_group("active")
+    assert len(calls) == 1  # never followed, even by a client configured to
+
+
+async def test_resolve_fetches_once_per_update_within_the_budget(
+    migrated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Selecting unknown NORAD ids can't make the server hit Celestrak over and over."""
+    monkeypatch.setattr(get_settings(), "remote_search_per_min", 2)
+    service, calls = make_service(lambda r: httpx.Response(200, text="No GP data found"))
+    for _ in range(3):
+        assert await service.resolve(99999) is None
+    assert len(calls) == 1  # tried once; not again within Celestrak's update interval
+    assert await service.resolve(99998) is None
+    assert await service.resolve(99997) is None  # the shared budget is spent
+    assert len(calls) == 2
+    assert not await service._remote_search("alpha")  # and searches share it
     assert len(calls) == 2

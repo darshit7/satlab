@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import update
 
 from app.data.celestrak import parse_tle_text
-from app.data.classify import classify, reclassify_all
+from app.data.classify import classify, has_no_radio, reclassify_all
 from app.data.seed import packet_template_specs
 from app.db.base import get_sessionmaker
 from app.db.models import Satellite
@@ -91,3 +91,20 @@ def test_fleet_comms_mask_marks_satellites_with_templates() -> None:
     assert Fleet.build(rows, templates=templates).comms_mask().tolist() == [True, False]
     assert Fleet.build(rows).comms_mask().tolist() == [False, False]
     assert Fleet.empty().comms_mask().tolist() == []
+
+
+@pytest.mark.parametrize(
+    ("name", "no_radio"),
+    [
+        ("FENGYUN 1C DEB", True),
+        ("CZ-4C R/B", True),
+        ("SL-14 R/B", True),
+        ("ISS (ZARYA)", False),
+        ("STARLINK-1008", False),
+        ("DEBRA SAT", False),  # a word that merely starts with DEB
+    ],
+)
+def test_debris_and_rocket_bodies_have_no_radio(name: str, no_radio: bool) -> None:
+    assert has_no_radio(name, 99999) is no_radio
+    if no_radio:
+        assert classify(name, 99999).type == "other"

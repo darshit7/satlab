@@ -185,7 +185,9 @@ class ContactState(BaseModel):
 
     ``active``: in view, with packet templates, at a clock rate comms can follow; frames flow and
     commands can be sent. ``archive`` reports the SatNOGS replay for satellites whose downlink is
-    real archived frames (null otherwise).
+    real archived frames (null otherwise). ``templates`` says whether the satellite uses its own
+    formats or the generic set every other satellite shares (``no_template``: debris and rocket
+    bodies, which have no radio).
     """
 
     norad_id: int
@@ -198,6 +200,9 @@ class ContactState(BaseModel):
     #: satellite has neither.
     downlink_frequency_hz: float | None = None
     doppler_hz: float | None = None  #: its Doppler shift, received minus transmitted
+    #: ``own``: the satellite's own templates; ``generic``: the shared generic set (illustrative
+    #: layout, modelled values); null without templates.
+    templates: Literal["own", "generic"] | None = None
 
 
 class SunState(BaseModel):
@@ -392,6 +397,7 @@ class CommandStatusMessage(BaseModel):
     sim_time: datetime
     scheduled_pass: ScheduledPass | None = None  #: booked for a pass (not sent live)
     check: SystemCheck | None = None  #: the check at AOS that released or held it
+    satellite_name: str | None = None  #: the catalog's name; null if it isn't in the catalog
 
 
 AlarmSeverity = Literal["info", "warning", "critical"]
@@ -409,6 +415,7 @@ class AlarmMessage(BaseModel):
     message: str
     sim_time: datetime
     acknowledged: bool = False
+    satellite_name: str | None = None  #: the catalog's name; null without a (catalogued) satellite
 
 
 class ErrorMessage(BaseModel):
@@ -471,7 +478,8 @@ class SetFilter(BaseModel):
     #: Only satellites with a link profile; of those in view, only those with a margin at or above
     #: the amber threshold.
     link_ok_only: bool = False
-    #: Only satellites with packet templates: the ones comms works with (some are receive-only).
+    #: Only satellites with packet templates of their own (the UI's "Own formats"; some are
+    #: receive-only); every other satellite but debris and rocket bodies uses the generic set.
     comms_only: bool = False
     #: Effective threshold is max(horizon mask, this). For rising-soon passes it applies to the
     #: pass's (approximate) maximum elevation.

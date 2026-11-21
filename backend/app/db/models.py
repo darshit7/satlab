@@ -2,7 +2,7 @@
 
 Phase 1 tables: ground_station, satellite, mission_session. Phase 2: pass_window. Phase 3:
 link_profile. Phase 4b: packet_template, command, telemetry_frame. Phase 5: alarm (and
-command.check_result).
+command.check_result). Generic comms: packet_template rows without a satellite.
 """
 
 from datetime import UTC, datetime
@@ -19,6 +19,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -106,17 +107,33 @@ class LinkProfile(Base):
 
 
 class PacketTemplate(Base):
-    """One telemetry or command template of a satellite (seed: ``packet_templates.json``).
+    """One telemetry or command template of a satellite, or of the generic set (seed:
+    ``packet_templates.json``).
 
-    Synced by natural key (satellite, kind, name). A template the seed drops is marked inactive
-    rather than deleted, so commands that used it keep their foreign key.
+    Synced by natural key (satellite, kind, name); the generic set's rows have no satellite and
+    are shared by every satellite without its own templates, keyed by (kind, name). A template the
+    seed drops is marked inactive rather than deleted, so commands that used it keep their foreign
+    key.
     """
 
     __tablename__ = "packet_template"
-    __table_args__ = (UniqueConstraint("norad_id", "kind", "name"),)
+    __table_args__ = (
+        UniqueConstraint("norad_id", "kind", "name"),
+        # NULLs never conflict in the constraint above, so the generic rows get their own unique
+        # index: the sync's ON CONFLICT target.
+        Index(
+            "uq_packet_template_generic",
+            "kind",
+            "name",
+            unique=True,
+            sqlite_where=text("norad_id IS NULL"),
+            postgresql_where=text("norad_id IS NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    norad_id: Mapped[int] = mapped_column(ForeignKey("satellite.norad_id"), nullable=False)
+    #: The satellite; NULL for the generic set, shared by every satellite without its own.
+    norad_id: Mapped[int | None] = mapped_column(ForeignKey("satellite.norad_id"), nullable=True)
     kind: Mapped[str] = mapped_column(String(16), nullable=False)  #: telemetry | command
     framing: Mapped[str] = mapped_column(String(16), nullable=False)  #: ax25 | ccsds
     name: Mapped[str] = mapped_column(Text, nullable=False)

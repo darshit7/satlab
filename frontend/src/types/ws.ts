@@ -137,6 +137,9 @@ export interface ContactState {
   downlink_frequency_hz?: number | null
   /** Its Doppler shift, received minus transmitted (Hz); positive while approaching. */
   doppler_hz?: number | null
+  /** `own`: the satellite's own templates; `generic`: the shared generic set (illustrative layout,
+   *  modelled values); null without templates (debris, rocket bodies); absent from older servers. */
+  templates?: 'own' | 'generic' | null
 }
 
 /** Pass automation holds the antenna: from shortly before a booked pass's AOS until its LOS the
@@ -330,6 +333,8 @@ export interface CommandStatusMessage {
   scheduled_pass?: ScheduledPass | null
   /** The check at AOS that released or held it. */
   check?: SystemCheck | null
+  /** The catalog's name; null if it isn't in the catalog. */
+  satellite_name?: string | null
 }
 
 export type AlarmSeverity = 'info' | 'warning' | 'critical'
@@ -345,6 +350,8 @@ export interface AlarmMessage {
   message: string
   sim_time: string
   acknowledged: boolean
+  /** The catalog's name; null without a (catalogued) satellite. */
+  satellite_name?: string | null
 }
 
 export interface ErrorMessage {
@@ -379,7 +386,8 @@ export interface VisibilityFilter {
   sar_only: boolean
   /** Only satellites with a link profile; of those in view, only with a usable margin. */
   link_ok_only: boolean
-  /** Only satellites with packet templates: the ones comms works with (some are receive-only). */
+  /** Only satellites with packet templates of their own ("Own formats"; some are receive-only):
+   *  every other satellite but debris uses the generic set. */
   comms_only: boolean
   /** Effective threshold is max(horizon mask, this). */
   min_elevation_deg: number

@@ -253,7 +253,7 @@ class SessionManager:
         self, runtime: SessionRuntime, saved: _SavedCommand
     ) -> ScheduledCommand | None:
         """The saved command booked again for its pass, or None if that can't be done."""
-        sat = self._catalog.fleet.comms.by_norad.get(saved.norad_id)
+        sat = self._catalog.fleet.comms.for_norad(saved.norad_id)
         template = next(
             (t for i, t in (sat.commands if sat else ()) if i == saved.template_id), None
         )
@@ -396,7 +396,7 @@ class SessionManager:
         if not budget.take():
             runtime.publish_error("Too many commands; wait a moment.")
             return None
-        sat = self._catalog.fleet.comms.by_norad.get(message.norad_id)
+        sat = self._catalog.fleet.comms.for_norad(message.norad_id)
         found = sat.command_named(message.command) if sat is not None else None
         if found is None:
             runtime.publish_error(f"{message.command} isn't a command this satellite takes.")

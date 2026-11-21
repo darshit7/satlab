@@ -30,11 +30,13 @@ Catalog
   streamed with its ground track, whether or not it is in view. Search runs on the local catalog
   (Celestrak's active satellites) as you type; when nothing matches, **Search all of Celestrak**
   asks Celestrak itself (debris, rocket bodies, inactive satellites), rate-limited for all users
-  together.
+  together. The line above the search says how old the catalog is and how often the server
+  refreshes it ("fetched 3 h ago · refreshed every 12 h"). There's no refresh button: Celestrak
+  updates every 2 hours and refuses a repeat download, so there's nothing newer to get on demand.
 
 Overhead
 : The satellites above the horizon mask right now, plus the ones **rising soon**. Filters (type,
-  SAR-capable, Link OK, Communications, minimum elevation, rising within N minutes) are applied on
+  SAR-capable, Link OK, Own formats, minimum elevation, rising within N minutes) are applied on
   the server, so the map, both sky views and the lists always agree. The summary on the button says
   what is being filtered.
 
@@ -70,7 +72,9 @@ The selection
     down, intact, corrupted or lost), a command composer that sends now or books a command for a
     pass, recent command statuses, the packet log and the latest decoded frame. The downlink
     frequency and its live Doppler shift are shown, and optional sound cues follow your commands.
-    See [communications](../simulation/comms.md).
+    Any satellite can be contacted: the eight with formats of their own (**Own formats** in
+    Overhead, listed under the section's (i)) use theirs, every other one a generic, illustrative
+    template, and debris has no radio. See [communications](../simulation/comms.md).
 
 When a booked pass approaches, **pass automation** takes the antenna: the selection jumps to that
 satellite and the header shows the countdown to the system check at AOS. See

@@ -40,11 +40,12 @@ flowchart TB
 - **Rate and size limits.** Each connection has a message rate and burst; frames are capped at
   64 KiB; live sessions, stored rows per session, and commands per minute are all capped. A client
   that floods is disconnected, not queued.
-- **Upstreams get one global budget.** Celestrak remote searches and SatNOGS refreshes are
-  throttled for all clients together, so nobody can make the server hammer them.
+- **Upstreams get one global budget.** Celestrak remote searches and single-satellite fetches,
+  and SatNOGS refreshes, are throttled for all clients together, so nobody can make the server
+  hammer them. A Celestrak download it refused is not repeated before its next update.
 - **External data is parsed defensively.** TLE checksums are verified. Packet decoders check every
-  declared length against the bytes present and the protocol maximum. HTTP bodies are streamed
-  with a cap, and redirects aren't followed.
+  declared length against the bytes present and the protocol maximum. HTTP bodies (Celestrak and SatNOGS)
+  are streamed with a cap, and redirects aren't followed.
 - **Generic errors outward, details in the log.** Clients never see stack traces, SQL or upstream
   error text.
 - **Headers and CSP from nginx.** Scripts load only from our origin (plus the analytics host), and

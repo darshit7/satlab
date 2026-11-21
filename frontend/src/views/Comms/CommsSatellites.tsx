@@ -8,9 +8,10 @@ import { useMission } from '../../store/mission'
 const muted = 'text-gray-500 dark:text-gray-400'
 
 /**
- * Every satellite comms works with (packet templates), what each supports and whether it has a
- * published link budget, from the reference data. Picking one selects it. Shown from the
- * Communications section's (i) and, inline, when the selected satellite has no comms.
+ * The satellites with packet formats of their own (every other satellite but debris uses the
+ * generic template), what each supports and whether it has a published link budget, from the
+ * reference data. Picking one selects it. Shown from the Communications section's (i) and,
+ * inline, when the selected object has no radio.
  */
 export function CommsSatellites() {
   const templates = useMission((s) => s.packetTemplates)
@@ -25,11 +26,13 @@ export function CommsSatellites() {
   return (
     <div>
       <p className="text-sm text-gray-700 dark:text-gray-300">
-        You can communicate with the {sats.length} satellites that have packet templates.
+        {templates.generic
+          ? `Every satellite but debris and rocket bodies can be contacted, most through a generic, illustrative template. These ${sats.length} have formats of their own (the Own formats filter in Overhead).`
+          : `You can communicate with the ${sats.length} satellites that have packet templates.`}
         {linkProfiles &&
-          ` Link OK (in Overhead) covers the ${withBudget} with a published link budget; the others work without a modelled channel.`}
+          ` Link OK covers the ${withBudget} with a published link budget; the others work without a modelled channel.`}
       </p>
-      <ul className="-mx-2 mt-2" aria-label="Satellites you can communicate with">
+      <ul className="-mx-2 mt-2" aria-label="Satellites with their own formats">
         {sats.map((sat) => {
           const selected = sat.noradId === selectedId
           return (

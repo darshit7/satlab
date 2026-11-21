@@ -1,8 +1,8 @@
 // Presentation of the comms link. Every packet, status and decoded value comes from the server;
 // nothing here frames, corrupts or decodes anything.
 
-import type { CommandParam, LinkProfiles, PacketTemplates } from '../types/api'
-import type { CommandStatusMessage, PacketMessage } from '../types/ws'
+import type { CommandParam, CommandTemplate, LinkProfiles, LinkSource, PacketTemplates, TelemetryTemplate } from '../types/api'
+import type { CommandStatusMessage, ContactState, PacketMessage } from '../types/ws'
 
 export const MAX_PACKETS = 100
 export const MAX_COMMANDS = 50
@@ -14,11 +14,12 @@ export const PACKET_FLIGHT_MS = 1400
 export type CommsCapability = 'command' | 'receive'
 
 export const COMMS_CAPABILITY_WORDS: Record<CommsCapability, string> = {
-  command: 'Communications: commands and telemetry',
-  receive: 'Communications: receive-only',
+  command: 'Own formats: commands and telemetry',
+  receive: 'Own formats: receive-only',
 }
 
-/** Satellites with packet templates, from the reference data (absent: comms can't talk to it). */
+/** Satellites with packet templates of their own, from the reference data (absent: the generic set,
+ *  or no radio at all). */
 export function commsCapabilities(templates: PacketTemplates | null): Map<number, CommsCapability> {
   return new Map((templates?.satellites ?? []).map((s) => [s.norad_id, s.commands.length > 0 ? 'command' : 'receive']))
 }
@@ -26,6 +27,34 @@ export function commsCapabilities(templates: PacketTemplates | null): Map<number
 export const COMMS_CAPABILITY_DETAIL: Record<CommsCapability, string> = {
   command: 'Commands and telemetry',
   receive: 'Receive-only',
+}
+
+/** The templates the Communications card offers for a satellite. */
+export interface CommsTemplates {
+  telemetry: TelemetryTemplate[]
+  /** Empty: receive-only. */
+  commands: CommandTemplate[]
+  downlink_sources?: LinkSource[]
+  /** The shared generic set, not the satellite's own formats. */
+  generic: boolean
+}
+
+/**
+ * The selected satellite's templates: the generic set when the server says the satellite uses it
+ * (`contact.templates`), else its own from the reference data. An older server never says
+ * "generic", so only satellites with their own templates get any.
+ */
+export function commsTemplatesFor(
+  templates: PacketTemplates | null,
+  noradId: number,
+  source: ContactState['templates'],
+): CommsTemplates | null {
+  if (source === 'generic') {
+    const generic = templates?.generic
+    return generic ? { telemetry: generic.telemetry, commands: generic.commands, generic: true } : null
+  }
+  const own = templates?.satellites.find((s) => s.norad_id === noradId)
+  return own ? { ...own, generic: false } : null
 }
 
 export interface CommsSatellite {
@@ -36,7 +65,7 @@ export interface CommsSatellite {
   linkBudget: boolean | null
 }
 
-/** Every satellite comms works with, commandable ones first, then by name (reference data). */
+/** Every satellite with its own formats, commandable ones first, then by name (reference data). */
 export function commsSatellites(templates: PacketTemplates | null, linkProfiles: LinkProfiles | null): CommsSatellite[] {
   const capabilities = commsCapabilities(templates)
   const budgets = linkProfiles ? new Set(linkProfiles.profiles.map((p) => p.norad_id)) : null
