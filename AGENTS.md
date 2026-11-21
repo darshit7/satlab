@@ -484,7 +484,7 @@ Already handled (Phase 2b):
 Still to do, when the feature arrives:
 - `JSON` → `JSONB` on Postgres; add GIN indexes where you query inside payloads.
 - Phase 7: `aoi_geojson` / `footprint` → **PostGIS `geometry(Polygon, 4326)`**; add GiST indexes; replace bbox filtering with `ST_Intersects`.
-- Phase 6 (optional): `telemetry_frame` as a **TimescaleDB hypertable** if volume warrants (Neon ships only the Apache-2 TimescaleDB feature set — verify then).
+- Deferred (was Phase 6c, 2026-11-21): `telemetry_frame` as a **TimescaleDB hypertable** if volume warrants (Neon ships only the Apache-2 TimescaleDB feature set — verify then).
 - Keep the ORM dialect-agnostic; gate Postgres-only types behind the configured dialect so SQLite dev still works.
 
 ---
@@ -495,7 +495,7 @@ Still to do, when the feature arrives:
 
 Each phase is a **vertical slice** (backend + WebSocket + UI) that runs on its own. Mark the current phase here as you go.
 
-> **Current phase: _Phase 6 — Polish_: 6a (globe & map) committed on `dev`, 6b (command sounds and contact Doppler) implemented on `dev`.** Phases 1–4b are done and deployed (4b merged in PR #10); Phase 5 (pass automation) is on `dev` awaiting its merge. 6c (TimescaleDB) follows.
+> **Current phase: _Phase 7 — SAR archive explore_, not started.** Phases 1–6b are done and deployed, the documentation site too (PR #16). 6c (TimescaleDB) is deferred (2026-11-21, §14).
 >
 > Phase numbers are for this plan and the docs only: the UI never shows "Phase N" (`frontend/src/lib/copy.test.ts` guards it).
 
@@ -508,10 +508,10 @@ Each phase is a **vertical slice** (backend + WebSocket + UI) that runs on its o
   - **4a — Globe.** **3D globe (Cesium) + the visibility "V" cone** (design §5.3–5.4): outer cone = above the horizon mask, inner cone = green-margin region; satellites enter at one rim (AOS) and leave at the far rim (LOS), changing color at cone boundaries; the full orbital arc is drawn with the out-of-window part faded; the user can lock onto one active contact while the others dim. The globe joins the 2D map rather than replacing it: a **2D/3D toggle, 3D by default**.
   - **4b — Comms.** Per-satellite AX.25/CCSDS templates; command uplink (sim) + telemetry downlink; SatNOGS real-frame replay; packet animation; channel effects. DB: `packet_template`, `command`, `telemetry_frame`.
 - **Phase 5 — Scheduling & alarms.** Queue command for a future window; AOS trigger; auto system check; transmit-if-green / alarm-if-red. DB: `alarm` (+ `command.scheduled_aos`).
-- **Phase 6 — Polish**, in three parts (2026-10-28; naked-eye model, msgpack and docker-compose dropped, §14):
+- **Phase 6 — Polish**, in three parts (2026-10-28; naked-eye model, msgpack and docker-compose dropped, §14); done with 6a and 6b, 6c deferred (2026-11-21):
   - **6a — Globe & map.** Globe look pass (muted, token-toned: atmosphere and Sun-driven shading, RAG-coloured glowing orbit with AOS/LOS marks, dimmed tracked orbits and labels, names on hover, station icon, selection halo, translucent faded cones); the selection's footprint and day/night shading on the globe and the 2D map.
   - **6b — Command sounds and contact Doppler.** Sound cues for command traffic (a chirp up, a chime when the answer comes back, a bonk when it doesn't); the contact's downlink frequency and Doppler shift on the Communications card, from sourced frequencies. (A continuous Doppler tone was built and dropped as tiring, §14.)
-  - **6c — TimescaleDB.** `telemetry_frame` as a hypertable on Postgres where the extension exists (Apache-2 feature set on Neon); storage only.
+  - **6c — TimescaleDB (deferred, not built).** `telemetry_frame` as a hypertable on Postgres where the extension exists (Apache-2 feature set on Neon); storage only. Taken up later only if it's needed.
 - **Phase 7 — SAR archive explore (Flow 1).** STAC search (Sentinel-1 RTC / Umbra) for AOI + two dates; swipe compare; v1 log-ratio change detection; flagged regions. **Enable PostGIS on the existing Neon DB** (geometry columns + GiST). DB: `sar_scene`, `change_result`.
 - **Phase 8 — SAR mission tasking (Flow 2).** Simulated tasking over the real acquisition plan; sim states tasked→acquiring→downlink→processing; STAC polling; "waiting for real data" gate; unlock compare when the real scene lands. DB: `sar_task`.
 <!-- docs:phases:end -->
@@ -728,4 +728,5 @@ When you close a gap, delete its line here.
     - A `header` variant, shared by Docs and the theme trigger.
     - The `docs-open` event.
     - A Vite dev proxy from `/satlab/docs` to `sphinx-autobuild` (`SATLAB_DOCS_URL`, default port 8001).
+- **Phase 6c (TimescaleDB) deferred** (2026-11-21). Not built; taken up later only if it's needed. `telemetry_frame` stays a plain table on both dialects, its volume already bounded by the per-session cap (`SATLAB_MAX_TELEMETRY_FRAMES_PER_SESSION`) and the retention purge. Phase 6 closes with 6a and 6b; Phase 7 (SAR archive explore) is next.
 <!-- docs:decisions:end -->
