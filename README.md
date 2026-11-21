@@ -20,7 +20,8 @@ their sky-plot dots and pass arcs and draws the "strong-link" region of the sky.
 systems show a worst-of rollup over power, thermal, storage, attitude and RF, which change truthfully
 as it rises, peaks, sets and crosses the Earth's shadow.
 
-In contact, satellites with **packet templates** exchange framed packets (CCSDS or AX.25): commands go
+In contact, any satellite (debris and rocket bodies excepted) exchanges framed packets (CCSDS or AX.25), through
+templates of its own or a generic, illustrative one: commands go
 up (simulated; nothing is transmitted) and telemetry comes down, either simulated from the modelled
 systems through a channel whose bit errors follow the real link margin, or real frames received by
 SatNOGS stations, replayed. Commands can also be **booked for a future pass**: a minute before AOS the

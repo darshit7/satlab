@@ -1,5 +1,6 @@
 """Comms end to end, over the WebSocket, during a real NOAA 20 pass over Wallops: the contact,
-housekeeping down, a command up and its acknowledgement, what's refused, and what's stored."""
+housekeeping down, a command up and its acknowledgement, what's refused, and what's stored; the
+generic set for a satellite without templates of its own (GOES 16), and none for debris."""
 
 from datetime import UTC, datetime, timedelta
 
@@ -9,7 +10,7 @@ from sqlalchemy import select
 
 from app.data.celestrak import parse_tle_text
 from app.db.base import get_sessionmaker
-from app.db.models import Command, PacketTemplate, TelemetryFrame
+from app.db.models import Command, PacketTemplate, Satellite, TelemetryFrame
 from app.services.catalog import upsert_tle_records
 from tests.conftest import FLEET_2026_TLE, WALLOPS
 from tests.test_ws import Stream, open_stream, paused
@@ -96,11 +97,6 @@ def test_commands_are_refused_without_contact(client: TestClient, wallops: dict)
         ws.send(type="send_command", norad_id=NOAA_20, command="PING")
         assert _error(ws).startswith("No contact")
 
-        _in_contact(ws, GOES_16)  # in view, but no templates
-        assert ws.find("snapshot")["contact"]["state"] == "no_template"
-        ws.send(type="send_command", norad_id=GOES_16, command="PING")
-        assert "isn't a command" in _error(ws)
-
         _in_contact(ws)
         ws.send(type="set_clock", paused=False, time_scale=600)
         ws.until("snapshot", lambda m: m["contact"] and m["contact"]["state"] == "too_fast", LIMIT)
@@ -164,3 +160,47 @@ def test_packet_templates_endpoint(client: TestClient, wallops: dict) -> None:
     iss = sats[ISS]
     assert iss["telemetry"][0]["downlink"] == "satnogs" and iss["telemetry"][0]["layout_sourced"]
     assert all(s["url"].startswith("https://") for s in iss["telemetry"][0]["sources"])
+    generic = body["generic"]  # one entry for every other satellite, never the whole catalog
+    assert generic["antenna_half_angle_deg"] == 90
+    assert {c["name"] for c in generic["commands"]} == {"PING", "REQUEST_HK", "SET_BEACON_INTERVAL"}
+    assert all(not t["layout_sourced"] for t in generic["telemetry"])
+
+
+def test_generic_satellite_takes_commands(client: TestClient, wallops: dict) -> None:
+    """GOES 16 has no templates of its own: the generic set's, with an omnidirectional antenna
+    and no modelled channel."""
+    with open_stream(client, wallops) as ws:
+        snap = _in_contact(ws, GOES_16)  # geostationary, in view from Wallops
+        contact = snap["contact"]
+        assert contact["state"] == "active" and contact["templates"] == "generic"
+        assert not contact["channel_modelled"] and contact["downlink_frequency_hz"] is None
+        snap = ws.until("snapshot", lambda m: m["health"] is not None, LIMIT)
+        assert snap["health"]["attitude"]["half_beamwidth_deg"] == 90
+        assert snap["health"]["attitude"]["rag"] == "green"
+
+        ws.send(type="send_command", norad_id=GOES_16, command="PING")
+        ws.send(type="set_clock", paused=False, time_scale=1)
+        acked = ws.until("command_status", lambda m: m["status"] == "acked", LIMIT)
+        assert acked["satellite_name"] == "GOES 16" and acked["command"] == "PING"
+
+    client.portal.call(client.app.state.writer.flush)
+    with get_sessionmaker()() as db:
+        row = db.get(Command, acked["command_id"])
+        assert row is not None and row.norad_id == GOES_16
+        template = db.get(PacketTemplate, row.template_id)
+        assert template is not None and template.norad_id is None and template.name == "PING"
+
+
+def test_debris_has_no_radio(client: TestClient, wallops: dict) -> None:
+    with get_sessionmaker()() as db:  # the same orbit, as debris
+        sat = db.get(Satellite, GOES_16)
+        assert sat is not None
+        sat.name = "GOES 16 DEB"
+        db.commit()
+    client.portal.call(client.app.state.catalog.rebuild_fleet)
+    with open_stream(client, wallops) as ws:
+        _in_contact(ws, GOES_16)
+        contact = ws.find("snapshot")["contact"]
+        assert contact["state"] == "no_template" and contact["templates"] is None
+        ws.send(type="send_command", norad_id=GOES_16, command="PING")
+        assert "isn't a command" in _error(ws)

@@ -19,10 +19,17 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
-from app.data.celestrak import CelestrakClient, CelestrakNotice, TleRecord, parse_tle_text
-from app.data.classify import classify
+from app.data.celestrak import (
+    CelestrakClient,
+    CelestrakNotice,
+    CelestrakNotUpdated,
+    TleRecord,
+    parse_tle_text,
+)
+from app.data.classify import classify, has_no_radio
 from app.data.seed import (
     load_downlinks,
+    load_generic_antenna_deg,
     load_link_profiles,
     load_packet_templates,
     sync_link_profiles,
@@ -37,7 +44,11 @@ from app.sim.propagate import Elements, elements_from_tle
 log = logging.getLogger(__name__)
 
 _UPSERT_CHUNK = 500
-_REMOTE_QUERY_TTL_S = 2 * 3600  #: Celestrak etiquette: don't repeat identical queries for ~2 h
+#: Celestrak updates its data every 2 hours and refuses a repeat download before then: no query
+#: (search, single satellite, group) is sent again within this.
+_REMOTE_QUERY_TTL_S = 2 * 3600
+_MAX_REMEMBERED_QUERIES = 2000  #: past this, expired query times are dropped
+_CELESTRAK_UPDATE = timedelta(hours=2)  #: how often Celestrak's GP data changes
 
 
 _UPSERT_COLUMNS = (
@@ -164,7 +175,9 @@ class CatalogService:
         self.settings = settings
         self._sessions = session_factory
         self._client = client or CelestrakClient(
-            settings.celestrak_base_url, settings.http_timeout_s
+            settings.celestrak_base_url,
+            settings.http_timeout_s,
+            max_bytes=settings.celestrak_max_bytes,
         )
         self.registry = Registry()
         self.fleet = Fleet.empty()
@@ -172,7 +185,13 @@ class CatalogService:
         self.last_error: str | None = None
         self._refresh_lock = asyncio.Lock()
         self._fleet_lock = asyncio.Lock()
-        self._remote_queries: dict[str, float] = {}
+        self._remote_queries: dict[str, float] = {}  #: search → monotonic time it was sent
+        self._catnr_fetches: dict[int, float] = {}  #: NORAD id → monotonic time it was fetched
+        #: When the group we hold was downloaded, or confirmed current by a refused repeat
+        #: download (the cache file's mtime says the same, but a container restart loses it).
+        self._group_fetched_at: datetime | None = None
+        #: Celestrak's next update after a refused download: no group request before it.
+        self._group_retry_at: datetime | None = None
         # One budget shared by every client, so nobody can make us hammer Celestrak.
         per_min = settings.remote_search_per_min
         self._remote_budget = TokenBucket(rate=per_min / 60, burst=per_min)
@@ -185,11 +204,16 @@ class CatalogService:
         """The last Celestrak group download (its mtime is when it was fetched)."""
         return self.settings.cache_dir / f"celestrak_{self.settings.catalog_group}.tle"
 
-    def last_group_fetch(self) -> datetime | None:
-        """When the group was last fetched (or confirmed current), if ever."""
+    def _cache_mtime(self) -> datetime | None:
         if not self.cache_file.exists():
             return None
         return datetime.fromtimestamp(self.cache_file.stat().st_mtime, UTC)
+
+    def last_group_fetch(self) -> datetime | None:
+        """When the group was last fetched (or confirmed current), if ever: by this process, or
+        the cache file's mtime from an earlier one."""
+        known = [t for t in (self._group_fetched_at, self._cache_mtime()) if t is not None]
+        return max(known) if known else None
 
     def start(self) -> None:
         """Build the fleet from the DB, then keep the catalog fresh (a background task)."""
@@ -222,15 +246,18 @@ class CatalogService:
     # ----- group ingestion -----
 
     async def refresh_if_stale(self) -> None:
-        """Refetch the group if the cached copy is older than ``catalog_max_age_hours``; load the
-        cache into an empty table."""
+        """Refetch the group if our copy is older than ``catalog_max_age_hours`` (never before
+        Celestrak's next update after a refused download); load the cache into an empty table."""
         last = self.last_group_fetch()
+        now = datetime.now(UTC)
         max_age = timedelta(hours=self.settings.catalog_max_age_hours)
-        if last is None or datetime.now(UTC) - last > max_age:
+        waiting = self._group_retry_at is not None and now < self._group_retry_at
+        if (last is None or now - last > max_age) and not waiting:
             await self.refresh_group()
-        if await asyncio.to_thread(self._count) == 0 and (cached_at := self.last_group_fetch()):
+        if await asyncio.to_thread(self._count) == 0 and (cached_at := self._cache_mtime()):
             # Empty DB (e.g. deleted, or offline first run) but a cached copy exists: load it.
-            await self._ingest_text(self.cache_file.read_text(), cached_at)
+            text = await asyncio.to_thread(self.cache_file.read_text)
+            await self._ingest_text(text, cached_at)
 
     async def refresh_group(self) -> None:
         """Fetch and ingest the Celestrak group now (one refresh at a time)."""
@@ -246,13 +273,12 @@ class CatalogService:
         try:
             log.info("fetching Celestrak group %r", group)
             records = await self._client.fetch_group(group)
+        except CelestrakNotUpdated as notice:
+            await self._not_updated(notice)
+            return
         except CelestrakNotice as notice:
-            if "not updated" in str(notice).lower() and self.cache_file.exists():
-                self.cache_file.touch()  # our copy is current
-                self.last_error = None
-            else:
-                self.last_error = "Celestrak returned no data; using the cached catalog"
-                log.warning("Celestrak notice for group %r: %s", group, notice)
+            self.last_error = "Celestrak returned no data; using the cached catalog"
+            log.warning("Celestrak notice for group %r: %s", group, notice)
             return
         except Exception as exc:
             # Clients see a generic message; the upstream details stay in the server log.
@@ -262,13 +288,44 @@ class CatalogService:
 
         fetched_at = datetime.now(UTC)
         text = "\n".join(f"{r.name}\n{r.line1}\n{r.line2}" for r in records) + "\n"
-        self.settings.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.cache_file.write_text(text)
+
+        def write_cache() -> None:
+            self.settings.cache_dir.mkdir(parents=True, exist_ok=True)
+            self.cache_file.write_text(text)
+
+        await asyncio.to_thread(write_cache)
         await self._ingest(records, fetched_at)
+        self._group_fetched_at = fetched_at
+        self._group_retry_at = None
         self.last_error = None
 
+    async def _not_updated(self, notice: CelestrakNotUpdated) -> None:
+        """Celestrak refused the download: this address got the current data less than 2 h ago.
+
+        Nothing is asked again before Celestrak's next update (a repeat is refused again and
+        counts toward its error limit). Our copy is that data if it is our own download (the cache
+        file is from then), or if the cache was lost with a container restart while the database
+        kept the catalog; otherwise someone else on this address fetched it, and ours is older.
+        """
+        now = datetime.now(UTC)
+        since = notice.since or now
+        self._group_retry_at = since + _CELESTRAK_UPDATE
+        cached = self._cache_mtime()
+        ours = (
+            cached >= since - timedelta(minutes=10)
+            if cached is not None
+            else await asyncio.to_thread(self._count) > 0
+        )
+        if ours:
+            self._group_fetched_at = max(self.last_group_fetch() or since, since)
+            self.last_error = None
+            log.info("Celestrak group unchanged since %s; our copy is current", since.isoformat())
+        else:
+            self.last_error = "Celestrak refused a repeat download; retrying after its next update"
+            log.warning("Celestrak refused the group (served to this address at %s)", since)
+
     async def _ingest_text(self, text: str, fetched_at: datetime) -> None:
-        await self._ingest(parse_tle_text(text), fetched_at)
+        await self._ingest(await asyncio.to_thread(parse_tle_text, text), fetched_at)
 
     async def _ingest(self, records: list[TleRecord], fetched_at: datetime) -> None:
         def work() -> int:
@@ -292,21 +349,27 @@ class CatalogService:
             with self._sessions() as db:
                 sync_link_profiles(db)
                 sync_packet_templates(db)
+                rows = load_fleet_rows(db)
                 return Fleet.build(
-                    load_fleet_rows(db),
+                    rows,
                     load_link_profiles(db),
                     load_packet_templates(db),
                     load_downlinks(),
+                    generic_antenna_deg=load_generic_antenna_deg(),
+                    no_radio=[r.norad_id for r in rows if has_no_radio(r.name, r.norad_id)],
                 )
 
         async with self._fleet_lock:
             fleet = await asyncio.to_thread(build)
             self.fleet = fleet
         log.info(
-            "fleet: %d satellites ready for propagation, %d with a link profile, %d with comms",
+            "fleet: %d satellites ready for propagation, %d with a link profile, %d with their own"
+            " packet templates, generic set %s (%d without a radio)",
             len(fleet),
             len(fleet.links.rows),
             len(fleet.comms),
+            "loaded" if fleet.comms.generic is not None else "missing",
+            len(fleet.comms.no_radio),
         )
 
     def _refresh_registry(self, records: Iterable[TleRecord]) -> None:
@@ -361,13 +424,39 @@ class CatalogService:
         except Exception as exc:
             log.warning("Celestrak remote search failed: %s", exc)
             return False
-        self._remote_queries[key] = now
+        self._remember(self._remote_queries, key, now)
         if records:
             await self._ingest(records, datetime.now(UTC))
         return True
 
+    @staticmethod
+    def _remember[K](queries: dict[K, float], key: K, now: float) -> None:
+        """Note when a query was sent, dropping expired ones once there are many."""
+        if len(queries) >= _MAX_REMEMBERED_QUERIES:
+            for old in [k for k, t in queries.items() if now - t >= _REMOTE_QUERY_TTL_S]:
+                del queries[old]
+        queries[key] = now
+
+    def _may_fetch_catnr(self, norad_id: int) -> bool:
+        """Whether a stale satellite may be fetched by catalog number now: not if it was within
+        Celestrak's update interval, nor once the budget all clients share is spent."""
+        now = time.monotonic()
+        last = self._catnr_fetches.get(norad_id, -_REMOTE_QUERY_TTL_S)
+        if now - last < _REMOTE_QUERY_TTL_S:
+            return False
+        if not self._remote_budget.take():
+            log.info("Celestrak fetch of %d skipped: global rate limit reached", norad_id)
+            return False
+        self._remember(self._catnr_fetches, norad_id, now)
+        return True
+
     async def resolve(self, norad_id: int) -> Elements | None:
-        """Load (and if stale, refresh) a satellite's elements into the registry."""
+        """Load (and if stale, refresh) a satellite's elements into the registry.
+
+        A stale or unknown satellite is fetched from Celestrak by catalog number at most once per
+        Celestrak update and within the budget remote searches use; otherwise (and when that
+        fails) whatever the database holds is used.
+        """
         if (cached := self.registry.get(norad_id)) is not None:
             return cached
 
@@ -383,7 +472,7 @@ class CatalogService:
             or sat.fetched_at is None
             or datetime.now(UTC) - sat.fetched_at > max_age
         )
-        if stale:
+        if stale and self._may_fetch_catnr(norad_id):
             try:
                 records = await self._client.fetch_by_catnr(norad_id)
                 await self._ingest(records, datetime.now(UTC))

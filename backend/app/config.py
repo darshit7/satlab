@@ -54,15 +54,21 @@ class Settings(BaseSettings):
     ws_auth_timeout_s: float = Field(default=5.0, gt=0, le=60)
     ws_messages_per_s: float = Field(default=20.0, gt=0)  #: per connection, sustained
     ws_message_burst: int = Field(default=40, ge=1)  #: per connection, before the rate applies
-    remote_search_per_min: int = Field(default=10, ge=1)  #: Celestrak queries, all clients together
+    #: Celestrak searches and single-satellite fetches, all clients together.
+    remote_search_per_min: int = Field(default=10, ge=1)
 
     # Celestrak catalog. GP data, https://celestrak.org/NORAD/documentation/gp-data-formats.php;
-    # Celestrak asks clients not to re-download a group more than once every ~2 hours.
+    # it updates every 2 hours and refuses a repeat download before then (HTTP 403).
     celestrak_base_url: str = "https://celestrak.org/NORAD/elements/gp.php"  #: the GP endpoint
     catalog_group: str = "active"  #: the group bulk-loaded into the catalog
     catalog_autoload: bool = True  #: keep the catalog fresh in the background (off: DB only)
-    catalog_max_age_hours: float = 12.0  #: refetch the group once its copy is older than this
-    catalog_refresh_check_minutes: float = 30.0  #: how often the catalog's age is checked
+    #: Refetch the group once its copy is older than this; at least Celestrak's 2-hour update
+    #: interval (an earlier download is refused).
+    catalog_max_age_hours: float = Field(default=12.0, ge=2.0)
+    #: How often the catalog's age is checked.
+    catalog_refresh_check_minutes: float = Field(default=30.0, ge=5.0)
+    #: The largest Celestrak response read (streamed; the "active" group is about 2.4 MB).
+    celestrak_max_bytes: int = Field(default=16 * 1024 * 1024, ge=1024 * 1024)
     http_timeout_s: float = 30.0  #: for every upstream request (Celestrak, SatNOGS)
 
     # Simulation loop. One loop per session; these bound its work per tick.

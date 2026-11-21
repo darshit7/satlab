@@ -330,10 +330,11 @@ CREATE TABLE satellite (
     fetched_at      TEXT                  -- when TLE was pulled
 );
 
--- Synced from app/data/seed/packet_templates.json (see §14, Phase 4b).
+-- Synced from app/data/seed/packet_templates.json (see §14, Phase 4b and generic templates).
 CREATE TABLE packet_template (
     id          INTEGER PRIMARY KEY,
-    norad_id    INTEGER NOT NULL REFERENCES satellite(norad_id),
+    norad_id    INTEGER REFERENCES satellite(norad_id),  -- NULL: the generic set, shared by
+                                          -- every satellite without templates of its own
     kind        TEXT NOT NULL,            -- telemetry | command
     framing     TEXT NOT NULL,            -- ax25 | ccsds
     name        TEXT NOT NULL,
@@ -342,6 +343,8 @@ CREATE TABLE packet_template (
     active      INTEGER NOT NULL DEFAULT 1,  -- 0: dropped from the seed (kept for command FKs)
     UNIQUE (norad_id, kind, name)
 );
+CREATE UNIQUE INDEX uq_packet_template_generic ON packet_template(kind, name)
+    WHERE norad_id IS NULL;
 
 -- A published downlink budget; synced from app/data/seed/link_profiles.json (see §14).
 CREATE TABLE link_profile (
@@ -484,7 +487,7 @@ Already handled (Phase 2b):
 Still to do, when the feature arrives:
 - `JSON` → `JSONB` on Postgres; add GIN indexes where you query inside payloads.
 - Phase 7: `aoi_geojson` / `footprint` → **PostGIS `geometry(Polygon, 4326)`**; add GiST indexes; replace bbox filtering with `ST_Intersects`.
-- Phase 6 (optional): `telemetry_frame` as a **TimescaleDB hypertable** if volume warrants (Neon ships only the Apache-2 TimescaleDB feature set — verify then).
+- Deferred (was Phase 6c, 2026-11-21): `telemetry_frame` as a **TimescaleDB hypertable** if volume warrants (Neon ships only the Apache-2 TimescaleDB feature set — verify then).
 - Keep the ORM dialect-agnostic; gate Postgres-only types behind the configured dialect so SQLite dev still works.
 
 ---
@@ -495,7 +498,7 @@ Still to do, when the feature arrives:
 
 Each phase is a **vertical slice** (backend + WebSocket + UI) that runs on its own. Mark the current phase here as you go.
 
-> **Current phase: _Phase 6 — Polish_: 6a (globe & map) committed on `dev`, 6b (command sounds and contact Doppler) implemented on `dev`.** Phases 1–4b are done and deployed (4b merged in PR #10); Phase 5 (pass automation) is on `dev` awaiting its merge. 6c (TimescaleDB) follows.
+> **Current phase: _Phase 7 — SAR archive explore_, not started.** Phases 1–6b are done and deployed, the documentation site too (PR #16). 6c (TimescaleDB) is deferred (2026-11-21, §14).
 >
 > Phase numbers are for this plan and the docs only: the UI never shows "Phase N" (`frontend/src/lib/copy.test.ts` guards it).
 
@@ -508,12 +511,17 @@ Each phase is a **vertical slice** (backend + WebSocket + UI) that runs on its o
   - **4a — Globe.** **3D globe (Cesium) + the visibility "V" cone** (design §5.3–5.4): outer cone = above the horizon mask, inner cone = green-margin region; satellites enter at one rim (AOS) and leave at the far rim (LOS), changing color at cone boundaries; the full orbital arc is drawn with the out-of-window part faded; the user can lock onto one active contact while the others dim. The globe joins the 2D map rather than replacing it: a **2D/3D toggle, 3D by default**.
   - **4b — Comms.** Per-satellite AX.25/CCSDS templates; command uplink (sim) + telemetry downlink; SatNOGS real-frame replay; packet animation; channel effects. DB: `packet_template`, `command`, `telemetry_frame`.
 - **Phase 5 — Scheduling & alarms.** Queue command for a future window; AOS trigger; auto system check; transmit-if-green / alarm-if-red. DB: `alarm` (+ `command.scheduled_aos`).
-- **Phase 6 — Polish**, in three parts (2026-10-28; naked-eye model, msgpack and docker-compose dropped, §14):
+- **Phase 6 — Polish**, in three parts (2026-10-28; naked-eye model, msgpack and docker-compose dropped, §14); done with 6a and 6b, 6c deferred (2026-11-21):
   - **6a — Globe & map.** Globe look pass (muted, token-toned: atmosphere and Sun-driven shading, RAG-coloured glowing orbit with AOS/LOS marks, dimmed tracked orbits and labels, names on hover, station icon, selection halo, translucent faded cones); the selection's footprint and day/night shading on the globe and the 2D map.
   - **6b — Command sounds and contact Doppler.** Sound cues for command traffic (a chirp up, a chime when the answer comes back, a bonk when it doesn't); the contact's downlink frequency and Doppler shift on the Communications card, from sourced frequencies. (A continuous Doppler tone was built and dropped as tiring, §14.)
-  - **6c — TimescaleDB.** `telemetry_frame` as a hypertable on Postgres where the extension exists (Apache-2 feature set on Neon); storage only.
+  - **6c — TimescaleDB (deferred, not built).** `telemetry_frame` as a hypertable on Postgres where the extension exists (Apache-2 feature set on Neon); storage only. Taken up later only if it's needed.
 - **Phase 7 — SAR archive explore (Flow 1).** STAC search (Sentinel-1 RTC / Umbra) for AOI + two dates; swipe compare; v1 log-ratio change detection; flagged regions. **Enable PostGIS on the existing Neon DB** (geometry columns + GiST). DB: `sar_scene`, `change_result`.
 - **Phase 8 — SAR mission tasking (Flow 2).** Simulated tasking over the real acquisition plan; sim states tasked→acquiring→downlink→processing; STAC polling; "waiting for real data" gate; unlock compare when the real scene lands. DB: `sar_task`.
+
+**Backlog (not scheduled).** Known work to pick up later. It isn't part of any phase until it's scheduled.
+
+- **Catalog ingest in OMM instead of TLE** (found 2026-11-21). Celestrak ran out of 5-digit catalog numbers on 2026-07-11 and doesn't publish newer objects as TLEs, so every satellite catalogued since then is missing from our catalog. The fix is to fetch GP data as OMM (CSV or JSON) and build each `Satrec` from the OMM fields. TLE text runs through the whole path today: the `satellite.tle_line1`/`tle_line2` columns, the cache file, `parse_tle_text`, `Fleet.build`, remote search and `resolve()`. So it is a schema and ingest change, done expand/contract (OMM columns alongside the TLE ones while the old revision still runs).
+
 <!-- docs:phases:end -->
 
 ---
@@ -684,8 +692,8 @@ When you close a gap, delete its line here.
 - **Phase 5 — persistence** (2026-10-25). Migration `2e2299af7ee7` (expand-only): `alarm` (+ `seq` unique per session, `norad_id`, `wall_time` beyond the original DDL) and `command.check_result`. Rows go through the 4b `CommsWriter` (`StatusRecord.check`, `AlarmRecord`, `AlarmAckRecord`); the hourly purge also removes alarms of sessions ended > `SATLAB_COMMS_RETENTION_DAYS` ago. Fixed in passing: the writer's worker could take a record off the queue while a `flush()` waited for the lock, so `flush()` returned before it was written; the taken record now waits where `flush()` also looks (`tests/test_comms_writer.py`). After a restart, attaching rebuilds the session's automation from the DB (waiting commands re-booked around their `scheduled_aos`, those that can't be are aborted and reported; alarms and their numbering restored). Ending a session aborts its waiting commands.
 - **Phase 5 — UI** (2026-10-25). The Comms composer gains **When** ("Now", or a pass from the selection's 24 h schedule: "Next pass · 19:31 UTC · max 62°"); the button reads Send / Schedule. Mission bar: a fourth button, **Schedule** (`CalendarClock`, the waiting count, a red alarm count with icon), opening a panel (`views/Scheduler/SchedulerPanel.tsx`): alarms (severity icon + word, Acknowledge), commands waiting for a pass (AOS UTC and local, countdown, Cancel), recent booked outcomes with the check in words ("Go · amber: RF", "Held · attitude red"). The selection header shows "Pass automation · system check at AOS in m:ss · N commands" while it holds the antenna. Notices gain an `info` tone (automation) beside `alert`. Presentation helpers in `lib/schedule.ts`; no decision is made in the client.
 - **Overhead comms filter + "Telecom" label** (2026-10-25). Only satellites with packet templates can be talked to, so Overhead gains a **Comms** toggle: `SetFilter.comms_only` (default false), applied server-side in `_allowed_rows` through `Fleet.comms_mask()` (rows whose satellite is in the `CommsTable`, receive-only ones included), so the map, both sky views, Up now and the rising-soon sweep agree. The satellite *type* `comms` (Starlink, OneWeb, Iridium…) is labelled **Telecom** on screen (the chip, rows, the selection header, the summary), so "Comms" means one thing in the UI: what the Comms section works with. The API value `comms` and the classification rules are unchanged. Overhead rows mark satellites with comms by a radio icon ("Comms: commands and telemetry" / "receive-only"), taken from the `GET /api/packet-templates` reference data (`commsCapabilities` in `lib/comms.ts`).
-- **Comms satellites list; Link OK ≠ Comms** (2026-10-25). The two Overhead toggles stay distinct: **Link OK** = a published link budget (5 satellites) with a usable margin in view (RF quality); **Comms** = packet templates (8: those 5 plus the ISS, which takes commands, and the receive-only CroCube and UWE-4, which work without a modelled channel). The Comms section names them: an (i) beside its title (`InfoPopover`, extracted from "About the data", which now uses it too) lists every satellite comms works with, what each supports and whether it has a link budget, from the reference data (`commsSatellites` in `lib/comms.ts`); picking one selects it. A selected satellite without templates gets the same list inline. Frontend only.
-- **"Communications", spelled out** (2026-10-25). The UI never abbreviates it: the inspector section, the Overhead toggle, the filter summary, the row marker's hover, "Too fast for communications" and the alarm text say "Communications". `comms` stays the name in code, the API (`comms_only`, the `comms` satellite type, which the UI labels Telecom) and file names.
+- **Comms satellites list; Link OK ≠ Comms** (2026-10-25). The two Overhead toggles stay distinct: **Link OK** = a published link budget (5 satellites) with a usable margin in view (RF quality); **Comms** = packet templates (8: those 5 plus the ISS, which takes commands, and the receive-only CroCube and UWE-4, which work without a modelled channel). The Comms section names them: an (i) beside its title (`InfoPopover`, extracted from "About the data", which now uses it too) lists every satellite comms works with, what each supports and whether it has a link budget, from the reference data (`commsSatellites` in `lib/comms.ts`); picking one selects it. A selected satellite without templates gets the same list inline. Frontend only. (2026-11-21: with the generic templates every satellite can be contacted, so the Comms toggle is labelled **Own formats**; it still means these 8.)
+- **"Communications", spelled out** (2026-10-25). The UI never abbreviates it: the inspector section, the Overhead toggle, the filter summary, the row marker's hover, "Too fast for communications" and the alarm text say "Communications" (since 2026-11-21 the toggle, the summary and the row hover say "Own formats" instead). `comms` stays the name in code, the API (`comms_only`, the `comms` satellite type, which the UI labels Telecom) and file names.
 - **Dark theme reset** (2026-10-27). Dark was already the default, but a choice stored earlier (Light, or System on a light OS) still won. The storage key moved from `satlab.theme` to `satlab.theme.v2` (the pre-paint script and `lib/theme.ts`), so every browser starts on dark once; the old key is removed. `theme.ts` also applies the theme when it loads, so the default holds even if the pre-paint script didn't run.
 - **Comms writer: a lost record** (2026-10-27). The worker evaluated `self._taken.append` before awaiting the queue, so a `flush()` during that wait (which replaces `_taken`) made the next record land on the discarded list. It now appends after the await (`tests/test_comms_writer.py`).
 - **Record & playback dropped; Polish moved up** (2026-10-27). The former Phase 6 (persisted `event` log, timeline scrubber, playback through the live renderer) is out of scope, together with the event sourcing that existed only for it: no `event` table, no event payload conventions, no replay test. None of it had been built. The operational tables are the record (§8.1). Golden rule 2 ("events are immutable and additive") became "contracts change additively", which §14 already practised, so rules 3–10 keep their numbers. Polish moved from 9 to 6, so it comes next: it gained the deferred globe look pass, and "cloud deploy" left it (Phase 2c delivered it). The SAR phases keep 7 (archive explore) and 8 (mission tasking); every phase reference here and in the design doc uses these numbers.
@@ -728,4 +736,19 @@ When you close a gap, delete its line here.
     - A `header` variant, shared by Docs and the theme trigger.
     - The `docs-open` event.
     - A Vite dev proxy from `/satlab/docs` to `sphinx-autobuild` (`SATLAB_DOCS_URL`, default port 8001).
+- **Phase 6c (TimescaleDB) deferred** (2026-11-21). Not built; taken up later only if it's needed. `telemetry_frame` stays a plain table on both dialects, its volume already bounded by the per-session cap (`SATLAB_MAX_TELEMETRY_FRAMES_PER_SESSION`) and the retention purge. Phase 6 closes with 6a and 6b; Phase 7 (SAR archive explore) is next.
+- **Generic packet templates for every satellite** (2026-11-21). Only 8 satellites had templates, so finding one overhead to try communications, pass scheduling and alarms was hard. Now every catalogued satellite without its own entry can be contacted through one shared, illustrative set.
+  - **Seed** (version 3): set `generic_bus` (`ccsds_bus` without the storage field: storage isn't modelled without a link budget, and the encoder would write "no data" as 0 %) and a top-level `generic` block (`template_set`, `antenna_half_angle_deg` 90). Debris and rocket bodies are left out by a `no_radio` flag on their rule in `satellite_types.json` (`classify.has_no_radio`); their card says they carry no radio.
+  - **Storage.** The generic rows are synced into `packet_template` once, with `norad_id` NULL (migration `5b8c1e7d2f4a`, expand-only: the column becomes nullable, and a partial unique index on (kind, name) WHERE norad_id IS NULL is the upsert's ON CONFLICT target). Commands and frames keep real template ids, so restoring bookings after a restart is unchanged. Rows per satellite were rejected: ~79k rows, one INSERT past both dialects' bind-parameter limits, ~400 MB of templates in memory.
+  - **Sim.** `CommsTable.generic`, `.no_radio` and `.for_norad` (own templates, else the generic set, else none), used by the comms runtime and the session manager. `by_norad` keeps only the satellites' own templates, so `comms_mask()`, SatNOGS replay and the REST list keep their meaning.
+  - **Antenna**, chosen with the user: generic satellites assume an omnidirectional TT&C antenna (90°) in the attitude check. The beam is the link profile's coverage, else that, else the model's 62°. With 62°, about three quarters of the active catalog (everything below ~520 km) would be held at AOS. The ISS, CroCube and UWE-4 keep 62°, so the held path stays demonstrable on the ISS.
+  - **Honesty.** Illustrative layout, modelled values, no channel model (no link budget: frames arrive as sent), no frequency (no Doppler shown). The card says "Generic template" and explains it in its footnote.
+  - **Contract** (additive; TS optional): `ContactState.templates` (`own` | `generic` | null); `CommandStatusMessage.satellite_name` and `AlarmMessage.satellite_name`, filled by the `Subscriber` from the fleet, so the Schedule panel names generic satellites after a reconnect too; `PacketTemplatesOut.generic` (`GenericCommsOut`: one entry, never the catalog).
+  - **UI.** The Overhead toggle "Communications" is now **Own formats** (still `comms_only`: the 8 with their own templates), with counts in its title from the reference data; the row icon's hover reads "Own formats: …"; the (i) list is "Satellites with their own formats". The Communications section keeps its name.
+- **Catalog freshness, no refresh button** (2026-11-21). Celestrak updates GP data every 2 h, and since 2026-03-26 it refuses a repeat download with HTTP 403 ("GP data has not updated since your last successful download"); 50 such errors in 2 h firewall the address. Decided with the user: no on-demand refresh (there's nothing newer to get, only risk); show freshness instead.
+  - **403 handling.** `CelestrakNotUpdated` carries the last-download time when the notice gives one (within a day). The copy counts as current when it's ours: either the cache file dates from then, or a container restart lost the cache while the database kept the catalog. Either way, no group request goes out before Celestrak's next update. Freshness is kept in memory as well as in the cache file's mtime. Before this, the 403 was treated as a failure and retried every 30 min, and every redeploy within 2 h of a download produced them.
+  - **§12.3 / §12.4 gaps closed.** `resolve()`'s catalog-number fetches share the remote-search budget, with a 2 h per-satellite memory: unknown NORAD ids could make the server hit Celestrak repeatedly. Celestrak responses are streamed with a byte cap (`SATLAB_CELESTRAK_MAX_BYTES`, 16 MiB), and redirects are never followed. Parsing and cache I/O run off the event loop.
+  - **Settings bounds:** `SATLAB_CATALOG_MAX_AGE_HOURS` ≥ 2, `SATLAB_CATALOG_REFRESH_CHECK_MINUTES` ≥ 5.
+  - **Status.** `CatalogStatus.max_age_hours` (additive). The Catalog panel reads "Celestrak “active”, fetched 3 h ago · refreshed every 12 h" (or "refreshing…"), with the last error beside a catalog that still works (`lib/catalog.ts`).
+  - **Still open** (§9 backlog). Celestrak ran out of 5-digit catalog numbers on 2026-07-11, and newer objects aren't published as TLEs, so they're missing from the catalog. Moving ingest to OMM (CSV or JSON) is a separate change.
 <!-- docs:decisions:end -->

@@ -95,5 +95,5 @@ builds only, and only when a website ID is configured.
 - `frontend/src/store/mission.ts`, `store/ui.ts`: the stores.
 - `frontend/src/ws/sessionSocket.ts`, `api/client.ts`: transport.
 - `frontend/src/lib/`: `time.ts` (sim-time estimate), `geo.ts` and `sky.ts` (projection and
-  tweening), `rag.ts` and `comms.ts` (presentation of server state).
+  tweening), `rag.ts`, `comms.ts` and `catalog.ts` (presentation of server state).
 - `frontend/src/views/`: one folder per part of the screen.

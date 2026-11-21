@@ -5,6 +5,7 @@ import {
   appendPackets,
   commsCapabilities,
   commsSatellites,
+  commsTemplatesFor,
   formatLightTime,
   latestDecoded,
   mergeStatuses,
@@ -125,7 +126,7 @@ describe('commsCapabilities', () => {
     const caps = commsCapabilities(templates)
     expect(caps.get(43013)).toBe('command')
     expect(caps.get(62394)).toBe('receive')
-    expect(caps.get(44713)).toBeUndefined() // a Starlink: no templates
+    expect(caps.get(44713)).toBeUndefined() // a Starlink: no formats of its own (the generic set)
     expect(commsCapabilities(null).size).toBe(0)
   })
 
@@ -144,5 +145,26 @@ describe('commsCapabilities', () => {
     // without the link profiles, don't claim "no RF data"
     expect(commsSatellites(templates, null).map((s) => s.linkBudget)).toEqual([null, null, null])
     expect(commsSatellites(null, profiles)).toEqual([])
+  })
+})
+
+describe('commsTemplatesFor', () => {
+  const command = { name: 'PING', label: 'Ping', framing: 'ccsds' as const, params: [], response: 'ack' as const, layout_sourced: false, sources: [] }
+  const generic = { telemetry: [], commands: [{ ...command, label: 'Ping (generic)' }], antenna_half_angle_deg: 90 }
+  const own: SatelliteComms = { norad_id: 43013, satellite_name: 'NOAA 20', telemetry: [], commands: [command], downlink_sources: [] }
+  const templates: PacketTemplates = { satnogs_configured: false, satellites: [own], generic }
+
+  it('uses the generic set when the server says so, else the satellite’s own templates', () => {
+    expect(commsTemplatesFor(templates, 44714, 'generic')).toEqual({ telemetry: [], commands: generic.commands, generic: true })
+    expect(commsTemplatesFor(templates, 43013, 'own')).toMatchObject({ commands: [command], generic: false })
+    expect(commsTemplatesFor(templates, 44714, null)).toBeNull() // no radio
+  })
+
+  it('works with an older server, which never says which (nor sends a generic set)', () => {
+    expect(commsTemplatesFor(templates, 43013, undefined)).toMatchObject({ generic: false })
+    expect(commsTemplatesFor(templates, 44714, undefined)).toBeNull()
+    const older: PacketTemplates = { satnogs_configured: false, satellites: [own] }
+    expect(commsTemplatesFor(older, 44714, 'generic')).toBeNull()
+    expect(commsTemplatesFor(null, 43013, 'own')).toBeNull()
   })
 })

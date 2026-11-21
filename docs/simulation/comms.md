@@ -6,7 +6,8 @@ When the selected satellite is in contact, the station exchanges framed packets 
 
 - **Telemetry comes down.** For some satellites it is simulated from the modelled subsystems and
   sent through a channel whose bit errors follow the real link margin. For others it is real frames
-  received by SatNOGS stations, replayed.
+  received by SatNOGS stations, replayed. Every other satellite uses a generic template, so any of
+  them can be contacted (debris and rocket bodies excepted: they carry no radio).
 - **Commands go up.** They are simulated: nothing is ever transmitted. Their answers (an
   acknowledgement, a telemetry packet, or the frame repeated by a digipeater) come back down through
   the same channel.
@@ -17,9 +18,16 @@ CRCs, encoded and decoded by bounds-checked codecs.
 ## Why it works this way
 
 - **The antenna follows the selection.** The station has one antenna, so the contact is the
-  selected satellite while it is above the mask, has packet templates, and the clock runs no faster
-  than `SATLAB_COMMS_MAX_TIME_SCALE` (60×). Faster than that, the contact pauses ("too fast"):
-  frames every few seconds can't be followed at 600×.
+  selected satellite while it is above the mask, has packet templates (its own or the generic set),
+  and the clock runs no faster than `SATLAB_COMMS_MAX_TIME_SCALE` (60×). Faster than that, the
+  contact pauses ("too fast"): frames every few seconds can't be followed at 600×.
+- **Every satellite can be contacted.** Only a handful of satellites publish a format the simulator
+  can follow, and finding one overhead is hard. So every satellite without templates of its own
+  shares one generic set, `generic_bus`, and the card says so ("Generic template"). It is the
+  illustrative CCSDS housekeeping layout without the storage field, because storage isn't modelled
+  without a link budget. It assumes an omnidirectional antenna, so the attitude check doesn't hold
+  its passes. Nothing about it is real except the framing standards: there's no published link
+  budget (frames arrive as sent) and no frequency, so no Doppler shift is shown.
 - **Real where it can be, labelled where it can't.** The one-way light time is real: range divided
   by c. Bit errors are modelled, and only for satellites with a published link budget; for others
   the channel isn't modelled and frames arrive as sent. Uplink budgets aren't published, so the
@@ -112,6 +120,19 @@ dropped as tiring.
 | ISS | AX.25 / APRS | real frames from the 145.825 MHz digipeater, replayed | APRS_MESSAGE, answered by the digipeated copy |
 | CroCube | AX.25, CSV beacons | real frames, replayed | none (receive-only) |
 | UWE-4 | AX.25, binary | real frames, replayed | none (receive-only) |
+| Every other satellite (the generic set) | CCSDS | simulated housekeeping (illustrative layout, no storage field), channel not modelled | PING, REQUEST_HK, SET_BEACON_INTERVAL |
+| Debris and rocket bodies | — | none: no radio | none |
+
+The first eight have templates of their own: the Overhead filter **Own formats** shows just them,
+and the Communications card's (i) lists them.
+
+**How the generic set is stored.** Its templates are synced into `packet_template` once, with no
+satellite (`norad_id` NULL, unique by kind and name through a partial index), and every satellite
+that uses it shares those rows. So commands and frames keep a real template id, and a booked
+command is restored after a restart like any other. Which objects have no radio comes from the
+`no_radio` flag on the debris and rocket-body rule in `satellite_types.json`
+({py:func}`app.data.classify.has_no_radio`). {py:meth}`app.packets.table.CommsTable.for_norad` picks
+a satellite's templates: its own, else the generic set, else none.
 
 The templates, their sources and the cited frequencies are in the
 [seed data](../reference/seed-data.md); to add one, see
@@ -123,4 +144,5 @@ The templates, their sources and the cited frequencies are in the
 - {py:mod}`app.packets` (codecs and templates), {py:mod}`app.services.satnogs` (the archive).
 - {py:mod}`app.services.comms` (persistence).
 - Client: `frontend/src/views/Comms/`.
-- Tests: `test_packets.py`, `test_channel.py`, `test_comms.py`, `test_ws_comms.py`.
+- Tests: `test_packets.py`, `test_channel.py`, `test_comms.py`, `test_ws_comms.py`,
+  `test_seed_templates.py`.

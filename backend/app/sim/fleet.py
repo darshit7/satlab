@@ -61,11 +61,17 @@ class Fleet:
         cls,
         rows: Iterable[FleetRow],
         profiles: Iterable[LinkProfile] = (),
-        templates: Iterable[tuple[int, int, TelemetryTemplate | CommandTemplate]] = (),
+        templates: Iterable[tuple[int, int | None, TelemetryTemplate | CommandTemplate]] = (),
         downlinks: Mapping[int, Downlink] | None = None,
+        *,
+        generic_antenna_deg: float | None = None,
+        no_radio: Iterable[int] = (),
     ) -> "Fleet":
         """Parse the rows' TLEs (skipping duplicates and sets SGP4 rejects) and align the link
-        profiles and packet templates with the rows that remain."""
+        profiles and packet templates with the rows that remain.
+
+        ``no_radio``: debris and rocket bodies, which the generic packet templates leave out.
+        """
         kept: list[tuple[FleetRow, Satrec]] = []
         seen: set[int] = set()
         for row in rows:
@@ -92,7 +98,9 @@ class Fleet:
             index=index,
             array=SatrecArray(list(satrecs)) if satrecs else None,
             links=LinkTable.build(profiles, index, len(kept)),
-            comms=CommsTable.build(templates, downlinks),
+            comms=CommsTable.build(
+                templates, downlinks, generic_antenna_deg=generic_antenna_deg, no_radio=no_radio
+            ),
         )
 
     @classmethod
@@ -117,5 +125,6 @@ class Fleet:
         return np.isin(self.type_codes, codes)
 
     def comms_mask(self) -> NDArray[np.bool_]:
-        """Per row: the satellite has packet templates (comms can talk to it)."""
+        """Per row: the satellite has packet templates of its own (the "own formats" filter;
+        every other satellite but debris and rocket bodies uses the generic set)."""
         return np.isin(self.norad_ids, np.fromiter(self.comms.by_norad, dtype=np.int64))

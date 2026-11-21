@@ -1,7 +1,7 @@
 """Pass automation end to end, over the WebSocket, from Wallops: a command booked for NOAA 20's next
 pass goes out at AOS (the clock slowed and the antenna turned for it), one for the ISS is held by
-its red attitude with an alarm, what's refused, cancelling, restoring after a restart and ending
-the session."""
+its red attitude with an alarm, one for a Starlink goes through the generic set, what's refused,
+cancelling, restoring after a restart and ending the session."""
 
 from datetime import datetime, timedelta
 
@@ -15,6 +15,7 @@ from tests.test_ws import Stream, open_stream
 from tests.test_ws_comms import DURING_PASS, ISS, LIMIT, NOAA_20, wallops  # noqa: F401
 
 HELLO = {"addressee": "W1AW", "text": "hello"}
+STARLINK = 44714  # STARLINK-1008: no templates of its own, so the generic set
 AFTER_PASS = DURING_PASS + timedelta(minutes=30)  # NOAA 20's 17:52 pass is over by then
 
 
@@ -190,3 +191,32 @@ def test_cancel_restore_and_end(client: TestClient, wallops: dict) -> None:  # n
     with get_sessionmaker()() as db:
         assert db.get(Command, first).status == "aborted"  # type: ignore[union-attr]
         assert db.get(Command, kept).status == "aborted"  # type: ignore[union-attr]
+
+
+def test_generic_satellite_is_bookable(client: TestClient, wallops: dict) -> None:  # noqa: F811
+    """A satellite without templates of its own books through the generic set, is restored after
+    a restart, and its assumed omnidirectional antenna passes the check at AOS (attitude green
+    where a ±62° beam would be amber at this height)."""
+    passes = _passes(client, wallops, STARLINK, AFTER_PASS)
+    first, second = passes[0], passes[1]
+    with open_stream(client, wallops) as ws:
+        ws.send(type="set_clock", paused=True, sim_time=AFTER_PASS.isoformat())
+        _schedule(ws, STARLINK, "REQUEST_HK", second["aos_time"])
+        later = _status(ws, None, "scheduled")
+        assert later["satellite_name"] == "STARLINK-1008"
+
+    client.portal.call(client.app.state.sessions.shutdown)  # re-booked by its generic template
+    with open_stream(client, wallops) as ws:
+        restored = _status(ws, later["command_id"], "scheduled")
+        assert restored["command"] == "REQUEST_HK" and restored["satellite_name"] == "STARLINK-1008"
+        assert _near(restored["scheduled_pass"]["aos_time"], _at(second["aos_time"]))
+
+        _schedule(ws, STARLINK, "PING", first["aos_time"])
+        command_id = _status(ws, None, "scheduled")["command_id"]
+        aos = _at(first["aos_time"])
+        ws.send(type="set_clock", sim_time=(aos - timedelta(seconds=20)).isoformat(), paused=False)
+        ws.send(type="set_clock", time_scale=10)
+        queued = _status(ws, command_id, "queued")
+        assert queued["check"]["go"] and queued["check"]["subsystems"]["attitude"] == "green"
+        final = _status(ws, command_id, "acked", "failed")
+        assert final["status"] == "acked"  # no modelled channel: the answer arrives

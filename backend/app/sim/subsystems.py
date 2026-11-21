@@ -367,8 +367,13 @@ class HealthTracker:
         elevation_deg: float,
         off_nadir: float,
         link: LinkState | None,
+        antenna_half_angle_deg: float | None = None,
     ) -> HealthState | None:
-        """The satellite's health at ``sim_time``; None for elements that can't propagate."""
+        """The satellite's health at ``sim_time``; None for elements that can't propagate.
+
+        The attitude check's beam is the link profile's coverage, else ``antenna_half_angle_deg``
+        (the generic packet templates' assumed antenna), else the model's default.
+        """
         if satrec.no_kozai <= 0:
             return None
         t = sim_time.timestamp()
@@ -393,8 +398,10 @@ class HealthTracker:
         )
         profile = links.by_norad.get(norad_id)
         beam = (
-            links.profiles[profile].coverage_half_angle_deg if profile is not None else None
-        ) or model.attitude.half_beamwidth_deg
+            (links.profiles[profile].coverage_half_angle_deg if profile is not None else None)
+            or antenna_half_angle_deg
+            or model.attitude.half_beamwidth_deg
+        )
         in_view = elevation_deg >= self.mask_deg and math.isfinite(off_nadir)
         downlinking = link is not None and link.rag != "red"
 

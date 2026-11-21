@@ -22,14 +22,18 @@ const muted = 'text-gray-500 dark:text-gray-400'
 const heading = 'mt-3 mb-1 flex items-baseline justify-between gap-2 text-sm font-semibold first:mt-0'
 const OUTCOME_RAG: Partial<Record<CommandStatus, Rag>> = { acked: 'green', held: 'red', failed: 'red', aborted: 'amber' }
 
-/** Satellite names and command labels from the packet templates (reference data). */
+/** Satellite names (the server's, else the packet templates') and command labels (the satellite's
+ *  own templates, else the generic set's), from the reference data. */
 function useNames() {
   const templates = useMission((s) => s.packetTemplates)
   return useMemo(() => {
     const satellites = new Map(templates?.satellites.map((s) => [s.norad_id, s]) ?? [])
+    const generic = templates?.generic?.commands ?? []
     return {
-      satellite: (id: number | null) => (id === null ? null : (satellites.get(id)?.satellite_name ?? `#${id}`)),
-      command: (id: number, name: string) => satellites.get(id)?.commands.find((c) => c.name === name)?.label ?? name,
+      satellite: (id: number | null, given?: string | null) =>
+        id === null ? null : (given ?? satellites.get(id)?.satellite_name ?? `#${id}`),
+      command: (id: number, name: string) =>
+        (satellites.get(id)?.commands ?? generic).find((c) => c.name === name)?.label ?? name,
     }
   }, [templates])
 }
@@ -130,7 +134,7 @@ export function SchedulerPanel() {
       {sortedAlarms.length > 0 ? (
         <ul className={divided} aria-label="Alarms">
           {sortedAlarms.map((a) => (
-            <AlarmRow key={a.alarm_id} alarm={a} satellite={names.satellite(a.norad_id)} />
+            <AlarmRow key={a.alarm_id} alarm={a} satellite={names.satellite(a.norad_id, a.satellite_name)} />
           ))}
         </ul>
       ) : (
@@ -144,7 +148,7 @@ export function SchedulerPanel() {
             <WaitingRow
               key={c.command_id}
               command={c}
-              satellite={names.satellite(c.norad_id)!}
+              satellite={names.satellite(c.norad_id, c.satellite_name)!}
               label={names.command(c.norad_id, c.command)}
               simMs={simMs}
             />
@@ -162,7 +166,12 @@ export function SchedulerPanel() {
           <h3 className={heading}>Recent</h3>
           <ul className={divided} aria-label="Booked commands">
             {outcomes.map((c) => (
-              <OutcomeRow key={c.command_id} command={c} satellite={names.satellite(c.norad_id)!} label={names.command(c.norad_id, c.command)} />
+              <OutcomeRow
+                key={c.command_id}
+                command={c}
+                satellite={names.satellite(c.norad_id, c.satellite_name)!}
+                label={names.command(c.norad_id, c.command)}
+              />
             ))}
           </ul>
         </>

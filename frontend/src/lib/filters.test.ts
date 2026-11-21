@@ -52,7 +52,7 @@ describe('filterSummary', () => {
     expect(filterSummary({ ...DEFAULT_FILTERS, types: [] }, 5)[0]).toBe('No types')
   })
 
-  it('calls communications satellites Telecom, apart from the Communications filter and section', () => {
+  it('calls communications satellites Telecom, apart from the Communications section', () => {
     expect(TYPE_LABELS.comms).toBe('Telecom')
     expect(filterSummary({ ...DEFAULT_FILTERS, types: ['comms'] }, 5)[0]).toBe('Telecom')
   })
@@ -63,7 +63,7 @@ describe('filterSummary', () => {
         { ...DEFAULT_FILTERS, sar_only: true, comms_only: true, link_ok_only: true, min_elevation_deg: 20, rising_within_min: 0 },
         5,
       ),
-    ).toEqual(['All types', 'SAR-capable', 'Communications', 'Link OK', 'El ≥ 20°', 'Up now only'])
+    ).toEqual(['All types', 'SAR-capable', 'Own formats', 'Link OK', 'El ≥ 20°', 'Up now only'])
     // at or under the mask, the mask is what applies
     expect(filterSummary({ ...DEFAULT_FILTERS, min_elevation_deg: 10 }, 10)[1]).toBe('El ≥ mask (10°)')
   })

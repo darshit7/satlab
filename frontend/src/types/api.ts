@@ -35,9 +35,12 @@ export interface SatelliteSearchResult {
 export interface CatalogStatus {
   satellite_count: number
   group: string
+  /** When Celestrak last served (or confirmed) the group. */
   last_fetched_at: string | null
   refreshing: boolean
   last_error: string | null
+  /** The group is fetched again once it's this old (absent from older servers). */
+  max_age_hours?: number | null
 }
 
 /** Where a session observes from: a preset station or a custom location (exactly one). */
@@ -164,9 +167,22 @@ export interface SatelliteComms {
   downlink_sources?: LinkSource[]
 }
 
-/** Every satellite with packet templates (reference data, like the link profiles). */
+/** The generic packet templates every satellite without its own uses (debris and rocket bodies
+ *  excepted): illustrative layout, modelled values. */
+export interface GenericComms {
+  telemetry: TelemetryTemplate[]
+  commands: CommandTemplate[]
+  /** The TT&C antenna coverage it assumes, off nadir (90: omnidirectional); null: the model default. */
+  antenna_half_angle_deg: number | null
+}
+
+/** Every satellite with packet templates of its own, and the generic set for the rest (reference
+ *  data, like the link profiles). */
 export interface PacketTemplates {
   /** Whether real frames can be replayed at all on this server. */
   satnogs_configured: boolean
+  /** The satellites with their own formats. */
   satellites: SatelliteComms[]
+  /** Null or absent (older servers): only the listed satellites can be contacted. */
+  generic?: GenericComms | null
 }

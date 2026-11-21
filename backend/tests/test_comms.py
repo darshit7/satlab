@@ -41,6 +41,20 @@ def _table() -> CommsTable:
 
 
 TABLE = _table()
+DEBRIS = 99001  # e.g. "FENGYUN 1C DEB": no radio
+
+
+def _generic_table() -> CommsTable:
+    """``TABLE`` plus the generic set (no satellite), as the fleet builds it."""
+    rows = []
+    for norad_id, templates in packet_template_specs().templates().items():
+        rows += [(1000 * norad_id + i, norad_id, t) for i, t in enumerate(templates)]
+    generic = packet_template_specs().generic_templates()
+    rows += [(9000 + i, None, t) for i, t in enumerate(generic)]
+    return CommsTable.build(rows, load_downlinks(), generic_antenna_deg=90.0, no_radio=[DEBRIS])
+
+
+GENERIC_TABLE = _generic_table()
 
 HEALTH = HealthState(
     norad_id=NOAA_20,
@@ -171,6 +185,79 @@ def test_every_comms_satellite_has_a_downlink() -> None:
     with_templates = {s.norad_id for s in packet_template_specs().satellites}
     assert with_templates <= profiled | seeded
     assert not profiled & seeded  # one source of truth per satellite
+
+
+# ---------- the generic set ----------
+
+
+def test_generic_set_covers_every_other_satellite() -> None:
+    own = GENERIC_TABLE.for_norad(NOAA_20)
+    assert own is not None and not own.generic and own is GENERIC_TABLE.by_norad[NOAA_20]
+    goes = GENERIC_TABLE.for_norad(GOES_16)
+    assert goes is not None and goes.generic and goes.norad_id == GOES_16
+    assert goes.command_named("PING") is not None and goes.downlink is None
+    assert [i for i, _ in goes.telemetry] == [9000, 9001]  # the shared rows' ids
+    assert GENERIC_TABLE.for_norad(DEBRIS) is None
+    assert GOES_16 not in GENERIC_TABLE.by_norad  # "own formats" stays the seed's list
+    assert TABLE.for_norad(GOES_16) is None  # without a generic set, as before
+
+    assert GENERIC_TABLE.antenna_half_angle_deg(GOES_16) == 90.0
+    assert GENERIC_TABLE.antenna_half_angle_deg(NOAA_20) is None  # its own: the link profile's
+    assert GENERIC_TABLE.antenna_half_angle_deg(ISS) is None  # its own: the model default
+    assert GENERIC_TABLE.antenna_half_angle_deg(DEBRIS) is None
+
+
+def _generic_step(rt: CommsRuntime, at: datetime, look: ContactLook | None):
+    return rt.step(at, look, GENERIC_HEALTH, GENERIC_TABLE, time_scale=1.0, paused=False)
+
+
+GENERIC_HEALTH = HEALTH.model_copy(
+    update={
+        "norad_id": GOES_16,
+        "storage": StorageHealth(rag=None, fill_pct=None, activity=None),
+        "rf": RfHealth(rag=None, margin_db=None),
+    }
+)
+
+
+def test_generic_contact() -> None:
+    rt, _ = _runtime()
+    _generic_step(rt, T0, _look(GOES_16, margin=None))
+    assert rt.contact is not None and rt.contact.state == "active"
+    assert rt.contact.templates == "generic" and rt.contact.downlink == "simulated"
+    assert not rt.contact.channel_modelled  # no published link budget
+    assert rt.contact.downlink_frequency_hz is None and rt.contact.doppler_hz is None
+
+    _generic_step(rt, T0, _look())
+    assert rt.contact is not None and rt.contact.templates == "own"
+
+    _generic_step(rt, T0, _look(DEBRIS, margin=None))
+    assert rt.contact is not None and rt.contact.state == "no_template"
+    assert rt.contact.templates is None and rt.contact.downlink is None
+
+
+def test_generic_housekeeping_and_ping() -> None:
+    rt, sink = _runtime()
+    look = _look(GOES_16, margin=None)
+    _generic_step(rt, T0, look)
+    [hk] = _packets(_generic_step(rt, T0 + timedelta(seconds=10), look))
+    assert hk.template == "hk" and hk.crc_ok and not hk.layout_sourced
+    assert hk.bit_errors is None  # the channel isn't modelled: delivered as sent
+    values = _values(hk)
+    assert values["soc_pct"] == 88.0 and "storage_fill_pct" not in values
+    assert [r.template_id for r in sink.records if isinstance(r, FrameRecord)] == [9000]
+
+    sat = GENERIC_TABLE.for_norad(GOES_16)
+    assert sat is not None
+    found = sat.command_named("PING")
+    assert found is not None
+    assert rt.can_command(GOES_16)
+    rt.submit(OutgoingCommand(8, GOES_16, found[1], {}, issued_at=T0))
+    _generic_step(rt, T0 + timedelta(seconds=10, milliseconds=500), look)
+    answered = _generic_step(rt, T0 + timedelta(seconds=12), look)
+    assert _statuses(answered) == ["acked"]
+    [ack] = [p for p in _packets(answered) if p.kind == "ack"]
+    assert ack.command_id == 8 and _values(ack)["command_opcode"] == "0x01"
 
 
 # ---------- beacons ----------

@@ -55,9 +55,10 @@ class CatalogStatus(BaseModel):
 
     satellite_count: int
     group: str
-    last_fetched_at: datetime | None
+    last_fetched_at: datetime | None  #: when Celestrak last served (or confirmed) the group
     refreshing: bool
     last_error: str | None
+    max_age_hours: float | None = None  #: the group is fetched again once it's this old
 
 
 class MissionSessionCreate(BaseModel):
@@ -211,8 +212,21 @@ class SatelliteCommsOut(BaseModel):
     downlink_sources: list[LinkSourceOut] = []  #: where the seeded frequency comes from
 
 
+class GenericCommsOut(BaseModel):
+    """The generic packet templates: what every satellite without its own uses (debris and
+    rocket bodies excepted). Illustrative layout, modelled values."""
+
+    telemetry: list[TelemetryTemplateOut]
+    commands: list[CommandTemplateOut]
+    #: The TT&C antenna coverage it assumes, off nadir (90: omnidirectional); null: the subsystem
+    #: model's default.
+    antenna_half_angle_deg: float | None
+
+
 class PacketTemplatesOut(BaseModel):
-    """Every satellite with packet templates (reference data, like the link profiles)."""
+    """Every satellite with packet templates of its own, and the generic set for the rest
+    (reference data, like the link profiles)."""
 
     satnogs_configured: bool  #: whether real frames can be replayed at all
-    satellites: list[SatelliteCommsOut]
+    satellites: list[SatelliteCommsOut]  #: the satellites with their own formats
+    generic: GenericCommsOut | None = None  #: null: only the listed satellites can be contacted

@@ -5,7 +5,9 @@ import { Button } from '../../components/ui/Button'
 import { focusRing } from '../../components/ui/buttonClasses'
 import { inputClass } from '../../components/ui/Field'
 import { Pill } from '../../components/ui/Pill'
+import { RagIcon } from '../../components/ui/Rag'
 import { trackOnce } from '../../lib/analytics'
+import { catalogStatusText } from '../../lib/catalog'
 import { formatAge } from '../../lib/time'
 import { useMission } from '../../store/mission'
 import type { CatalogStatus, SatelliteSummary } from '../../types/api'
@@ -101,23 +103,20 @@ export function CatalogSearch() {
     if (!value.trim()) setResults([])
   }
 
-  const statusText =
-    status === null
-      ? 'Connecting to catalog…'
-      : status.satellite_count === 0
-        ? status.last_error
-          ? `Catalog unavailable: ${status.last_error}`
-          : 'Loading TLEs from Celestrak…'
-        : `Celestrak “${status.group}”${
-            status.last_fetched_at ? `, fetched ${formatAge(now - Date.parse(status.last_fetched_at))} ago` : ''
-          }`
+  const statusText = catalogStatusText(status, now)
 
   return (
     <>
       <p className="mb-2 flex items-center justify-between gap-2 text-xs text-gray-500 dark:text-gray-400">
-        {statusText}
+        {statusText.text}
         {status && status.satellite_count > 0 && <Pill size="sm">{status.satellite_count.toLocaleString()}</Pill>}
       </p>
+      {statusText.warning && (
+        <p className="-mt-1 mb-2 flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+          <RagIcon rag="amber" size={12} />
+          {statusText.warning}
+        </p>
+      )}
       <div className="relative">
         <Search size={16} strokeWidth={1.5} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-gray-500 dark:text-gray-400" aria-hidden />
         <input

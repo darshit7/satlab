@@ -45,7 +45,9 @@ flowchart TB
 
 - **Reference and config.** `ground_station` is seeded and read-only. `satellite` is upserted
   from Celestrak. `link_profile` and `packet_template` are synced from the seed files on every
-  catalog rebuild.
+  catalog rebuild. The generic packet-template set is stored once, with `norad_id` NULL (unique by
+  kind and name through the partial index `uq_packet_template_generic`), and shared by every
+  satellite without templates of its own, so their commands and frames point at a real row.
 - **Session.** `mission_session` is created by the REST API, carries the observer location and the
   token hash, and gets `ended_at` when it ends. `pass_window` is replaced per satellite and window
   each time the pass schedule is requested.

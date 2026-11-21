@@ -58,7 +58,7 @@ export function filterSummary(filters: VisibilityFilter, maskDeg: number | null)
           : `${types.length} types`,
   ]
   if (filters.sar_only) parts.push('SAR-capable')
-  if (filters.comms_only) parts.push('Communications')
+  if (filters.comms_only) parts.push('Own formats')
   if (filters.link_ok_only) parts.push('Link OK')
   parts.push(
     filters.min_elevation_deg > (maskDeg ?? 0)

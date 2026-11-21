@@ -17,6 +17,7 @@ from app.models.ws import SatelliteType
 class _RuleSpec(BaseModel):
     type: SatelliteType
     is_sar_capable: bool = False
+    no_radio: bool = False  # debris and rocket bodies: nothing to communicate with
     patterns: list[str] = Field(default_factory=list)
     norad_ids: list[int] = Field(default_factory=list)
 
@@ -27,10 +28,13 @@ class _RulesFile(BaseModel):
 
 @dataclass(frozen=True)
 class Classification:
-    """A satellite's type and whether it carries a SAR instrument."""
+    """A satellite's type, whether it carries a SAR instrument, and whether it has no radio."""
 
     type: SatelliteType
     is_sar_capable: bool
+    #: Debris or a rocket body: comms has nothing to talk to, not even through the generic
+    #: packet templates.
+    no_radio: bool = False
 
 
 @dataclass(frozen=True)
@@ -62,7 +66,9 @@ def _rules() -> tuple[_Rule, ...]:
         )
         rules.append(
             _Rule(
-                Classification(rule.type, rule.is_sar_capable), pattern, frozenset(rule.norad_ids)
+                Classification(rule.type, rule.is_sar_capable, rule.no_radio),
+                pattern,
+                frozenset(rule.norad_ids),
             )
         )
     return tuple(rules)
@@ -75,6 +81,12 @@ def classify(name: str, norad_id: int) -> Classification:
         if rule.matches(name, norad_id):
             return rule.result
     return OTHER
+
+
+def has_no_radio(name: str, norad_id: int) -> bool:
+    """Whether the object is debris or a rocket body (the seed's ``no_radio`` rules), which the
+    generic packet templates leave out."""
+    return classify(name, norad_id).no_radio
 
 
 def reclassify_all(db: Session) -> int:

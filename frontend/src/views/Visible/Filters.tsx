@@ -12,6 +12,10 @@ export function Filters() {
   const filters = useMission((s) => s.filters)
   const setFilters = useMission((s) => s.setFilters)
   const mask = useMission((s) => s.snapshot?.observer.horizon_mask_deg ?? null)
+  // Counts from the reference data, so the titles never go stale.
+  const budgets = useMission((s) => s.linkProfiles?.profiles.length ?? null)
+  const ownFormats = useMission((s) => s.packetTemplates?.satellites.length ?? null)
+  const count = (n: number | null) => (n !== null ? ` (${n})` : '')
 
   const toggleType = (t: SatelliteType) => {
     if (!filters.types.includes(t)) trackOnce('filter-on', { filter: t })
@@ -50,7 +54,7 @@ export function Filters() {
           active={filters.link_ok_only}
           aria-pressed={filters.link_ok_only}
           className={toggle}
-          title="Only satellites with a published link budget (5); of those in view, only with a usable margin (0 dB or better)"
+          title={`Only satellites with a published link budget${count(budgets)}; of those in view, only with a usable margin (0 dB or better)`}
           onClick={() => toggleOnly('link_ok_only', 'link-ok')}
         >
           Link OK
@@ -59,10 +63,10 @@ export function Filters() {
           active={filters.comms_only}
           aria-pressed={filters.comms_only}
           className={toggle}
-          title="Only satellites you can communicate with (8): the link-budget ones plus the ISS, CroCube and UWE-4, which work without a modelled channel"
+          title={`Only satellites with packet formats of their own${count(ownFormats)}: the link-budget ones and those whose real frames are replayed from SatNOGS. Every other satellite but debris uses a generic, illustrative template`}
           onClick={() => toggleOnly('comms_only', 'comms')}
         >
-          Communications
+          Own formats
         </Button>
       </div>
       <div className="grid grid-cols-2 gap-2">

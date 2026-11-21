@@ -5,7 +5,7 @@ import logging
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Self
+from typing import Annotated, Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 from sqlalchemy import delete, select, update
@@ -271,13 +271,27 @@ class SatelliteTemplatesSpec(BaseModel):
         return self
 
 
+class GenericTemplatesSpec(BaseModel):
+    """The set every satellite without its own entry uses (debris and rocket bodies excepted),
+    and the TT&C antenna it assumes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    template_set: Name
+    #: The assumed antenna's coverage, off nadir; 90 covers the whole Earth-facing hemisphere
+    #: (omnidirectional), so the attitude check can't fail while the satellite is in view.
+    antenna_half_angle_deg: float = Field(gt=0.0, le=180.0)
+
+
 class PacketTemplatesFile(BaseModel):
-    """``packet_templates.json``: the template sets and the satellites assigned to them."""
+    """``packet_templates.json``: the template sets, the satellites assigned to them, and the
+    generic set for every other satellite."""
 
     version: int = Field(ge=1)
     verified_on: date
     template_sets: dict[Name, TemplateSet] = Field(max_length=32)
     satellites: list[SatelliteTemplatesSpec] = Field(max_length=200)
+    generic: GenericTemplatesSpec | None = None  #: none: only the listed satellites have comms
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:
@@ -287,6 +301,8 @@ class PacketTemplatesFile(BaseModel):
         for s in self.satellites:
             if s.template_set not in self.template_sets:
                 raise ValueError(f"unknown template set {s.template_set}")
+        if self.generic is not None and self.generic.template_set not in self.template_sets:
+            raise ValueError(f"unknown template set {self.generic.template_set}")
         return self
 
     def templates(self) -> dict[int, list[TelemetryTemplate | CommandTemplate]]:
@@ -296,6 +312,13 @@ class PacketTemplatesFile(BaseModel):
             chosen = self.template_sets[s.template_set]
             result[s.norad_id] = [*chosen.telemetry, *chosen.commands]
         return result
+
+    def generic_templates(self) -> list[TelemetryTemplate | CommandTemplate]:
+        """The generic set's templates; none without a ``generic`` block."""
+        if self.generic is None:
+            return []
+        chosen = self.template_sets[self.generic.template_set]
+        return [*chosen.telemetry, *chosen.commands]
 
     def downlinks(self) -> dict[int, Downlink]:
         """The satellites the seed gives a downlink frequency."""
@@ -317,11 +340,13 @@ def packet_template_specs(path: Path = PACKET_TEMPLATES_FILE) -> PacketTemplates
 
 
 def sync_packet_templates(db: Session, path: Path = PACKET_TEMPLATES_FILE) -> int:
-    """Make ``packet_template`` match the seed for satellites already in the catalog.
+    """Make ``packet_template`` match the seed: the listed satellites' templates (for satellites
+    already in the catalog) and the generic set, stored once with no satellite (``norad_id``
+    NULL) and shared by every satellite without its own.
 
-    Upserts by (satellite, kind, name). Rows the seed no longer lists are deactivated, not deleted,
-    so commands that used them keep their foreign key. An unreadable seed is logged and leaves the
-    table as it is.
+    Upserts by (satellite, kind, name), the generic rows by (kind, name). Rows the seed no longer
+    lists are deactivated, not deleted, so commands that used them keep their foreign key. An
+    unreadable seed is logged and leaves the table as it is.
     """
     try:
         specs = packet_template_specs(path)
@@ -332,35 +357,51 @@ def sync_packet_templates(db: Session, path: Path = PACKET_TEMPLATES_FILE) -> in
     present = set(
         db.scalars(select(Satellite.norad_id).where(Satellite.norad_id.in_(list(per_satellite))))
     )
-    wanted = {
+    wanted: dict[tuple[int | None, str, str], TelemetryTemplate | CommandTemplate] = {
         (norad_id, t.kind, t.name): t
         for norad_id, templates in per_satellite.items()
         if norad_id in present
         for t in templates
     }
+    generic = {(None, t.kind, t.name): t for t in specs.generic_templates()}
+    insert = pg_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
+
+    def values(
+        rows: dict[tuple[int | None, str, str], TelemetryTemplate | CommandTemplate],
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "norad_id": norad_id,
+                "kind": kind,
+                "name": name,
+                "framing": template.framing.type,
+                "spec": template.model_dump(mode="json"),
+                "version": specs.version,
+                "active": True,
+            }
+            for (norad_id, kind, name), template in rows.items()
+        ]
+
     # One upsert, not insert-if-absent: two syncs can overlap (the old and new revision during a
     # deploy) and both see the rows missing; ON CONFLICT lets both succeed.
     if wanted:
-        insert = pg_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
-        stmt = insert(PacketTemplate).values(
-            [
-                {
-                    "norad_id": norad_id,
-                    "kind": kind,
-                    "name": name,
-                    "framing": template.framing.type,
-                    "spec": template.model_dump(mode="json"),
-                    "version": specs.version,
-                    "active": True,
-                }
-                for (norad_id, kind, name), template in wanted.items()
-            ]
-        )
+        stmt = insert(PacketTemplate).values(values(wanted))
         stmt = stmt.on_conflict_do_update(
             index_elements=[PacketTemplate.norad_id, PacketTemplate.kind, PacketTemplate.name],
             set_={col: stmt.excluded[col] for col in _TEMPLATE_COLUMNS},
         )
         db.execute(stmt)
+    if generic:
+        # NULLs never conflict in the (satellite, kind, name) constraint, so the generic rows
+        # have their own partial unique index, which ON CONFLICT names by its WHERE clause.
+        stmt = insert(PacketTemplate).values(values(generic))
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[PacketTemplate.kind, PacketTemplate.name],
+            index_where=PacketTemplate.norad_id.is_(None),
+            set_={col: stmt.excluded[col] for col in _TEMPLATE_COLUMNS},
+        )
+        db.execute(stmt)
+    wanted |= generic
     active = db.execute(
         select(
             PacketTemplate.id, PacketTemplate.norad_id, PacketTemplate.kind, PacketTemplate.name
@@ -384,10 +425,22 @@ def load_downlinks(path: Path = PACKET_TEMPLATES_FILE) -> dict[int, Downlink]:
         return {}
 
 
+def load_generic_antenna_deg(path: Path = PACKET_TEMPLATES_FILE) -> float | None:
+    """The generic set's assumed antenna half-angle; none (logged when the seed doesn't read)
+    without a ``generic`` block."""
+    try:
+        generic = packet_template_specs(path).generic
+    except (OSError, ValueError, ValidationError):
+        log.exception("packet templates: could not read %s; no generic antenna", path.name)
+        return None
+    return generic.antenna_half_angle_deg if generic is not None else None
+
+
 def load_packet_templates(
     db: Session,
-) -> list[tuple[int, int, TelemetryTemplate | CommandTemplate]]:
-    """The active templates as (id, NORAD ID, template); rows that don't validate are skipped."""
+) -> list[tuple[int, int | None, TelemetryTemplate | CommandTemplate]]:
+    """The active templates as (id, NORAD ID, template), the generic set's with NORAD ID None;
+    rows that don't validate are skipped."""
     templates = []
     for row in db.scalars(
         select(PacketTemplate).where(PacketTemplate.active).order_by(PacketTemplate.id)
