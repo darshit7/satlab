@@ -463,6 +463,7 @@ def seed_page() -> str:
     """The versioned seed data, through the app's own validated loaders."""
     from app.data.classify import _RulesFile
     from app.data.seed import SEED_DIR, link_profile_specs, packet_template_specs
+    from app.sar.params import change_detection_params
     from app.sim.subsystems import subsystem_models
 
     out = [
@@ -651,6 +652,17 @@ def seed_page() -> str:
         "Thresholds:\n\n"
         + bullets(f"{code(k)}: {code(json.dumps(v))}" for k, v in thresholds.items())
     )
+
+    detection = change_detection_params()
+    out.append(heading(2, "SAR change detection", "seed-sar-change-detection"))
+    out.append(prose(" ".join(detection.comment)) + "\n")
+    out.append(f"Seed version {detection.version}.\n")
+    params = detection.model_dump(exclude={"comment", "version"})
+    rows = []
+    for section, fields in params.items():
+        for field, value in fields.items():
+            rows.append([code(f"{section}.{field}"), text(json.dumps(value))])
+    out.append(list_table(["Parameter", "Value"], rows))
     return "\n".join(out)
 
 

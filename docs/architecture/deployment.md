@@ -15,7 +15,11 @@ satlab-api
 : uvicorn with **one worker, exactly one replica**, as a non-root user. Sessions, their loops and
   the fleet live in this process's memory, so a second replica would split WebSocket sessions.
   Scaling out would need shared session state first. Its ingress is internal: only the web
-  container reaches it.
+  container reaches it. A SAR comparison runs in a short-lived child process of this container
+  (spawned, niced, one at a time), and its crops and images sit in `/app/var/sar`, the container's
+  ephemeral disk: a restart or redeploy empties it, and comparisons then read as expired until
+  recomputed. `SATLAB_SAR_STORAGE_MAX_BYTES` (1 GiB by default) keeps it within that disk.
+  rasterio (with its bundled GDAL) and scipy make the API image about 200 MB larger.
 
 The database is Postgres on Neon (see [persistence](persistence.md)).
 

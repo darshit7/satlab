@@ -6,6 +6,12 @@ import type {
   MissionSessionCreated,
   PacketTemplates,
   PassPrediction,
+  SarComparison,
+  SarComparisonCreate,
+  SarComparisonList,
+  SarPolarization,
+  SarSearch,
+  SarSource,
   SatelliteSearchResult,
 } from '../types/api'
 import { appUrl } from '../lib/basePath'
@@ -32,6 +38,28 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (response.status === 204 ? undefined : await response.json()) as T
 }
 
+/** Largest image accepted from the API (a 20 km comparison's PNGs are a few MB). */
+const MAX_IMAGE_BYTES = 32 * 1024 * 1024
+
+async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
+  const response = await fetch(appUrl(path), init)
+  if (!response.ok) throw new Error(`${response.status}: ${response.statusText}`)
+  if (response.headers.get('Content-Type') !== 'image/png') throw new Error('not an image')
+  const blob = await response.blob()
+  if (blob.size > MAX_IMAGE_BYTES) throw new Error('image too large')
+  return blob
+}
+
+export interface SarSearchQuery {
+  lat_deg: number
+  lon_deg: number
+  size_km: number
+  before: string
+  after: string
+  polarization: SarPolarization
+  platform: string | null
+}
+
 export const api = {
   listStations: () => request<GroundStation[]>('/api/stations'),
   linkProfiles: () => request<LinkProfiles>('/api/link-profiles'),
@@ -51,4 +79,37 @@ export const api = {
       `/api/sessions/${session.id}/passes?${new URLSearchParams({ norad_id: String(noradId), start, hours: String(hours) })}`,
       { signal, headers: owner(session) },
     ),
+  sarSource: () => request<SarSource>('/api/sar/source'),
+  sarScenes: (session: SessionRef, q: SarSearchQuery, signal?: AbortSignal) => {
+    const params = new URLSearchParams({
+      lat_deg: q.lat_deg.toFixed(5),
+      lon_deg: q.lon_deg.toFixed(5),
+      size_km: String(q.size_km),
+      before: q.before,
+      after: q.after,
+      polarization: q.polarization,
+    })
+    if (q.platform) params.set('platform', q.platform)
+    return request<SarSearch>(`/api/sessions/${session.id}/sar/scenes?${params}`, { signal, headers: owner(session) })
+  },
+  sarCompare: (session: SessionRef, body: SarComparisonCreate) =>
+    request<SarComparison>(`/api/sessions/${session.id}/sar/comparisons`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: owner(session),
+    }),
+  sarComparisons: (session: SessionRef, signal?: AbortSignal) =>
+    request<SarComparisonList>(`/api/sessions/${session.id}/sar/comparisons`, { signal, headers: owner(session) }),
+  sarRecompute: (session: SessionRef, id: number) =>
+    request<SarComparison>(`/api/sessions/${session.id}/sar/comparisons/${id}/recompute`, {
+      method: 'POST',
+      headers: owner(session),
+    }),
+  sarRemove: (session: SessionRef, id: number) =>
+    request<void>(`/api/sessions/${session.id}/sar/comparisons/${id}`, { method: 'DELETE', headers: owner(session) }),
+  sarImage: (session: SessionRef, id: number, kind: 'before' | 'after' | 'change', signal?: AbortSignal) =>
+    requestBlob(`/api/sessions/${session.id}/sar/comparisons/${id}/images/${kind}.png`, {
+      signal,
+      headers: owner(session),
+    }),
 }

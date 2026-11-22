@@ -2,15 +2,17 @@
 
 Phase 1 tables: ground_station, satellite, mission_session. Phase 2: pass_window. Phase 3:
 link_profile. Phase 4b: packet_template, command, telemetry_frame. Phase 5: alarm (and
-command.check_result). Generic comms: packet_template rows without a satellite.
+command.check_result). Generic comms: packet_template rows without a satellite. Phase 7a:
+sar_scene, sar_comparison.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import (
     JSON,
     Boolean,
+    Date,
     Float,
     ForeignKey,
     Index,
@@ -249,3 +251,82 @@ class Alarm(Base):
     acknowledged: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
     )
+
+
+# ========== SAR ==========
+
+
+class SarScene(Base):
+    """A Sentinel-1 RTC scene (one frame of a pass) used by a comparison: a shared cache of public
+    STAC metadata, like ``satellite``. Rows no comparison uses are purged with the retention."""
+
+    __tablename__ = "sar_scene"
+    __table_args__ = (UniqueConstraint("collection", "stac_scene_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)  #: sentinel1 (umbra: Phase 7b)
+    collection: Mapped[str] = mapped_column(String(64), nullable=False)  #: STAC collection id
+    stac_scene_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    platform: Mapped[str] = mapped_column(String(16), nullable=False)  #: sentinel-1a … sentinel-1d
+    orbit_state: Mapped[str] = mapped_column(String(16), nullable=False)  #: ascending | descending
+    #: 1-175; with ``orbit_state``, the track.
+    relative_orbit: Mapped[int] = mapped_column(Integer, nullable=False)
+    polarizations: Mapped[list[str]] = mapped_column(JSON, nullable=False)  #: e.g. ["VH", "VV"]
+    acquired_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    min_lon_deg: Mapped[float] = mapped_column(Float, nullable=False)  #: item bbox (PostGIS: Ph. 8)
+    min_lat_deg: Mapped[float] = mapped_column(Float, nullable=False)
+    max_lon_deg: Mapped[float] = mapped_column(Float, nullable=False)
+    max_lat_deg: Mapped[float] = mapped_column(Float, nullable=False)
+    footprint: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)  #: GeoJSON polygon(s)
+    epsg: Mapped[int] = mapped_column(Integer, nullable=False)  #: the scene's UTM zone
+    #: {polarization: href}: unsigned, checked against the allowed storage account.
+    assets: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
+
+
+class SarComparison(Base):
+    """A before/after comparison of one area, owned by a session (it lasts for the page visit;
+    purged with ``SATLAB_COMMS_RETENTION_DAYS``, rows and files). Its image paths derive from
+    ``id`` and ``generation``; nothing here is a filesystem path."""
+
+    __tablename__ = "sar_comparison"
+    __table_args__ = (
+        Index("ix_sar_comparison_session", "session_id", "id"),
+        Index("ix_sar_comparison_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("mission_session.id"), nullable=False)
+    #: The best-covering frame of each pass; ``frames`` lists all of them.
+    scene_before_id: Mapped[int] = mapped_column(ForeignKey("sar_scene.id"), nullable=False)
+    scene_after_id: Mapped[int] = mapped_column(ForeignKey("sar_scene.id"), nullable=False)
+    #: {"before": [sar_scene ids], "after": [...]}, best-covering first.
+    frames: Mapped[dict[str, list[int]]] = mapped_column(JSON, nullable=False)
+    #: queued | reading | detecting | ready | failed | expired
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    error: Mapped[str | None] = mapped_column(String(32))  #: an error code (app.sar.protocol)
+    polarization: Mapped[str] = mapped_column(String(4), nullable=False)  #: VV | VH
+    aoi_lat_deg: Mapped[float] = mapped_column(Float, nullable=False)  #: the area's centre
+    aoi_lon_deg: Mapped[float] = mapped_column(Float, nullable=False)
+    aoi_size_km: Mapped[float] = mapped_column(Float, nullable=False)  #: side of the square
+    min_lon_deg: Mapped[float] = mapped_column(Float, nullable=False)  #: envelope of aoi_geojson
+    min_lat_deg: Mapped[float] = mapped_column(Float, nullable=False)
+    max_lon_deg: Mapped[float] = mapped_column(Float, nullable=False)
+    max_lat_deg: Mapped[float] = mapped_column(Float, nullable=False)
+    #: The exact UTM square as a lon/lat GeoJSON Polygon (PostGIS geometry: Phase 8).
+    aoi_geojson: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    grid: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)  #: app.sar.grid.AoiGrid
+    requested_before: Mapped[date] = mapped_column(Date, nullable=False)  #: as asked (UTC day)
+    requested_after: Mapped[date] = mapped_column(Date, nullable=False)
+    method: Mapped[str] = mapped_column(String(16), nullable=False)  #: log_ratio
+    params_version: Mapped[int] = mapped_column(Integer, nullable=False)  #: of the detection seed
+    #: Run number, bumped by recompute (it names the image directory).
+    generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    threshold_db: Mapped[float | None] = mapped_column(Float)  #: applied: max(Otsu, floor)
+    score: Mapped[float | None] = mapped_column(Float)  #: changed fraction of valid pixels (0-1)
+    #: coverage, otsu_db, areas, widespread, regions_truncated, timings.
+    stats: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    regions: Mapped[list[Any] | None] = mapped_column(JSON)  #: flagged regions (≤ 50)
+    sim_time: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)  #: session clock
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)

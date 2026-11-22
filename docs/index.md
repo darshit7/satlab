@@ -37,6 +37,10 @@ Simulation
   [link budget](simulation/link-budget.md), [subsystems](simulation/subsystems.md),
   [communications](simulation/comms.md) and [pass automation](simulation/automation.md).
 
+SAR imagery
+: Real Sentinel-1 radar scenes from the public archive, compared on the server: [archive
+  explore](imagery/archive-explore.md) and the [change detector](imagery/change-detection.md).
+
 How-to guides
 : Recipes for common changes: [a link profile](how-to/add-link-profile.md),
   [a packet template](how-to/add-packet-template.md),
@@ -99,6 +103,15 @@ simulation/link-budget
 simulation/subsystems
 simulation/comms
 simulation/automation
+```
+
+```{toctree}
+:hidden:
+:caption: SAR imagery
+
+imagery/index
+imagery/archive-explore
+imagery/change-detection
 ```
 
 ```{toctree}

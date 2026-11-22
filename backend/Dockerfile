@@ -24,8 +24,9 @@ COPY --from=builder /app/.venv ./.venv
 COPY alembic.ini ./
 COPY migrations ./migrations
 COPY app ./app
-# Runtime data (Celestrak cache) goes to backend/var, i.e. /app/var: the only writable path.
-RUN mkdir -p var/cache && chown -R app:app var
+# Runtime data (Celestrak cache, SAR crops and images) goes to backend/var, i.e. /app/var: the
+# only writable path. The SAR cache is ephemeral: a restart empties it and comparisons recompute.
+RUN mkdir -p var/cache var/sar && chown -R app:app var
 ENV PATH=/app/.venv/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

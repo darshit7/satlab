@@ -1,0 +1,19 @@
+{
+  "_comment": [
+    "v1 SAR change detection (AGENTS.md §9, Phase 7a): explainable, no learned model.",
+    "Both dates are Lee-filtered, the log-ratio of backscatter is taken in dB, Otsu's threshold on",
+    "|delta| is applied with a floor, and connected regions above a minimum area are flagged.",
+    "Values are modelled defaults, checked on synthetic speckle in the tests; a change bumps version."
+  ],
+  "version": 1,
+  "speckle": { "method": "lee", "window_px": 7, "enl": 4.4 },
+  "threshold": { "method": "otsu_abs_log_ratio", "bins": 256, "clip_db": 20.0, "min_abs_db": 3.0 },
+  "morphology": { "opening_iter": 1, "closing_iter": 1 },
+  "regions": { "min_area_m2": 5000.0, "max_regions": 50 },
+  "coverage": { "min_valid_fraction": 0.5, "widespread_fraction": 0.25 },
+  "display": {
+    "VV": { "db_min": -25.0, "db_max": 5.0 },
+    "VH": { "db_min": -32.0, "db_max": -5.0 },
+    "heatmap_max_db": 10.0
+  }
+}

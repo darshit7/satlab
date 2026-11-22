@@ -6,6 +6,9 @@ Three kinds of data feed the simulation:
 
 - **Orbital elements** from Celestrak.
 - **Real telemetry frames** from the SatNOGS DB.
+- **Real radar scenes** from the Sentinel-1 RTC archive on Microsoft Planetary Computer, for the
+  Imagery panel ([archive explore](../imagery/archive-explore.md)). Unlike the two above, the
+  simulation loop never uses them: they are searched and read only when a user asks.
 - **Versioned seed files** in the repo: stations, link profiles, packet templates, type rules and
   subsystem models.
 
@@ -104,6 +107,17 @@ deleted. Packet templates are upserted (the generic set's rows by kind and name,
 satellite), and rows the seed drops are marked inactive rather than deleted, so
 `command.template_id` keeps pointing at something.
 
+**Planetary Computer ({py:class}`~app.services.sar.SarService`)**, on request only:
+
+- STAC searches and SAS tokens go through {py:mod}`app.data.http`: https on the one allowed host,
+  no redirects, a 4 MB cap, generic errors. They share one budget for all clients
+  (`SATLAB_SAR_UPSTREAM_REQUESTS_PER_MIN`), and a 429 backs everyone off. A search window is cached
+  for 15 minutes.
+- Items are validated by pydantic models of just the fields used. An item whose asset isn't on the
+  allowed storage account is dropped, so the worker can only read files the server checked.
+- Scene windows are read by a worker process, never by the API process
+  ([reading scenes safely](../imagery/archive-explore.md#reading-scenes-safely)).
+
 ## The sources
 
 ```{include} ../../AGENTS.md
@@ -117,3 +131,4 @@ satellite), and rows the seed drops are marked inactive rather than deleted, so
 - {py:mod}`app.services.catalog`, {py:mod}`app.services.satnogs`: the background services.
 - {py:mod}`app.data.seed`, {py:mod}`app.data.classify`: the seed files and the type rules.
 - {py:mod}`app.sim.fleet`: what the tick reads.
+- {py:mod}`app.data.http`, {py:mod}`app.sar.stac`, {py:mod}`app.sar.token`: the SAR archive clients.

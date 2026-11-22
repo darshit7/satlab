@@ -5,7 +5,8 @@
 A browser app backed by one Python process. The backend runs a **simulation loop per mission
 session** and streams its state over a WebSocket; the frontend renders that state on a globe, a 2D
 map, two sky views and an inspector. A small REST API serves reference data, catalog search, the
-pass schedule and session creation.
+pass schedule and session creation, and the SAR archive: searches, comparisons run by a worker
+process, and their images.
 
 ```{mermaid}
 flowchart TB
@@ -13,6 +14,7 @@ flowchart TB
     CT[Celestrak TLEs]
     SN[SatNOGS frames]
     SD[Seed files]
+    PC[Sentinel-1 RTC archive]
   end
   subgraph api["API process · FastAPI, one worker"]
     CS[CatalogService] --> FL[(Fleet<br/>in memory)]
@@ -20,6 +22,7 @@ flowchart TB
     FL --> RT[SessionRuntime<br/>one per session, 2 Hz]
     AR --> RT
     RT --> CW[CommsWriter]
+    SR[SarService] --> WK[worker process<br/>one comparison at a time]
   end
   DB[(SQLite / Postgres)]
   B["Browser · store → globe, map,<br/>sky views, inspector"]
@@ -28,6 +31,9 @@ flowchart TB
   SN --> SA
   CS <--> DB
   CW --> DB
+  PC --> SR
+  PC --> WK
+  SR <--> DB
   RT -- "WebSocket: snapshots, arcs, packets" --> B
   B -- "client messages, REST" --> api
 ```
@@ -67,7 +73,11 @@ Backend (`backend/app/`)
     {py:mod}`~app.sim.comms` and {py:mod}`~app.sim.scheduler`.
   - `services/`: orchestration between the sim, the database and the socket:
     {py:mod}`~app.services.catalog`, {py:mod}`~app.services.sessions`,
-    {py:mod}`~app.services.passes`, {py:mod}`~app.services.comms`, {py:mod}`~app.services.satnogs`.
+    {py:mod}`~app.services.passes`, {py:mod}`~app.services.comms`, {py:mod}`~app.services.satnogs`,
+    {py:mod}`~app.services.sar`.
+  - `sar/`: SAR archive imagery. The AOI grid, passes and tracks, the STAC and token clients, the
+    bounded raster reads, change detection, the file cache and the worker process
+    ([SAR imagery](../imagery/index.md)).
   - `models/`: the pydantic contract ({py:mod}`~app.models.ws`, {py:mod}`~app.models.api`).
   - `packets/`: AX.25 and CCSDS codecs and the packet templates.
   - `data/`: Celestrak and SatNOGS clients, classification and the seed files.
