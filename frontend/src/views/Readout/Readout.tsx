@@ -15,6 +15,7 @@ import type { SatelliteState } from '../../types/ws'
 const km = (m: number) => (m / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 })
 const kmPerS = (mps: number) => (mps / 1000).toFixed(2)
 const deg = (d: number, digits = 1) => d.toFixed(digits)
+import { ArchiveImageryButton } from '../SAR/ImageryPanel'
 const muted = 'text-xs text-gray-500 dark:text-gray-400'
 
 // Below the mask the elevation reads muted. In view it stays neutral: the "in view" status carries
@@ -173,6 +174,11 @@ export function SelectionHeader({ sat }: { sat: SatelliteState }) {
         )}
       </div>
       <AutomationLine noradId={sat.norad_id} />
+      {sat.is_sar_capable && (
+        <div className="mt-1.5">
+          <ArchiveImageryButton noradId={sat.norad_id} />
+        </div>
+      )}
     </div>
   )
 }

@@ -30,6 +30,11 @@ type Events = {
   'filter-on': { filter: 'sar' | 'link-ok' | 'comms' | SatelliteType }
   'sound-on': undefined
   'globe-unavailable': { reason: 'no-webgl' | 'failed' }
+  'sar-search': { result: 'pairs' | 'none' | 'failed' }
+  'sar-compare': { size_km: '5' | '10' | '20'; polarization: 'VV' | 'VH' }
+  'sar-result': { status: 'ready' | 'failed' }
+  'sar-open': undefined
+  'sar-from-satellite': { platform: string }
 } & Record<TimeEvent, undefined>
 
 /** Active time on the page passed this milestone (see EngagementClock). */

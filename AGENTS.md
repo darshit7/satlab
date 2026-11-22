@@ -53,7 +53,7 @@ An end-to-end, real-time **satellite mission control simulator** (portfolio / le
 | ORM / migrations | **SQLAlchemy 2.x** + **Alembic** |
 | Validation / contract | **pydantic v2** |
 | DB (local dev / tests) | **SQLite** (zero setup) |
-| DB (persistent / prod, Phase 2b+) | **PostgreSQL on Neon** via **psycopg 3**; **PostGIS** at Phase 7 (optional **TimescaleDB**) |
+| DB (persistent / prod, Phase 2b+) | **PostgreSQL on Neon** via **psycopg 3**; **PostGIS** at Phase 8 (optional **TimescaleDB**) |
 | Frontend | **React + TypeScript + Vite** |
 | JS package mgr | **pnpm** |
 | 3D globe | **CesiumJS**: `@cesium/engine` (`CesiumWidget`, imperative like the 2D map; no Resium, no Viewer widgets) + `@cesium/core` |
@@ -62,9 +62,9 @@ An end-to-end, real-time **satellite mission control simulator** (portfolio / le
 | Client state | **Zustand** |
 | Styling / design system | **Tailwind CSS v4** + **lucide-react** icons — rules in [design-system.md](design-system.md) |
 | Transport | **WebSocket** (JSON) |
-| SAR access | **STAC** via **pystac-client** |
-| SAR rasters | **rioxarray / rasterio / stackstac** |
-| Change detection v1 | **NumPy / scikit-image** (log-ratio) |
+| SAR access | **STAC** via our own async **httpx** client + Planetary Computer SAS tokens (`app/sar/stac.py`, `token.py`; no pystac-client) |
+| SAR rasters | **rasterio** (bundled GDAL): bounded window reads, reprojection, PNG |
+| Change detection v1 | **NumPy + scipy.ndimage** (Lee filter, log-ratio, Otsu, morphology) |
 | Change detection v2 (opt) | **PyTorch** (Siamese/U-Net) |
 | Runtime | Local-first; two container images on **Azure Container Apps** (Phase 2c) |
 | Lint/format (py) | **ruff** |
@@ -119,7 +119,8 @@ satellite-mission-control/
 │     ├─ data/               # TLE (Celestrak), SatNOGS client, catalog ingestion; seed/ JSON
 │     │                      #   (stations, type rules, link_profiles, subsystem_models,
 │     │                      #   packet_templates)
-│     ├─ sar/                # STAC search/download, change detection
+│     ├─ sar/                # STAC + SAS clients, AOI grid, passes/tracks, bounded raster reads,
+│     │                      #   change detection, rendering, file cache, worker process + queue
 │     └─ services/           # orchestration between sim, db, ws (catalog, sessions, passes,
 │                            #   comms writer, SatNOGS archive)
 │  └─ tests/
@@ -153,7 +154,7 @@ satellite-mission-control/
       │  ├─ Indicators/      # RAG panel + rollup bar
       │  ├─ Comms/           # packet send/receive + animation
       │  ├─ Scheduler/       # command scheduling + alarms
-      │  └─ SAR/             # image compare + change overlay (Phase 7, not built yet)
+      │  └─ SAR/             # Imagery panel, compare dialog (swipe + change heatmap), regions
       └─ components/         # shared UI
 ```
 
@@ -173,7 +174,7 @@ uv run ruff check . && uv run ruff format .
 uv run alembic revision --autogenerate -m "msg"
 uv run alembic upgrade head               # apply migrations (also runs on startup if SATLAB_AUTO_MIGRATE)
 ```
-Runtime data (SQLite DB, Celestrak TLE cache) lives in `backend/var/` (gitignored, disposable).
+Runtime data (SQLite DB, Celestrak TLE cache, SAR crops and images in `var/sar/`) lives in `backend/var/` (gitignored, disposable).
 
 **Postgres (Neon), one branch per stage** — full runbook in [deploy/neon.md](deploy/neon.md).
 - `.env` (dev → `dev` branch): `SATLAB_DATABASE_URL` = least-privilege `satlab_app` on the **pooled** host,
@@ -298,7 +299,7 @@ scripts/smoke.sh http://localhost:8080 http://localhost:8000 http://localhost:80
 ### 8.1 Principles
 - **The operational tables are the record.** `command`, `telemetry_frame`, `alarm` and `pass_window` (later `sar_task`) hold what happened in a session, each row stamped with its sim time. There is no separate event log and no session playback.
 - **SQLite for local dev/tests, Postgres (Neon) for persistence/production — since Phase 2b.** All access via SQLAlchemy 2.x; migrations via Alembic; the URL picks the dialect. Every change must work on both (the opt-in Postgres test run checks this, §5).
-- **Geometry:** store AOI/footprints as **bbox columns + GeoJSON (JSON)**; at Phase 7 enable **PostGIS** on the Neon DB and use real `geometry` columns for spatial queries (SQLite keeps the bbox/JSON fallback).
+- **Geometry:** store AOI/footprints as **bbox columns + GeoJSON (JSON)**; at Phase 8 enable **PostGIS** on the Neon DB and use real `geometry` columns for spatial queries (SQLite keeps the bbox/JSON fallback). Phase 7a needs no spatial query in our DB (STAC searches upstream), so it stays on bbox + GeoJSON (2026-11-22).
 - **Rasters on disk, not in DB.** Store file paths / object-store keys only.
 
 ### 8.2 Entity groups
@@ -437,12 +438,12 @@ CREATE TABLE alarm (
 );
 
 -- ========== SAR ==========
-CREATE TABLE sar_task (
+CREATE TABLE sar_task (                   -- Phase 8 (not built)
     id              INTEGER PRIMARY KEY,
     session_id      INTEGER REFERENCES mission_session(id),
     norad_id        INTEGER REFERENCES satellite(norad_id),
     aoi_bbox        JSON NOT NULL,        -- [minlon,minlat,maxlon,maxlat]
-    aoi_geojson     JSON,                 -- full polygon (PostGIS geometry @P7)
+    aoi_geojson     JSON,                 -- full polygon (PostGIS geometry @P8)
     window_start    TEXT NOT NULL,
     window_end      TEXT NOT NULL,
     predicted_acq   TEXT,                 -- from real acquisition plan
@@ -452,30 +453,58 @@ CREATE TABLE sar_task (
 );
 CREATE INDEX ix_sartask_status ON sar_task(status);
 
+-- Phase 7a. A shared cache of public STAC metadata, one row per scene frame a comparison used
+-- (like `satellite`, filled by any session); unused rows are purged with the retention.
 CREATE TABLE sar_scene (
     id             INTEGER PRIMARY KEY,
-    task_id        INTEGER REFERENCES sar_task(id),
-    source         TEXT NOT NULL,         -- sentinel1 | umbra
-    collection     TEXT NOT NULL,         -- STAC collection id
+    source         TEXT NOT NULL,         -- sentinel1 (umbra: Phase 7b)
+    collection     TEXT NOT NULL,         -- STAC collection id (sentinel-1-rtc)
     stac_scene_id  TEXT NOT NULL,
+    platform       TEXT NOT NULL,         -- normalised: sentinel-1a … sentinel-1d
+    orbit_state    TEXT NOT NULL,         -- ascending | descending
+    relative_orbit INTEGER NOT NULL,      -- with orbit_state, the track
+    polarizations  JSON NOT NULL,         -- ["VH","VV"]
     acquired_at    TEXT NOT NULL,
-    footprint      JSON,                  -- GeoJSON (PostGIS geometry @P7)
-    assets         JSON,                  -- asset hrefs / local paths
-    local_path     TEXT                   -- downloaded raster on disk
+    min_lon_deg REAL NOT NULL, min_lat_deg REAL NOT NULL,
+    max_lon_deg REAL NOT NULL, max_lat_deg REAL NOT NULL,  -- item bbox (PostGIS: Phase 8)
+    footprint      JSON NOT NULL,         -- GeoJSON polygon(s)
+    epsg           INTEGER NOT NULL,      -- the scene's UTM zone
+    assets         JSON NOT NULL,         -- {pol: href}: unsigned, allow-listed
+    fetched_at     TEXT NOT NULL,
+    UNIQUE (collection, stac_scene_id)
 );
-CREATE INDEX ix_scene_stac ON sar_scene(stac_scene_id);
 
-CREATE TABLE change_result (
-    id             INTEGER PRIMARY KEY,
-    task_id        INTEGER REFERENCES sar_task(id),
-    scene_before   INTEGER NOT NULL REFERENCES sar_scene(id),
-    scene_after    INTEGER NOT NULL REFERENCES sar_scene(id),
-    method         TEXT NOT NULL,         -- log_ratio | unet
-    heatmap_path   TEXT,                  -- raster on disk
-    regions        JSON,                  -- flagged bboxes/polygons + scores
-    score          REAL,
-    created_at     TEXT NOT NULL
+-- Phase 7a. A session's before/after comparison (lasts for the page visit; purged with
+-- SATLAB_COMMS_RETENTION_DAYS, rows and files). Image paths derive from id + generation.
+CREATE TABLE sar_comparison (
+    id               INTEGER PRIMARY KEY,
+    session_id       INTEGER NOT NULL REFERENCES mission_session(id),
+    scene_before_id  INTEGER NOT NULL REFERENCES sar_scene(id),  -- best-covering frame
+    scene_after_id   INTEGER NOT NULL REFERENCES sar_scene(id),
+    frames           JSON NOT NULL,       -- {before: [scene ids], after: [...], coverage}
+    status           TEXT NOT NULL,       -- queued|reading|detecting|ready|failed|expired
+    error            TEXT,                -- a closed error code (app.sar.protocol)
+    polarization     TEXT NOT NULL,       -- VV | VH
+    aoi_lat_deg REAL NOT NULL, aoi_lon_deg REAL NOT NULL, aoi_size_km REAL NOT NULL,
+    min_lon_deg REAL NOT NULL, min_lat_deg REAL NOT NULL,
+    max_lon_deg REAL NOT NULL, max_lat_deg REAL NOT NULL,
+    aoi_geojson      JSON NOT NULL,       -- the exact UTM square (PostGIS geometry @P8)
+    grid             JSON NOT NULL,       -- {epsg, x_min_m, y_max_m, resolution_m, width, height}
+    requested_before DATE NOT NULL,
+    requested_after  DATE NOT NULL,
+    method           TEXT NOT NULL,       -- log_ratio
+    params_version   INTEGER NOT NULL,    -- of seed/sar_change_detection.json
+    generation       INTEGER NOT NULL DEFAULT 1,  -- bumped by recompute
+    threshold_db     REAL,                -- applied: max(Otsu, floor)
+    score            REAL,                -- changed fraction of valid pixels
+    stats            JSON,                -- coverage, otsu_db, areas, widespread, timings
+    regions          JSON,                -- ≤ 50 flagged regions
+    sim_time         TEXT NOT NULL,
+    created_at       TEXT NOT NULL,
+    finished_at      TEXT
 );
+CREATE INDEX ix_sar_comparison_session ON sar_comparison(session_id, id);
+CREATE INDEX ix_sar_comparison_status ON sar_comparison(status);
 ```
 
 ### 8.4 SQLite ↔ Postgres notes
@@ -486,7 +515,7 @@ Already handled (Phase 2b):
 
 Still to do, when the feature arrives:
 - `JSON` → `JSONB` on Postgres; add GIN indexes where you query inside payloads.
-- Phase 7: `aoi_geojson` / `footprint` → **PostGIS `geometry(Polygon, 4326)`**; add GiST indexes; replace bbox filtering with `ST_Intersects`.
+- Phase 8 (moved from 7, 2026-11-22): `aoi_geojson` / `footprint` → **PostGIS `geometry(Polygon, 4326)`**; add GiST indexes; replace bbox filtering with `ST_Intersects`. The extension goes on each Neon branch (`dev`, `test`, `production`), and the per-test schemas need `public` on their search path.
 - Deferred (was Phase 6c, 2026-11-21): `telemetry_frame` as a **TimescaleDB hypertable** if volume warrants (Neon ships only the Apache-2 TimescaleDB feature set — verify then).
 - Keep the ORM dialect-agnostic; gate Postgres-only types behind the configured dialect so SQLite dev still works.
 
@@ -498,7 +527,7 @@ Still to do, when the feature arrives:
 
 Each phase is a **vertical slice** (backend + WebSocket + UI) that runs on its own. Mark the current phase here as you go.
 
-> **Current phase: _Phase 7 — SAR archive explore_, not started.** Phases 1–6b are done and deployed, the documentation site too (PR #16). 6c (TimescaleDB) is deferred (2026-11-21, §14).
+> **Current phase: _Phase 7a — SAR archive explore (Sentinel-1 RTC)_, built on `dev`.** Phases 1–6b are done and deployed, the documentation site too (PR #16). 6c (TimescaleDB) is deferred (2026-11-21, §14). Phase 7b (Umbra) comes next.
 >
 > Phase numbers are for this plan and the docs only: the UI never shows "Phase N" (`frontend/src/lib/copy.test.ts` guards it).
 
@@ -515,8 +544,10 @@ Each phase is a **vertical slice** (backend + WebSocket + UI) that runs on its o
   - **6a — Globe & map.** Globe look pass (muted, token-toned: atmosphere and Sun-driven shading, RAG-coloured glowing orbit with AOS/LOS marks, dimmed tracked orbits and labels, names on hover, station icon, selection halo, translucent faded cones); the selection's footprint and day/night shading on the globe and the 2D map.
   - **6b — Command sounds and contact Doppler.** Sound cues for command traffic (a chirp up, a chime when the answer comes back, a bonk when it doesn't); the contact's downlink frequency and Doppler shift on the Communications card, from sourced frequencies. (A continuous Doppler tone was built and dropped as tiring, §14.)
   - **6c — TimescaleDB (deferred, not built).** `telemetry_frame` as a hypertable on Postgres where the extension exists (Apache-2 feature set on Neon); storage only. Taken up later only if it's needed.
-- **Phase 7 — SAR archive explore (Flow 1).** STAC search (Sentinel-1 RTC / Umbra) for AOI + two dates; swipe compare; v1 log-ratio change detection; flagged regions. **Enable PostGIS on the existing Neon DB** (geometry columns + GiST). DB: `sar_scene`, `change_result`.
-- **Phase 8 — SAR mission tasking (Flow 2).** Simulated tasking over the real acquisition plan; sim states tasked→acquiring→downlink→processing; STAC polling; "waiting for real data" gate; unlock compare when the real scene lands. DB: `sar_task`.
+- **Phase 7 — SAR archive explore (Flow 1)**, in two parts (2026-11-22):
+  - **7a — Sentinel-1 RTC.** STAC search on Microsoft Planetary Computer for an AOI + two dates; passes grouped by track, the same-track pair closest to both dates proposed; bounded window reads in a worker process; v1 log-ratio change detection; swipe compare, change heatmap, flagged regions on the dialog, map and globe. DB: `sar_scene`, `sar_comparison`. No PostGIS (moved to Phase 8).
+  - **7b — Umbra (not built).** A seeded list of featured Umbra Open Data sites (design doc open question 4) on the same compare engine; Umbra has no search API (a static catalog by date, site folders listed over S3), and its spotlight geometry changes between collects, so its change maps need care.
+- **Phase 8 — SAR mission tasking (Flow 2).** Simulated tasking over the real acquisition plan; sim states tasked→acquiring→downlink→processing; STAC polling; "waiting for real data" gate; unlock compare when the real scene lands. **Enable PostGIS on the Neon DB** (geometry columns + GiST, `ST_Intersects`; moved from Phase 7, 2026-11-22). DB: `sar_task`.
 
 **Backlog (not scheduled).** Known work to pick up later. It isn't part of any phase until it's scheduled.
 
@@ -536,7 +567,7 @@ Each phase is a **vertical slice** (backend + WebSocket + UI) that runs on its o
 | Space-Track | Authoritative TLEs | Needs account → `.env`. |
 | SatNOGS (Network/DB API) | Real decoded telemetry; real stations | Archived observations, not a live station feed. DB `/api/telemetry/` needs an account token (401 without; `SATLAB_SATNOGS_API_TOKEN`); Network `/api/observations/?norad_cat_id=` is public. Both rate-limit hard (429 after ~20 quick requests). |
 | Copernicus / Sentinel-1 | Real C-band SAR | Final constellation Sentinel-1C+1D (2026), ~6-day revisit. |
-| Microsoft Planetary Computer | STAC: `sentinel-1-rtc`, `sentinel-1-grd` | RTC = analysis-ready; **assets require `planetary_computer.sign`**. |
+| Microsoft Planetary Computer | STAC: `sentinel-1-rtc` | RTC = analysis-ready γ⁰, 10 m, CC BY 4.0. Assets are read with an **anonymous SAS token** from `/api/sas/v1/token/<collection>` (~45 min; no account since 2024; a subscription key only relaxes rate limits). Platform names mix cases (`SENTINEL-1A`, `sentinel-1d`). |
 | Umbra Open Data (AWS) | Very high-res spotlight SAR time series | STAC catalog; great for change demos. |
 
 Sentinel-1 publishes its acquisition plan as KML — use it to compute the **real** next overpass for the Phase 8 tasking gate.
@@ -590,9 +621,9 @@ Write every change for that public deploy.
 ### 12.4 External data is hostile input
 - **Parse defensively, never execute.** TLE/OMM text, STAC JSON, SatNOGS frames and acquisition-plan KML are data. Validate structure (checksums, required fields, ranges) and skip bad records, as `parse_tle_text` does; don't crash the ingest on them.
 - **XML (Sentinel-1 KML, Phase 8) is parsed with `defusedxml`**, never the stdlib `xml.etree`/`minidom` directly. That blocks entity-expansion and XXE attacks.
-- **Network fetches have timeouts, size caps and an allow-list.** Use one shared `httpx.AsyncClient` with timeouts. Only fetch from configured hosts (Celestrak, SatNOGS, STAC/Planetary Computer, Umbra/AWS). STAC asset `href`s must match the allowed hosts before download; that's the SSRF guard. Stream large downloads to disk with a byte cap; never read an unbounded body into memory.
+- **Network fetches have timeouts, size caps and an allow-list.** Use one shared `httpx.AsyncClient` with timeouts; `app/data/http.py` holds the shared checks (https on an allow-listed host, no redirects, a byte cap, generic errors). Only fetch from configured hosts (Celestrak, SatNOGS, STAC/Planetary Computer, Umbra/AWS). STAC asset `href`s must match the allowed hosts before download; that's the SSRF guard. Stream large downloads to disk with a byte cap; never read an unbounded body into memory.
 - **Binary decoders bounds-check every length field** (AX.25/CCSDS in Phase 4). A declared length is checked against the bytes actually present and a protocol maximum before slicing or looping.
-- **Rasters (Phase 7+):** open with rasterio/GDAL only from our own storage directory. Check dimensions and band count against limits before reading pixels, and read windows rather than whole scenes.
+- **Rasters (Phase 7+; amended 2026-11-22):** GDAL may read **bounded windows** remotely, only from paths the server builds itself: `/vsiaz/<container>/<blob>` on the allow-listed Planetary Computer storage account, with the SAS token passed only as a GDAL config option, never in the path, logs, the DB or anything shown to a client. GTiff driver only. Dimensions, band count, dtype, CRS, pixel size, tiling and the source window size are checked before any pixel is read. The crop is saved under the storage root, and everything after that opens from storage. Remote reads aren't httpx downloads: their byte bound is the checked window plus GDAL's HTTP timeouts. They run in a separate worker process with a scrubbed environment and redacted logs, and report failures as fixed error codes.
 - **Never unpickle untrusted data:** `numpy.load(..., allow_pickle=False)`; `torch.load(..., weights_only=True)`, and only for model files we produced. No `eval`/`exec`/`yaml.load` (use `yaml.safe_load`) on anything.
 
 ### 12.5 Files and paths
@@ -623,7 +654,7 @@ Write every change for that public deploy.
 - **The docs site loads nothing from a CDN either.** Mermaid and the fonts are vendored from the frontend lockfile (`pnpm docs:vendor`), the intersphinx inventories are vendored (`docs/_intersphinx/`), and MyST's math syntax stays off (it would load MathJax from a CDN). The docs' Python dependencies are the backend's `docs` group in `uv.lock`.
 
 ### 12.9 Deploy-time (in force since Phase 2c)
-- **Public without login is accepted for now** (2026-10-16), because a visitor can only drive their own simulated session: per-session capability tokens, the WS `Origin` check, per-connection rate and size limits, a cap on concurrent sessions (`SATLAB_MAX_ACTIVE_SESSIONS`), a global Celestrak budget and nginx per-IP limits bound what one client can do. **Authentication is required before any feature that writes shared state, stores user data or needs per-user ownership** (accounts, saved missions, SAR tasking quotas).
+- **Public without login is accepted for now** (2026-10-16), because a visitor can only drive their own simulated session: per-session capability tokens, the WS `Origin` check, per-connection rate and size limits, a cap on concurrent sessions (`SATLAB_MAX_ACTIVE_SESSIONS`), a global Celestrak budget and nginx per-IP limits bound what one client can do. **Authentication is required before any feature that writes shared state, stores user data or needs per-user ownership** (accounts, saved missions, SAR tasking quotas). SAR archive explore (Phase 7a, 2026-11-22) stays within this: its comparisons belong to the session (token-checked, gone with the visit, purged with the retention), and the only shared writes are a cache of public scene metadata and window crops, as remote Celestrak searches already fill `satellite`.
 - TLS everywhere (`wss://`, `https://`): ACA terminates TLS with a managed certificate; the API is internal-only.
 - Security headers (CSP, `X-Content-Type-Options`, `Referrer-Policy`, `frame-ancestors`) come from nginx; FastAPI's `/docs`, `/redoc` and `/openapi.json` are off in production (`SATLAB_DOCS_ENABLED=false`).
 - Containers run as a non-root user with no secrets baked into images; secrets come from the platform's secret store (ACA secrets, GitHub environment secrets).
@@ -633,7 +664,9 @@ Write every change for that public deploy.
 - **This software never transmits RF.** Uplink is simulated (§1). Never add code that keys a real transmitter or SDR, or sends commands to a real spacecraft or ground-station network: that is illegal without a licence and authorisation. Reading public data (SatNOGS archives, STAC) is fine; writing to those services is not part of this project.
 
 ### 12.11 Known gaps (current code vs these rules)
-None open: the gaps listed here were closed before the Phase 2c public deploy (2026-10-16). Record new ones as they're found, and close them when touching that code.
+Record new ones as they're found, and close them when touching that code.
+
+- **One shared `httpx.AsyncClient`** (§12.4, found 2026-11-22): Celestrak (`data/celestrak.py`) and SatNOGS (`data/satnogs.py`) each own a client and their own capped-streaming loop. SAR uses the shared checks in `app/data/http.py`. Move the other two onto it when next touching them.
 
 When you close a gap, delete its line here.
 <!-- docs:security:end -->
@@ -751,4 +784,29 @@ When you close a gap, delete its line here.
   - **Settings bounds:** `SATLAB_CATALOG_MAX_AGE_HOURS` ≥ 2, `SATLAB_CATALOG_REFRESH_CHECK_MINUTES` ≥ 5.
   - **Status.** `CatalogStatus.max_age_hours` (additive). The Catalog panel reads "Celestrak “active”, fetched 3 h ago · refreshed every 12 h" (or "refreshing…"), with the last error beside a catalog that still works (`lib/catalog.ts`).
   - **Still open** (§9 backlog). Celestrak ran out of 5-digit catalog numbers on 2026-07-11, and newer objects aren't published as TLEs, so they're missing from the catalog. Moving ingest to OMM (CSV or JSON) is a separate change.
+- **Phase 7 split; PostGIS to Phase 8** (2026-11-22, decided with the user). Phase 7 ships as **7a** (Sentinel-1 RTC on Microsoft Planetary Computer) and **7b** (Umbra featured sites, not built). Umbra has no search API (a static STAC catalog by date that ends in 2025, plus site folders listed over S3), and its spotlight collects change geometry between dates, so it gets its own step. **PostGIS moves to Phase 8**: 7a searches upstream (STAC), so no query in our DB needs geometry yet; bbox columns + GeoJSON work on both dialects. Libraries: **rasterio + scipy only**, no pystac-client, planetary-computer, rioxarray, stackstac, scikit-image or Pillow. STAC and SAS go through our own httpx client (timeouts, byte caps, allow-list), and Otsu is a few lines of numpy.
+- **Phase 7a — access and the amended raster rule** (2026-11-22). Verified live before building: `sentinel-1-rtc` holds Sentinel-1A/B/C/D scenes through November 2026, as float32 linear γ⁰ COGs at 10 m in the scene's UTM zone, not aligned to any grid, ~2.2 GB per band. Anonymous SAS tokens (~45 min) read them, although the collection still says `msft:requires_account`; MPC dropped accounts with the Hub's retirement. Whole scenes can't be downloaded, so §12.4's raster rule is **amended**: GDAL reads bounded windows from `/vsiaz/<container>/<blob>` paths the server builds (`app/sar/assets.py`), with the token only in GDAL options (`app/sar/protocol.py` `gdal_options`), the GTiff driver only, and every check before a pixel is read (`app/sar/raster.py`). A spike confirmed `/vsiaz/` with a container SAS on rasterio 1.5.2 / GDAL 3.12.2, and confirmed that errors carry neither the path nor the token. Pass frames are consecutive scenes seconds apart, and one AOI straddled two in the spike, so a pass is read as every frame touching the area, mosaicked (`app/sar/pairs.py`).
+- **Phase 7a — compute** (2026-11-22). The API stays at 0.5 vCPU / 1 GiB. Raster reads, detection and rendering run in a **separate niced process spawned per comparison** (`app/sar/jobs.py`, `worker.py`), one at a time behind a FIFO cap. The API process never imports rasterio or scipy. A job is killed past `SATLAB_SAR_JOB_TIMEOUT_S`, and a crash fails only that job. On Valencia (10 km, real data, WSL): 19.5 s per comparison (10.5 s reading, 0.7 s detecting, 0.6 s rendering, the rest spawn and token), the worker under 100 MB RSS, and no slow-tick warnings.
+- **Phase 7a — contract** (2026-11-22). REST only; the WebSocket contract is unchanged. `GET /api/sar/source` (terms, attribution, method, limits, the catalogued Sentinel-1 satellites). Session-scoped routes check `X-Session-Token`, and an unknown session and a foreign comparison get the same 404:
+  - `GET …/sar/scenes` (AOI centre + 5/10/20 km, two dates, VV/VH, optional platform): passes by track, the proposed pair;
+  - `POST …/sar/comparisons` (202; STAC ids only, never URLs);
+  - `GET …/sar/comparisons` (the client polls it every 2 s while any runs);
+  - `GET …/{id}`, `POST …/{id}/recompute`, `DELETE …/{id}`;
+  - `GET …/{id}/images/{before|after|change}.png` (`private, no-store`, `nosniff`).
+  Search and compare need a **live** session, so per-session budgets can't be dodged by opening sessions; global budgets bound the rest (`SATLAB_SAR_*`). Errors are fixed messages (`app/sar/protocol.py` `ERROR_MESSAGES`). TS mirror in `frontend/src/types/api.ts`.
+- **Phase 7a — persistence and storage** (2026-11-22). Migration `8f3a6c2d9b14` (expand-only): `sar_scene` (a shared cache of public STAC metadata, written only when a comparison uses a scene) and `sar_comparison`. It replaces the DDL's `change_result`: a row exists from the request on, with a status, an error code and a `generation`. It adds `session_id`, AOI bbox + GeoJSON, the grid, `frames` (all frames of each pass), `params_version` and `sim_time`, and drops `heatmap_path`/`local_path` (paths derive from ids, §12.5). `task_id` comes with Phase 8. Files live under `SATLAB_SAR_STORAGE_DIR` as an **ephemeral cache** (`app/sar/storage.py`): crops shared by area, images per run, a byte cap with LRU eviction. A comparison whose images are gone reads as **expired**, and Recompute runs a new generation. Comparisons last for the page visit (the token is in memory) and are purged with the session's comms rows (`SATLAB_COMMS_RETENTION_DAYS`); unused scenes are purged too. Rows left running by a restart become `failed` ("interrupted").
+- **Phase 7a — change detection v1** (2026-11-22). `app/sar/detect.py`: Lee filter (7 × 7, ENL 4.4) → log-ratio in dB → Otsu on |Δ| (the middle of a flat optimum), floored at 3 dB → opening + closing → 8-connected regions ≥ 5000 m², ranked by area × |mean Δ|, at most 50. Parameters are versioned seed data, `app/data/seed/sar_change_detection.json`. Images (`app/sar/render.py`): before and after use one fixed dB stretch per polarization; `change.png` is a band of codes the browser colours from the design tokens. Checked on the 2024 Valencia flood: rel. orbit 110 descending, 20 Oct → 1 Nov, 3.7 km² darker. A pre-flood control on the same track (26 Sep → 8 Oct) had Otsu at 1.7 dB, so the floor held; it flagged 1.4 % against 4.2 %, mostly the harvested rice fields of the Albufera. That agricultural false positive is named in the docs and the UI copy.
+- **Phase 7a — UI** (2026-11-22). The mission bar gains a fifth button, **Imagery** (`Images`, with a count of comparisons in progress). It opens the **Radar imagery** panel (`views/SAR/ImageryPanel.tsx`):
+  - an area centred on the station by default, moved by a map or globe click while the panel is open (the station panel's rule), or typed; 5, 10 or 20 km;
+  - two `DateField`s (a new primitive: the native date input, styled) and VV/VH;
+  - **Find scenes** → a track `Select` with the proposal preselected, `Select`s for each pass, and the satellites linked to the catalog;
+  - **Compare**, then this visit's comparisons with their status, Open, Recompute and remove.
+
+  The **compare dialog** (`CompareDialog.tsx`, 72rem):
+  - a canvas swipe viewer (`SwipeViewer.tsx`) with a keyboard `role="slider"` divider, wheel zoom and pan, and Swipe/Before/After;
+  - the change heatmap at three opacities;
+  - numbered region boxes, solid for brighter and dashed for darker;
+  - the pass summary and the region list. Selecting a region frames it, and "Show on map" flies the 2D map or the globe there.
+
+  The 2D map and the globe draw the area (dashed while a draft) and the shown comparison's regions. A Sentinel-1 satellite's header gets **Archive imagery**, which filters the panel to it. Colours: a new functional pair for the sign of a change, fuchsia (increase) and cyan (decrease), 700/400 by theme and 400 on the radar image (design-system.md §3). It is never the only cue (box style, arrow and word). Store `store/sar.ts`; presentation helpers `lib/sar.ts`. Analytics: `sar-search`, `sar-compare`, `sar-result`, `sar-open`, `sar-from-satellite` (no coordinates, dates or ids). Checked in headless Chromium in both themes on the Valencia pair: the comparison is ready in about 25 s, no console errors.
 <!-- docs:decisions:end -->

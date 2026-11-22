@@ -44,6 +44,19 @@ statuses and alarms, and the user's tracked set, selection and filters.
   them and merges them with that snapshot in one update, so React renders once per tick.
 - Filter changes are debounced before they go to the server.
 
+**The SAR store** (`src/store/sar.ts`) is the one store fed by REST instead of the socket. SAR
+searches and comparisons run outside the simulation loop
+([archive explore](../imagery/archive-explore.md)). It holds the Imagery panel's form, the last
+search, and this session's comparisons:
+
+- It polls `GET …/sar/comparisons` every 2 s while one is queued or running, and stops when none is.
+- It resets when the session changes, because comparisons belong to a session.
+- The form (area, dates, polarization) is a remembered preference (`satlab.imagery`, sanitized on
+  load); results are not remembered.
+- Images are fetched with the session token (an `<img>` can't send it) and decoded to bitmaps
+  without colour management. `change.png` holds codes, which `lib/sar.ts` colours from the design
+  tokens.
+
 **The socket** (`src/ws/sessionSocket.ts`):
 
 - Opens `/satlab/ws/sessions/{id}`, sends `auth` first and reconnects with exponential backoff
@@ -92,8 +105,8 @@ builds only, and only when a website ID is configured.
 
 ## Where in the code
 
-- `frontend/src/store/mission.ts`, `store/ui.ts`: the stores.
+- `frontend/src/store/mission.ts`, `store/ui.ts`, `store/sar.ts`: the stores.
 - `frontend/src/ws/sessionSocket.ts`, `api/client.ts`: transport.
 - `frontend/src/lib/`: `time.ts` (sim-time estimate), `geo.ts` and `sky.ts` (projection and
-  tweening), `rag.ts`, `comms.ts` and `catalog.ts` (presentation of server state).
+  tweening), `rag.ts`, `comms.ts`, `catalog.ts` and `sar.ts` (presentation of server state).
 - `frontend/src/views/`: one folder per part of the screen.

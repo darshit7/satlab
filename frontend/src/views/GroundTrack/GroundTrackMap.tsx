@@ -25,6 +25,8 @@ import { estimateSimMs } from '../../lib/time'
 import { token } from '../../lib/tokens'
 import { useMission } from '../../store/mission'
 import { useUi } from '../../store/ui'
+import { useSar } from '../../store/sar'
+import { aoiRing, aoiToGeoJSON, regionsToGeoJSON } from '../../lib/sar'
 import type { GroundTrackMessage, Snapshot } from '../../types/ws'
 
 // MapLibre resolves its worker dynamically, which Vite can't see; hand it the bundled URL.
@@ -56,6 +58,10 @@ function palette(theme: ResolvedTheme) {
     night: token('gray-900'),
     nightOpacity: light ? 0.12 : 0.5,
     terminator: token(light ? 'gray-400' : 'gray-500'),
+    /** SAR change: the functional pair (700 on light, 400 on dark), and ink for the area. */
+    sarIncrease: token(light ? 'fuchsia-700' : 'fuchsia-400'),
+    sarDecrease: token(light ? 'cyan-700' : 'cyan-400'),
+    ink: token(light ? 'gray-900' : 'gray-100'),
   }
 }
 type Palette = ReturnType<typeof palette>
@@ -103,7 +109,7 @@ function loadStyle(theme: ResolvedTheme): Promise<LoadedStyle> {
 }
 
 function addLayers(map: MapLibreMap, labels: boolean, c: Palette) {
-  for (const id of ['night', 'terminator', 'tracks', 'visible', 'station', 'draft', 'footprint', 'sats']) {
+  for (const id of ['night', 'terminator', 'tracks', 'visible', 'station', 'draft', 'footprint', 'sats', 'sar-aoi', 'sar-regions']) {
     map.addSource(id, { type: 'geojson', data: emptyFC() })
   }
   // Night from the server's Sun, under everything the operator works with.
@@ -153,6 +159,49 @@ function addLayers(map: MapLibreMap, labels: boolean, c: Palette) {
     type: 'circle',
     source: 'station',
     paint: { 'circle-radius': 5, 'circle-color': c.station, 'circle-stroke-color': c.ground, 'circle-stroke-width': 2 },
+  })
+  // SAR imagery: the area (dashed while it is a draft) and a comparison's flagged regions.
+  map.addLayer({ id: 'sar-aoi-fill', type: 'fill', source: 'sar-aoi', paint: { 'fill-color': c.ink, 'fill-opacity': 0.04 } })
+  map.addLayer({
+    id: 'sar-aoi-line',
+    type: 'line',
+    source: 'sar-aoi',
+    filter: ['!', ['get', 'draft']],
+    paint: { 'line-color': c.ink, 'line-width': 1.5 },
+  })
+  map.addLayer({
+    id: 'sar-aoi-draft',
+    type: 'line',
+    source: 'sar-aoi',
+    filter: ['get', 'draft'],
+    paint: { 'line-color': c.ink, 'line-width': 1.5, 'line-dasharray': [2, 2] },
+  })
+  map.addLayer({
+    id: 'sar-regions-fill',
+    type: 'fill',
+    source: 'sar-regions',
+    paint: { 'fill-color': ['match', ['get', 'sign'], 'increase', c.sarIncrease, c.sarDecrease], 'fill-opacity': 0.2 },
+  })
+  map.addLayer({
+    id: 'sar-increase-line',
+    type: 'line',
+    source: 'sar-regions',
+    filter: ['==', ['get', 'sign'], 'increase'],
+    paint: { 'line-color': c.sarIncrease, 'line-width': 1.5 },
+  })
+  map.addLayer({
+    id: 'sar-decrease-line',
+    type: 'line',
+    source: 'sar-regions',
+    filter: ['==', ['get', 'sign'], 'decrease'],
+    paint: { 'line-color': c.sarDecrease, 'line-width': 1.5, 'line-dasharray': [2, 1.5] },
+  })
+  map.addLayer({
+    id: 'sar-selected-line',
+    type: 'line',
+    source: 'sar-regions',
+    filter: ['get', 'selected'],
+    paint: { 'line-color': c.ink, 'line-width': 3 },
   })
   // The selection's footprint: where on the ground it is above the mask (the server's radius).
   map.addLayer({
@@ -353,9 +402,44 @@ export function GroundTrackMap() {
       // bottom-right: the 2D/3D toggle holds the top-right corner
       m.addControl(new NavigationControl({ showCompass: false }), 'bottom-right')
 
+      // SAR imagery: the area while the Imagery panel is open or a comparison is shown; its regions.
+      const renderSar = () => {
+        const { aoi, search, comparisons, shownId, selectedRegion } = useSar.getState()
+        const { panel, compareId } = useUi.getState()
+        const shown = comparisons.find((c) => c.id === (compareId ?? shownId)) ?? null
+        const showArea = panel === 'imagery' || shown !== null
+        let area: ReturnType<typeof aoiRing> | null = null
+        if (showArea && shown) area = { ring: shown.aoi.polygon, draft: false }
+        else if (showArea && aoi) {
+          const searched = search.data && search.data.aoi.lat_deg === aoi.lat_deg && search.data.aoi.lon_deg === aoi.lon_deg && search.data.aoi.size_km === aoi.size_km
+          area = aoiRing(aoi, searched ? search.data!.aoi.polygon : null)
+        }
+        void source('sar-aoi')?.setData(aoiToGeoJSON(area?.ring ?? null, area?.draft ?? false))
+        void source('sar-regions')?.setData(shown?.status === 'ready' ? regionsToGeoJSON(shown.regions ?? [], selectedRegion) : emptyFC())
+      }
+      let focusSeq = 0
+      unsubscribers.push(
+        useSar.subscribe((s) => {
+          renderSar()
+          if (s.focus && s.focus.seq !== focusSeq) {
+            focusSeq = s.focus.seq
+            const [w, south, e, n] = s.focus.bounds
+            m.fitBounds(
+              [
+                [w, south],
+                [e, n],
+              ],
+              { padding: 80, maxZoom: 14, duration: 600 },
+            )
+          }
+        }),
+        useUi.subscribe((s, prev) => (s.panel !== prev.panel || s.compareId !== prev.compareId) && renderSar()),
+      )
+
       // Fires for the first style and after every theme switch.
       m.on('style.load', () => {
         addLayers(m, labels, palette(theme))
+        renderSar()
         renderTracks()
         renderStation()
         renderedSnapshot = null // the new style's sources start empty
@@ -382,7 +466,8 @@ export function GroundTrackMap() {
       )
       // While the station panel is open a click places the station: say so with the cursor.
       const placeCursor = () => {
-        m.getCanvasContainer().style.cursor = useUi.getState().panel === 'station' ? 'crosshair' : ''
+        const panel = useUi.getState().panel
+        m.getCanvasContainer().style.cursor = panel === 'station' || panel === 'imagery' ? 'crosshair' : ''
       }
       placeCursor()
       unsubscribers.push(useUi.subscribe((s, prev) => s.panel !== prev.panel && placeCursor()))
@@ -405,6 +490,9 @@ export function GroundTrackMap() {
         } else if (useUi.getState().panel === 'station') {
           // empty ground places the station, only while its panel is open
           setDraft({ lat_deg: e.lngLat.lat, lon_deg: wrapLon(e.lngLat.lng), alt_m: draft?.alt_m ?? 0 })
+        } else if (useUi.getState().panel === 'imagery') {
+          // empty ground moves the SAR area, only while the Imagery panel is open
+          useSar.getState().setAoiCentre(e.lngLat.lat, wrapLon(e.lngLat.lng))
         }
       })
     })
