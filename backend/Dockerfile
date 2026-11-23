@@ -17,6 +17,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
 FROM ${PYTHON_IMAGE} AS runtime
+# rasterio's bundled GDAL links the system libexpat, which the slim image doesn't ship (the SAR
+# worker would fail to import rasterio; the API itself never imports it).
+RUN apt-get update && apt-get install -y --no-install-recommends libexpat1 \
+    && rm -rf /var/lib/apt/lists/*
 RUN groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app
 WORKDIR /app
@@ -31,6 +35,8 @@ ENV PATH=/app/.venv/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     SATLAB_AUTO_MIGRATE=false
+# Fail the build, not a comparison in production, if a native library of the SAR worker is missing.
+RUN python -c "import rasterio, rasterio.warp, scipy.ndimage; print('gdal', rasterio.__gdal_version__)"
 USER app
 EXPOSE 8000
 # 0.0.0.0 inside the container only; in Azure the API has internal ingress (reachable from the

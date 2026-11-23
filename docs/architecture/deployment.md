@@ -19,7 +19,10 @@ satlab-api
   (spawned, niced, one at a time), and its crops and images sit in `/app/var/sar`, the container's
   ephemeral disk: a restart or redeploy empties it, and comparisons then read as expired until
   recomputed. `SATLAB_SAR_STORAGE_MAX_BYTES` (1 GiB by default) keeps it within that disk.
-  rasterio (with its bundled GDAL) and scipy make the API image about 200 MB larger.
+  rasterio (with its bundled GDAL) and scipy make the API image about 200 MB larger. GDAL links
+  the system `libexpat`, which the slim Python base image doesn't ship, so both the API image and
+  the web image's docs stage install `libexpat1`. The API image's build imports rasterio once, so
+  a missing native library fails the build rather than a comparison in production.
 
 The database is Postgres on Neon (see [persistence](persistence.md)).
 

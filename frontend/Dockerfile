@@ -36,6 +36,10 @@ RUN node scripts/docs-vendor.mjs /vendor
 # Strict: any warning fails the image, as it fails CI's docs job.
 FROM python:3.12-slim-trixie AS docs
 COPY --from=uv /uv /usr/local/bin/uv
+# rasterio's bundled GDAL links the system libexpat, which the slim image doesn't ship; autodoc
+# imports app.sar.raster and app.sar.render, so the docs need it too.
+RUN apt-get update && apt-get install -y --no-install-recommends libexpat1 \
+    && rm -rf /var/lib/apt/lists/*
 # The context is an allow-list, so the repo files the docs link to on GitHub (workflows, Dockerfiles,
 # LICENSE) aren't here: skip that existence check (CI's docs job runs it on the full checkout).
 ENV UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never DOCS_CHECK_REPO_LINKS=0
