@@ -55,6 +55,13 @@
   --color-amber-400: #fbbf24;
   --color-amber-700: #b45309;
 
+  /* functional: SAR backscatter change, only in the imagery views. Increase = fuchsia,
+     decrease = cyan; 700 for text on light, 400 on dark and on the radar image. */
+  --color-fuchsia-400: #e879f9;
+  --color-fuchsia-700: #a21caf;
+  --color-cyan-400: #22d3ee;
+  --color-cyan-700: #0e7490;
+
   --font-sans: 'Nunito Variable', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
   --font-greeting: 'Playpen Sans', 'Nunito Variable', system-ui, sans-serif;

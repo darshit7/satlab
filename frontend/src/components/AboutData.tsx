@@ -46,6 +46,14 @@ export function AboutData() {
           and the link, and sends them unless one is red. The schedule, the check and the alarms are simulated, and
           nothing is transmitted.
         </p>
+        <p>
+          <span className="font-semibold text-gray-900 dark:text-gray-100">Archive imagery. </span>
+          Real Sentinel-1 radar scenes (terrain-corrected backscatter, 10 m) from the public archive on Microsoft Planetary Computer. Nothing is
+          captured on request: you compare what the satellites already recorded, on one orbit track so both dates see the ground the same way.
+          Change flags come from a simple statistical test (log-ratio with an Otsu threshold and a 3 dB floor). They mark where the radar return
+          changed, not what changed: wet soil, crops, harvest or wind on water change it too. Contains modified Copernicus Sentinel data; RTC
+          processing by Catalyst; CC BY 4.0.
+        </p>
       </div>
     </InfoPopover>
   )

@@ -4,8 +4,8 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
-from typing import Annotated
+from datetime import UTC, date, datetime
+from typing import Annotated, Literal
 
 from alembic import command
 from alembic.config import Config as AlembicConfig
@@ -20,6 +20,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import AwareDatetime, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -43,6 +44,12 @@ from app.models.api import (
     MissionSessionOut,
     PacketTemplatesOut,
     PassPrediction,
+    SarAoiIn,
+    SarComparisonCreate,
+    SarComparisonList,
+    SarComparisonOut,
+    SarSearchOut,
+    SarSourceOut,
     SatelliteCommsOut,
     SatelliteOut,
     SatelliteSearchResult,
@@ -60,6 +67,7 @@ from app.services.catalog import CatalogService
 from app.services.comms import CommsWriter
 from app.services.passes import NotFound, PassService
 from app.services.ratelimit import TokenBucket
+from app.services.sar import SarError, SarService
 from app.services.satnogs import SatnogsArchive
 from app.services.sessions import (
     ServerBusy,
@@ -118,14 +126,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.writer = writer
     app.state.sessions = sessions
     app.state.passes = PassService(settings, session_factory, catalog, sessions)
+    sar = SarService(settings, session_factory, catalog, sessions)
+    app.state.sar = sar
     # background: never block startup or the sim loop
     catalog.start()
     archive.start()
     writer.start()
+    await sar.start()
     try:
         yield
     finally:
         await sessions.shutdown()
+        await sar.stop()
         await writer.stop()
         await archive.stop()
         await catalog.stop()
@@ -164,6 +176,11 @@ def get_sessions(request: Request) -> SessionManager:
     return request.app.state.sessions
 
 
+def get_sar(request: Request) -> SarService:
+    """FastAPI dependency: the process's SAR imagery service."""
+    return request.app.state.sar
+
+
 def get_passes(request: Request) -> PassService:
     """FastAPI dependency: the process's pass-prediction service."""
     return request.app.state.passes
@@ -172,6 +189,7 @@ def get_passes(request: Request) -> PassService:
 Catalog = Annotated[CatalogService, Depends(get_catalog)]
 Sessions = Annotated[SessionManager, Depends(get_sessions)]
 Passes = Annotated[PassService, Depends(get_passes)]
+Sar = Annotated[SarService, Depends(get_sar)]
 
 
 @app.get("/api/health")
@@ -418,6 +436,152 @@ async def predict_passes(
         return await passes.predict(session_id, norad_id, start, hours)
     except NotFound as exc:
         raise HTTPException(404, str(exc)) from None
+
+
+# ---------- SAR imagery ----------
+
+
+def _sar_error(exc: SarError) -> HTTPException:
+    headers = (
+        {"Retry-After": str(int(max(exc.retry_after_s, 1)))}
+        if exc.retry_after_s is not None
+        else None
+    )
+    return HTTPException(exc.status, str(exc), headers=headers)
+
+
+async def _owned_session(sessions: SessionManager, session_id: int, token: str | None) -> None:
+    if await sessions.owned(session_id, token) is None:
+        raise _session_not_found(session_id)
+
+
+@app.get("/api/sar/source", response_model=SarSourceOut)
+def sar_source(sar: Sar) -> SarSourceOut:
+    """The SAR archive, its licence and attribution, the method and the limits."""
+    return sar.source()
+
+
+@app.get("/api/sessions/{session_id}/sar/scenes", response_model=SarSearchOut)
+async def sar_search(
+    session_id: int,
+    sar: Sar,
+    sessions: Sessions,
+    lat_deg: Annotated[float, Query(ge=-80, le=84)],
+    lon_deg: Annotated[float, Query(ge=-180, le=180)],
+    before: Annotated[date, Query()],
+    after: Annotated[date, Query()],
+    size_km: Annotated[int, Query(description="5, 10 or 20")] = 10,
+    polarization: Annotated[Literal["VV", "VH"], Query()] = "VV",
+    platform: Annotated[str | None, Query(pattern=r"^sentinel-1[a-z]$")] = None,
+    token: SessionToken = None,
+) -> SarSearchOut:
+    """Sentinel-1 passes over an area around two dates, by track, with the proposed pair."""
+    await _owned_session(sessions, session_id, token)
+    try:
+        aoi = SarAoiIn(lat_deg=lat_deg, lon_deg=lon_deg, size_km=size_km)  # type: ignore[arg-type]
+    except ValidationError:
+        raise HTTPException(422, "size_km must be 5, 10 or 20") from None
+    try:
+        return await sar.search(session_id, aoi, before, after, polarization, platform)
+    except SarError as exc:
+        raise _sar_error(exc) from None
+
+
+@app.post(
+    "/api/sessions/{session_id}/sar/comparisons", response_model=SarComparisonOut, status_code=202
+)
+async def sar_compare(
+    session_id: int,
+    body: SarComparisonCreate,
+    sar: Sar,
+    sessions: Sessions,
+    token: SessionToken = None,
+) -> SarComparisonOut:
+    """Queue a comparison of two passes on the same track."""
+    await _owned_session(sessions, session_id, token)
+    try:
+        return await sar.create(session_id, body)
+    except SarError as exc:
+        raise _sar_error(exc) from None
+
+
+@app.get("/api/sessions/{session_id}/sar/comparisons", response_model=SarComparisonList)
+async def sar_comparisons(
+    session_id: int, sar: Sar, sessions: Sessions, token: SessionToken = None
+) -> SarComparisonList:
+    """The session's comparisons, newest first (poll this while any is running)."""
+    await _owned_session(sessions, session_id, token)
+    return await sar.comparisons(session_id)
+
+
+@app.get(
+    "/api/sessions/{session_id}/sar/comparisons/{comparison_id}", response_model=SarComparisonOut
+)
+async def sar_comparison(
+    session_id: int, comparison_id: int, sar: Sar, sessions: Sessions, token: SessionToken = None
+) -> SarComparisonOut:
+    """One comparison of the session."""
+    await _owned_session(sessions, session_id, token)
+    try:
+        return await sar.get(session_id, comparison_id)
+    except SarError as exc:
+        raise _sar_error(exc) from None
+
+
+@app.post(
+    "/api/sessions/{session_id}/sar/comparisons/{comparison_id}/recompute",
+    response_model=SarComparisonOut,
+    status_code=202,
+)
+async def sar_recompute(
+    session_id: int, comparison_id: int, sar: Sar, sessions: Sessions, token: SessionToken = None
+) -> SarComparisonOut:
+    """Run a failed or expired comparison again."""
+    await _owned_session(sessions, session_id, token)
+    try:
+        return await sar.recompute(session_id, comparison_id)
+    except SarError as exc:
+        raise _sar_error(exc) from None
+
+
+@app.delete("/api/sessions/{session_id}/sar/comparisons/{comparison_id}", status_code=204)
+async def sar_remove(
+    session_id: int, comparison_id: int, sar: Sar, sessions: Sessions, token: SessionToken = None
+) -> None:
+    """Delete a comparison and its images."""
+    await _owned_session(sessions, session_id, token)
+    try:
+        await sar.remove(session_id, comparison_id)
+    except SarError as exc:
+        raise _sar_error(exc) from None
+
+
+@app.get(
+    "/api/sessions/{session_id}/sar/comparisons/{comparison_id}/images/{kind}.png",
+    response_class=FileResponse,
+    responses={200: {"content": {"image/png": {}}, "description": "The image."}},
+)
+async def sar_image(
+    session_id: int,
+    comparison_id: int,
+    kind: Literal["before", "after", "change"],
+    sar: Sar,
+    sessions: Sessions,
+    token: SessionToken = None,
+) -> FileResponse:
+    """One image of a ready comparison: before, after, or the change codes (see the docs)."""
+    await _owned_session(sessions, session_id, token)
+    try:
+        path = await sar.image(session_id, comparison_id, kind)
+    except SarError as exc:
+        raise _sar_error(exc) from None
+    if not path.is_file():
+        raise HTTPException(404, "images not available")
+    return FileResponse(
+        path,
+        media_type="image/png",
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
 
 
 # ---------- live stream ----------

@@ -1,7 +1,7 @@
 """REST request/response schemas. Mirrored in frontend/src/types/api.ts."""
 
-from datetime import datetime
-from typing import Literal, Self
+from datetime import date, datetime
+from typing import Annotated, Literal, Self
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
@@ -230,3 +230,200 @@ class PacketTemplatesOut(BaseModel):
     satnogs_configured: bool  #: whether real frames can be replayed at all
     satellites: list[SatelliteCommsOut]  #: the satellites with their own formats
     generic: GenericCommsOut | None = None  #: null: only the listed satellites can be contacted
+
+
+# ---------- SAR imagery (Phase 7a) ----------
+
+#: The polarizations a comparison can use.
+SarPolarization = Literal["VV", "VH"]
+#: Sides of the square area offered (km).
+AoiSizeKm = Literal[5, 10, 20]
+#: Where a comparison is.
+SarStatus = Literal["queued", "reading", "detecting", "ready", "failed", "expired"]
+#: A STAC item id, as clients may send it.
+StacId = Annotated[str, Field(pattern=r"^[_.A-Za-z0-9-]{1,128}$")]
+#: A lon/lat pair.
+LonLat = tuple[float, float]
+
+
+class SarAoiIn(BaseModel):
+    """The area of interest: a square of ``size_km`` around a centre."""
+
+    lat_deg: float = Field(ge=-80, le=84)  #: centre latitude (UTM's range)
+    lon_deg: float = Field(ge=-180, le=180)  #: centre longitude
+    size_km: AoiSizeKm = 10  #: side of the square
+
+
+class SarAoiOut(SarAoiIn):
+    """The area as the server gridded it."""
+
+    bbox: tuple[float, float, float, float]  #: min lon, min lat, max lon, max lat
+    polygon: list[LonLat]  #: the exact UTM square, a closed lon/lat ring
+    epsg: int  #: its UTM zone
+    width_px: int  #: grid pixels
+    height_px: int  #: grid pixels
+    resolution_m: float  #: pixel size
+
+
+class SarPassOut(BaseModel):
+    """One satellite pass over the area: one or more scene frames, mosaicked."""
+
+    id: str  #: the pass's best-covering frame (its STAC id)
+    frames: list[str]  #: every frame read for the area, best-covering first
+    platform: str  #: sentinel-1a … sentinel-1d
+    satellite_name: str  #: e.g. SENTINEL-1C
+    norad_id: int | None  #: the catalog satellite, when it is in the catalog
+    acquired_at: datetime  #: the pass's first frame
+    orbit_state: Literal["ascending", "descending"]  #: direction of the pass
+    relative_orbit: int  #: with the direction, the track
+    polarizations: list[str]  #: those all its frames have
+    coverage: float  #: share of the area covered (0-1): estimated from footprints in a search
+
+
+class SarTrackOut(BaseModel):
+    """The passes of one track around each date (only same-track passes are compared)."""
+
+    key: str  #: e.g. "110-descending"
+    relative_orbit: int  #: the relative orbit
+    orbit_state: Literal["ascending", "descending"]  #: the direction
+    before: list[SarPassOut]  #: around the "before" date, closest first
+    after: list[SarPassOut]  #: around the "after" date, closest first
+    proposed_before: str | None  #: the proposed pair on this track (pass ids), if any
+    proposed_after: str | None
+
+
+class SarSearchOut(BaseModel):
+    """Passes over the area around two dates, by track, with the pair closest to both."""
+
+    aoi: SarAoiOut  #: the gridded area
+    polarization: SarPolarization  #: passes listed have it
+    platform: str | None  #: only this satellite, when filtered
+    before_window: tuple[date, date]  #: days searched around the "before" date
+    after_window: tuple[date, date]  #: days searched around the "after" date
+    tracks: list[SarTrackOut]  #: the proposed track first
+    proposed_track: str | None  #: its key; null: no same-track pair in the windows
+    skipped: int = 0  #: STAC items dropped as malformed or unusable
+    truncated: bool = False  #: a window hit the result limit: there may be more passes
+
+
+class SarComparisonCreate(BaseModel):
+    """Start a comparison of two passes on the same track."""
+
+    aoi: SarAoiIn  #: the area
+    polarization: SarPolarization = "VV"  #: the band compared
+    before: list[StacId] = Field(min_length=1, max_length=4)  #: frames of the earlier pass
+    after: list[StacId] = Field(min_length=1, max_length=4)  #: frames of the later pass
+    requested_before: date  #: the dates asked for (shown with the result)
+    requested_after: date
+
+    @model_validator(mode="after")
+    def _ordered(self) -> Self:
+        if self.requested_before >= self.requested_after:
+            raise ValueError("the before date must be earlier than the after date")
+        if set(self.before) & set(self.after):
+            raise ValueError("the two passes must differ")
+        return self
+
+
+class SarRegionOut(BaseModel):
+    """A flagged region: connected pixels whose backscatter changed past the threshold."""
+
+    id: int  #: 1 = largest score
+    sign: Literal["increase", "decrease"]  #: brighter or darker after
+    area_m2: float  #: flagged area
+    mean_db: float  #: mean change (dB)
+    max_abs_db: float  #: largest ``|change|`` in it (dB)
+    polygon: list[LonLat]  #: its bounding box as a lon/lat ring
+    bbox: tuple[float, float, float, float]  #: min lon, min lat, max lon, max lat
+    centroid: LonLat  #: centre of mass
+    px: tuple[int, int, int, int]  #: col0, row0, col1, row1 on the grid (images' pixels)
+
+
+class SarDisplayOut(BaseModel):
+    """How the images were drawn."""
+
+    db_min: float  #: black in before/after
+    db_max: float  #: white
+    heatmap_max_db: float  #: ``|change|`` at full heatmap strength
+
+
+class SarComparisonOut(BaseModel):
+    """A comparison, its status and, once ready, its result."""
+
+    id: int
+    status: SarStatus
+    queue_position: int | None = None  #: 1 = next; null when not queued
+    error: str | None = None  #: why it failed (a fixed message)
+    aoi: SarAoiOut
+    polarization: SarPolarization
+    before: SarPassOut
+    after: SarPassOut
+    requested_before: date
+    requested_after: date
+    method: Literal["log_ratio"]
+    params_version: int  #: of the change-detection parameters
+    generation: int  #: run number; image URLs change with it
+    coverage: float | None = None  #: valid on both dates (0-1), measured
+    otsu_db: float | None = None  #: Otsu's threshold on ``|change|``
+    threshold_db: float | None = None  #: applied: max(Otsu, floor)
+    floor_db: float  #: the floor
+    changed_fraction: float | None = None  #: flagged share of valid pixels
+    increase_area_m2: float | None = None
+    decrease_area_m2: float | None = None
+    regions: list[SarRegionOut] = []
+    regions_truncated: bool = False  #: more regions than listed
+    widespread: bool = False  #: a large share changed: read with caution
+    display: SarDisplayOut
+    attribution: str  #: e.g. "Contains modified Copernicus Sentinel data 2024"
+    sim_time: datetime  #: the session's clock when it was asked for
+    created_at: datetime
+    finished_at: datetime | None = None
+
+
+class SarComparisonList(BaseModel):
+    """A session's comparisons, newest first."""
+
+    comparisons: list[SarComparisonOut]
+    max_per_session: int  #: how many a session can keep
+    running: int  #: queued or running, all sessions
+
+
+class SarPlatformOut(BaseModel):
+    """A Sentinel-1 satellite present in the catalog."""
+
+    platform: str  #: sentinel-1c
+    satellite_name: str  #: SENTINEL-1C
+    norad_id: int
+
+
+class SarLimitsOut(BaseModel):
+    """Budgets a session works within."""
+
+    searches_per_min: int
+    comparisons_per_hour: int
+    max_per_session: int
+    aoi_sizes_km: list[int]
+
+
+class SarSourceOut(BaseModel):
+    """The archive, its terms and the method (reference data; no upstream call)."""
+
+    enabled: bool  #: false: archive search is off on this server
+    status: Literal["ok", "unavailable", "unknown"]  #: the last upstream outcome
+    collection: str
+    title: str
+    license: str
+    license_url: str
+    dataset_url: str
+    attribution: list[str]  #: lines to show with any image
+    archive_start: date
+    search_window_days: int  #: ± days searched around each date
+    resolution_m: float
+    polarizations: list[str]
+    params_version: int
+    speckle_window_px: int
+    min_abs_db: float  #: the threshold's floor
+    min_area_m2: float
+    display: dict[str, SarDisplayOut]  #: per polarization
+    limits: SarLimitsOut
+    platforms: list[SarPlatformOut]  #: Sentinel-1 satellites in the catalog

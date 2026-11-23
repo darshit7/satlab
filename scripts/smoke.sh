@@ -84,6 +84,7 @@ expect 200 "API health via proxy" "$web/satlab/api/health"
 station_id=$(curl -s --max-time 10 "$web/satlab/api/stations" | json '[0]["id"]' 2>/dev/null || true)
 if [[ -n $station_id ]]; then pass "stations via proxy"; else fail "stations via proxy"; fi
 expect 404 "no API docs via proxy" "$web/satlab/api/docs"
+expect 200 "SAR archive reference (no upstream call)" "$web/satlab/api/sar/source"
 
 session=$(curl -s --max-time 10 -X POST -H 'Content-Type: application/json' \
   -d "{\"station_id\": ${station_id:-1}}" "$web/satlab/api/sessions" || true)
@@ -93,6 +94,8 @@ if [[ -n $id && -n $token ]]; then
   pass "session created with a token"
   expect 404 "session hidden without its token" "$web/satlab/api/sessions/$id"
   expect 200 "session readable with its token" -H "X-Session-Token: $token" "$web/satlab/api/sessions/$id"
+  expect 404 "SAR comparisons hidden without the token" "$web/satlab/api/sessions/$id/sar/comparisons"
+  expect 200 "SAR comparisons with the token" -H "X-Session-Token: $token" "$web/satlab/api/sessions/$id/sar/comparisons"
   got=$(ws_handshake -H "Origin: $origin" "$web/satlab/ws/sessions/$id")
   [[ $got == 101 ]] && pass "101 WebSocket upgrade via proxy" || fail "WebSocket upgrade via proxy: got $got"
   got=$(ws_handshake -H 'Origin: https://evil.example' "$web/satlab/ws/sessions/$id")

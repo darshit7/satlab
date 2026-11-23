@@ -109,6 +109,8 @@ def app_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
             "SATLAB_SATNOGS_API_TOKEN", ""
         )  # a developer's token never reaches tests
         monkeypatch.setenv("SATLAB_TICK_HZ", "20")
+        monkeypatch.setenv("SATLAB_SAR_STORAGE_DIR", str(tmp_path / "sar"))
+        monkeypatch.setenv("SATLAB_SAR_SUBSCRIPTION_KEY", "")  # never a developer's key
         _clear_caches()
         try:
             yield tmp_path

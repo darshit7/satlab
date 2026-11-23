@@ -186,3 +186,158 @@ export interface PacketTemplates {
   /** Null or absent (older servers): only the listed satellites can be contacted. */
   generic?: GenericComms | null
 }
+
+// ---------- SAR imagery ----------
+
+export type SarPolarization = 'VV' | 'VH'
+export type AoiSizeKm = 5 | 10 | 20
+export type SarStatus = 'queued' | 'reading' | 'detecting' | 'ready' | 'failed' | 'expired'
+export type LonLat = [lon_deg: number, lat_deg: number]
+export type Bbox = [min_lon: number, min_lat: number, max_lon: number, max_lat: number]
+
+export interface SarAoi {
+  lat_deg: number
+  lon_deg: number
+  size_km: AoiSizeKm
+}
+
+export interface SarAoiOut extends SarAoi {
+  bbox: Bbox
+  /** The exact UTM square, a closed lon/lat ring. */
+  polygon: LonLat[]
+  epsg: number
+  width_px: number
+  height_px: number
+  resolution_m: number
+}
+
+/** One satellite pass over the area: one or more scene frames, mosaicked. */
+export interface SarPass {
+  id: string
+  frames: string[]
+  platform: string
+  satellite_name: string
+  norad_id: number | null
+  acquired_at: string
+  orbit_state: 'ascending' | 'descending'
+  relative_orbit: number
+  polarizations: string[]
+  /** Share of the area covered (0–1); estimated from footprints in a search. */
+  coverage: number
+}
+
+export interface SarTrack {
+  key: string
+  relative_orbit: number
+  orbit_state: 'ascending' | 'descending'
+  before: SarPass[]
+  after: SarPass[]
+  proposed_before: string | null
+  proposed_after: string | null
+}
+
+export interface SarSearch {
+  aoi: SarAoiOut
+  polarization: SarPolarization
+  platform: string | null
+  before_window: [string, string]
+  after_window: [string, string]
+  tracks: SarTrack[]
+  proposed_track: string | null
+  skipped?: number
+  truncated?: boolean
+}
+
+export interface SarComparisonCreate {
+  aoi: SarAoi
+  polarization: SarPolarization
+  before: string[]
+  after: string[]
+  requested_before: string
+  requested_after: string
+}
+
+export interface SarRegion {
+  id: number
+  sign: 'increase' | 'decrease'
+  area_m2: number
+  mean_db: number
+  max_abs_db: number
+  polygon: LonLat[]
+  bbox: Bbox
+  centroid: LonLat
+  /** col0, row0, col1, row1 on the comparison's grid (the images' pixels). */
+  px: [number, number, number, number]
+}
+
+export interface SarDisplay {
+  db_min: number
+  db_max: number
+  heatmap_max_db: number
+}
+
+export interface SarComparison {
+  id: number
+  status: SarStatus
+  queue_position?: number | null
+  error?: string | null
+  aoi: SarAoiOut
+  polarization: SarPolarization
+  before: SarPass
+  after: SarPass
+  requested_before: string
+  requested_after: string
+  method: 'log_ratio'
+  params_version: number
+  /** Run number; images change with it. */
+  generation: number
+  coverage?: number | null
+  otsu_db?: number | null
+  threshold_db?: number | null
+  floor_db: number
+  changed_fraction?: number | null
+  increase_area_m2?: number | null
+  decrease_area_m2?: number | null
+  regions?: SarRegion[]
+  regions_truncated?: boolean
+  widespread?: boolean
+  display: SarDisplay
+  attribution: string
+  sim_time: string
+  created_at: string
+  finished_at?: string | null
+}
+
+export interface SarComparisonList {
+  comparisons: SarComparison[]
+  max_per_session: number
+  running: number
+}
+
+export interface SarPlatform {
+  platform: string
+  satellite_name: string
+  norad_id: number
+}
+
+export interface SarSource {
+  enabled: boolean
+  status: 'ok' | 'unavailable' | 'unknown'
+  collection: string
+  title: string
+  license: string
+  license_url: string
+  dataset_url: string
+  attribution: string[]
+  archive_start: string
+  search_window_days: number
+  resolution_m: number
+  polarizations: string[]
+  params_version: number
+  speckle_window_px: number
+  min_abs_db: number
+  min_area_m2: number
+  display: Record<string, SarDisplay>
+  limits: { searches_per_min: number; comparisons_per_hour: number; max_per_session: number; aoi_sizes_km: number[] }
+  platforms: SarPlatform[]
+}

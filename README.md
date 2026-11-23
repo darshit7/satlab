@@ -1,38 +1,7 @@
 # Satlab — Satellite Mission Control Simulator
 
 A real-time satellite mission control simulator. Positions and geometry come from **real TLEs** propagated
-with **SGP4** for **your real location**. Nothing is faked. See [AGENTS.md](AGENTS.md) for the architecture,
-conventions, database design, and phase plan.
-
-**Status: Phase 6 (polish), parts 6a (globe & map) and 6b (command sounds).** Pick a ground station (a preset, your geolocation, a map click,
-or typed lat/lon; a custom location is used for that session only, never saved) and every satellite above the horizon mask appears at once, with no search needed: on
-a 3D globe with the station's visibility cone (or the 2D map), a polar sky plot and an all-sky
-(looking-up) view, all linked by selection. Filter by type,
-minimum elevation, SAR capability, link quality, communications (the satellites you can talk to) and "rising
-within N minutes" (computed across the whole catalog). Any
-satellite gets a 24-hour pass schedule (AOS / LOS / max elevation / azimuths) with a jump-to-AOS button.
-Search the full catalog and track satellites to keep them on screen with ground tracks and live
-azimuth / elevation / range / range-rate readouts. The sim clock can be paused or accelerated up to 3600×.
-
-Satellites with a **published downlink budget** (NOAA 20 and 21, FengYun-3D, GOES 18 and 19) get a real
-link margin (dB), Eb/N0 and Doppler at your station, mapped to green / amber / red; the same state colours
-their sky-plot dots and pass arcs and draws the "strong-link" region of the sky. The selected satellite's
-systems show a worst-of rollup over power, thermal, storage, attitude and RF, which change truthfully
-as it rises, peaks, sets and crosses the Earth's shadow.
-
-In contact, any satellite (debris and rocket bodies excepted) exchanges framed packets (CCSDS or AX.25), through
-templates of its own or a generic, illustrative one: commands go
-up (simulated; nothing is transmitted) and telemetry comes down, either simulated from the modelled
-systems through a channel whose bit errors follow the real link margin, or real frames received by
-SatNOGS stations, replayed. Commands can also be **booked for a future pass**: a minute before AOS the
-antenna turns to the satellite (a clock faster than 60× drops to real time), and at AOS an automatic
-system check sends them unless a subsystem is red; otherwise they're held and an alarm is raised.
-
-The globe is lit by the Sun computed for the sim time (the 2D map shades the night side too), and the
-selected satellite shows its footprint (the ground from which it is above the mask) and its orbit coloured
-by the link margin along the pass, with marks where it enters and leaves the station's cone. In contact,
-the Communications card shows the downlink frequency and its live Doppler shift, and optional sound cues
-follow your commands: a chirp when one goes up, a chime when its answer comes back.
+with **SGP4** for **your real location**.
 
 ## Quick start
 
@@ -139,6 +108,9 @@ browser ──REST──▶ FastAPI ── stations / sessions / pass schedule  
   ([`link_profiles.json`](backend/app/data/seed/link_profiles.json) cites every value).
 - Power, thermal, storage and attitude are **modelled** from generic parameters, driven by real eclipse
   and pass geometry; the UI labels them so.
+- SAR imagery is **real archived** Sentinel-1 data; nothing is captured on request. Change flags come from
+  a simple statistical test on the radar return: they mark where it changed, not what changed (wet soil,
+  crops or wind on water change it too).
 <!-- docs:honesty:end -->
 
 ## Data sources
@@ -148,6 +120,8 @@ browser ──REST──▶ FastAPI ── stations / sessions / pass schedule  
   (please respect their fetch etiquette; the backend caches and refreshes at most every 12 h).
 - Link budgets: NOAA/NESDIS JPSS-1 and JPSS-2 HRD RF ICDs, the CMA FY-3D space-to-ground ICD and
   NOAA OSPO's GOES-R GRB link budget (links in the seed file and in the app).
+- SAR imagery: [Sentinel-1 RTC on Microsoft Planetary Computer](https://planetarycomputer.microsoft.com/dataset/sentinel-1-rtc)
+  (CC BY 4.0). Contains modified Copernicus Sentinel data; radiometric terrain correction by Catalyst.
 - Basemap: [OpenFreeMap](https://openfreemap.org/) © OpenMapTiles, © OpenStreetMap contributors.
 - Emoji: [Twemoji](https://github.com/jdecked/twemoji) graphics, CC-BY 4.0. Fonts: Nunito, JetBrains Mono, Playpen Sans (SIL OFL), self-hosted via Fontsource.
 <!-- docs:data-sources:end -->

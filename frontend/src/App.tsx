@@ -4,11 +4,13 @@ import { Notices } from './components/Notices'
 import { TiltedGridBackground } from './components/ui/TiltedGridBackground'
 import { startEngagementClock, track } from './lib/analytics'
 import { useMission } from './store/mission'
+import { useSar } from './store/sar'
 import { useUi } from './store/ui'
 import { Inspector } from './views/Inspector/Inspector'
 import { MapPanel } from './views/Map/MapPanel'
 import { MissionBar, MissionPanels } from './views/Mission/MissionBar'
 import { PassScheduleDialog } from './views/Passes/PassSchedule'
+import { CompareDialog } from './views/SAR/CompareDialog'
 import { SkyDialog } from './views/Sky/SkyDock'
 
 let booted = false
@@ -21,6 +23,7 @@ export default function App() {
     const { loadStations, loadLinkProfiles, loadPacketTemplates } = useMission.getState()
     void loadLinkProfiles()
     void loadPacketTemplates()
+    void useSar.getState().loadSource()
     void loadStations().then(() => {
       // Resume where the last session observed from: a custom location, or a preset that still exists.
       const { stations, site, startSession } = useMission.getState()
@@ -53,6 +56,7 @@ export default function App() {
       <Notices />
       <SkyDialog />
       <PassScheduleDialog />
+      <CompareDialog />
     </div>
   )
 }

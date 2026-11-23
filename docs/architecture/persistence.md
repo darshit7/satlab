@@ -63,8 +63,18 @@ flowchart TB
   ([session lifecycle](session-lifecycle.md)).
 
 `JSON` columns hold flexible payloads: decoded telemetry, packet template specs, check results,
-SatNOGS provenance. Future SAR rasters will live on disk or in object storage, with only their paths
-and metadata in the database.
+SatNOGS provenance, a comparison's regions.
+
+**SAR imagery** (Phase 7a) adds two tables and a file cache:
+
+- `sar_scene`: a shared cache of public scene metadata, written when a comparison uses a scene.
+  Rows no comparison uses are purged with the retention.
+- `sar_comparison`: a session's comparison and its result. Like the comms rows, it is purged once
+  its session ended more than `SATLAB_COMMS_RETENTION_DAYS` ago, files included.
+- The rasters themselves never enter the database (golden rule 9). Window crops and the three
+  images live under `SATLAB_SAR_STORAGE_DIR` as an ephemeral cache. Their paths derive from ids,
+  so the database stores none. A comparison whose images are gone reads as expired and can be
+  recomputed ([archive explore](../imagery/archive-explore.md#where-the-images-live)).
 
 ## Configuring it
 

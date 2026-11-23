@@ -69,7 +69,7 @@ class Settings(BaseSettings):
     catalog_refresh_check_minutes: float = Field(default=30.0, ge=5.0)
     #: The largest Celestrak response read (streamed; the "active" group is about 2.4 MB).
     celestrak_max_bytes: int = Field(default=16 * 1024 * 1024, ge=1024 * 1024)
-    http_timeout_s: float = 30.0  #: for every upstream request (Celestrak, SatNOGS)
+    http_timeout_s: float = 30.0  #: for every upstream request (Celestrak, SatNOGS, STAC)
 
     # Simulation loop. One loop per session; these bound its work per tick.
     tick_hz: float = 2.0  #: snapshots per second of wall time
@@ -108,7 +108,8 @@ class Settings(BaseSettings):
     max_commands_per_session: int = Field(default=500, ge=1)
     #: Stored frames per session: past the cap, frames still stream but aren't stored.
     max_telemetry_frames_per_session: int = Field(default=5000, ge=0)
-    comms_retention_days: float = Field(default=7.0, gt=0)  #: after the session ended
+    #: Comms rows and SAR comparisons of a session are deleted this long after it ended.
+    comms_retention_days: float = Field(default=7.0, gt=0)
 
     # Pass automation. Commands booked for a future pass, sent at AOS if no subsystem is red.
     schedule_lead_s: float = Field(default=60.0, ge=10.0, le=600.0)  #: antenna moves before AOS
@@ -124,12 +125,60 @@ class Settings(BaseSettings):
     satnogs_max_pages: int = Field(default=5, ge=1, le=20)  #: per refresh and satellite
     satnogs_requests_per_min: int = Field(default=6, ge=1, le=60)  #: all satellites together
 
+    # SAR imagery. Sentinel-1 RTC scenes from Microsoft Planetary Computer: found over STAC, read
+    # as bounded windows by one worker process and compared on the server (AGENTS.md §12.4).
+    sar_enabled: bool = True  #: off: no archive search, and the Imagery panel says so
+    #: The STAC API root (https, on Planetary Computer's host only).
+    sar_stac_url: str = "https://planetarycomputer.microsoft.com/api/stac/v1"
+    #: The SAS token endpoint; the collection id is appended.
+    sar_token_url: str = "https://planetarycomputer.microsoft.com/api/sas/v1/token"
+    #: Optional Planetary Computer subscription key (``Ocp-Apim-Subscription-Key``): only relaxes
+    #: rate limits; anonymous tokens read the collection too.
+    sar_subscription_key: SecretStr | None = None
+    #: The only Azure storage account scene files are read from.
+    sar_blob_account: str = Field(default="sentinel1euwestrtc", pattern=r"^[a-z0-9]{3,24}$")
+    #: The only container scene files are read from.
+    sar_blob_container: str = Field(
+        default="sentinel1-grd-rtc", pattern=r"^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$"
+    )
+    #: Scene crops and comparison images: an ephemeral cache, recomputed when missing.
+    sar_storage_dir: Path = VAR_DIR / "sar"
+    #: Past this, the least recently used crops and comparison images are deleted.
+    sar_storage_max_bytes: int = Field(default=1024**3, ge=64 * 1024**2)
+    #: The largest STAC or token response read (streamed).
+    sar_stac_max_bytes: int = Field(default=4 * 1024**2, ge=256 * 1024, le=64 * 1024**2)
+    #: STAC and token requests, all clients together.
+    sar_upstream_requests_per_min: int = Field(default=30, ge=1, le=600)
+    #: A search window's results are reused for this long.
+    sar_search_cache_minutes: float = Field(default=15.0, ge=1.0, le=1440.0)
+    sar_searches_per_min: int = Field(default=6, ge=1, le=60)  #: per session
+    #: Comparisons started per session and hour, recomputes included.
+    sar_comparisons_per_hour: int = Field(default=6, ge=1, le=120)
+    #: Comparisons started per hour, all sessions together.
+    sar_comparisons_per_hour_total: int = Field(default=30, ge=1, le=1000)
+    #: Comparisons kept in a session's list.
+    sar_max_comparisons_per_session: int = Field(default=12, ge=1, le=100)
+    #: Comparisons waiting for the worker, all sessions together.
+    sar_queue_max: int = Field(default=4, ge=1, le=50)
+    #: One comparison, scene reads included; past it the worker is stopped.
+    sar_job_timeout_s: float = Field(default=240.0, ge=30.0, le=1800.0)
+    sar_read_timeout_s: float = Field(default=30.0, ge=5.0, le=120.0)  #: each GDAL HTTP request
+    sar_worker_nice: int = Field(
+        default=10, ge=0, le=19
+    )  #: the worker's CPU priority below the API
+    sar_gdal_cache_mb: int = Field(default=64, ge=16, le=512)  #: GDAL's block cache in the worker
+
     @model_validator(mode="after")
     def _check_link_and_health(self) -> Self:
         if self.link_green_margin_db <= self.link_amber_margin_db:
             raise ValueError("link_green_margin_db must be above link_amber_margin_db")
         if self.subsystem_lookback_h * 3600 / self.subsystem_step_s > 20_000:
             raise ValueError("subsystem_lookback_h / subsystem_step_s: too many grid points")
+        for url in (self.sar_stac_url, self.sar_token_url):
+            if not url.startswith("https://"):
+                raise ValueError("SAR upstream URLs must be https")
+        if self.sar_storage_dir.resolve().is_relative_to(BACKEND_DIR / "app"):
+            raise ValueError("sar_storage_dir must not be inside the application code")
         return self
 
     @field_validator("database_url", "migration_database_url")

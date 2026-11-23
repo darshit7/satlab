@@ -117,6 +117,39 @@ pages = ["simulation/subsystems"]
 paths = ["backend/app/data/seed/ground_stations.json"]
 pages = ["getting-started/ui-tour"]
 
+# ---------- backend: SAR imagery ----------
+
+[[entry]]
+paths = [
+  "backend/app/services/sar.py",
+  "backend/app/sar/grid.py",
+  "backend/app/sar/pairs.py",
+  "backend/app/sar/stac.py",
+  "backend/app/sar/token.py",
+]
+pages = ["imagery/archive-explore", "architecture/data-flow"]
+
+[[entry]]
+paths = [
+  "backend/app/data/http.py",
+  "backend/app/sar/assets.py",
+  "backend/app/sar/raster.py",
+  "backend/app/sar/worker.py",
+  "backend/app/sar/protocol.py",
+  "backend/app/sar/jobs.py",
+  "backend/app/sar/storage.py",
+]
+pages = ["imagery/archive-explore", "architecture/security", "architecture/deployment"]
+
+[[entry]]
+paths = [
+  "backend/app/sar/detect.py",
+  "backend/app/sar/render.py",
+  "backend/app/sar/params.py",
+  "backend/app/data/seed/sar_change_detection.json",
+]
+pages = ["imagery/change-detection"]
+
 # ---------- frontend ----------
 
 [[entry]]
@@ -163,6 +196,10 @@ paths = [
   "frontend/src/views/Indicators/",
 ]
 pages = ["getting-started/ui-tour", "simulation/subsystems", "simulation/link-budget"]
+
+[[entry]]
+paths = ["frontend/src/views/SAR/", "frontend/src/store/sar.ts", "frontend/src/lib/sar.ts"]
+pages = ["getting-started/ui-tour", "imagery/archive-explore", "architecture/frontend"]
 
 [[entry]]
 paths = ["frontend/src/views/Comms/"]

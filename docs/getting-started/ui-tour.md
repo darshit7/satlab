@@ -44,6 +44,14 @@ Schedule
 : Commands waiting for a future pass, their outcomes, and alarms (acknowledge them here). The
   button shows how many commands are waiting and how many alarms are unacknowledged.
 
+Imagery
+: Real Sentinel-1 radar images of an area ([archive explore](../imagery/archive-explore.md)). Set
+  the area (it starts at the station; click the map or the globe to move it; 5, 10 or 20 km) and two
+  dates, and **Find scenes** lists the passes by orbit track, with the pair closest to your dates
+  already chosen. **Compare** runs it on the server, which takes a few seconds to a minute. **Open**
+  shows the compare dialog: swipe between the dates, turn the change heatmap on or off, and pick a
+  flagged region to frame it, then **Show on map**. Comparisons last for the visit.
+
 The map is a **3D globe** (Cesium) by default, or a **2D map** (MapLibre). It shows the satellites
 in view as dots coloured by link state, tracked orbits, and the station's visibility cone. The outer
 cone is the horizon mask; the inner one is where the link margin would be green. For the selection

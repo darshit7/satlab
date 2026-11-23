@@ -11,8 +11,9 @@ Those rules are reproduced below from the project rulebook (AGENTS.md §12).
 A visitor can only drive **their own simulated session**. The realistic risks are:
 
 - a malicious web page talking to the backend (including a local one, in development);
-- hostile or malformed bytes from external sources: TLE text, SatNOGS frames, and later STAC
-  JSON, KML and SAR rasters;
+- hostile or malformed bytes from external sources: TLE text, SatNOGS frames, STAC JSON and SAR
+  rasters (read by a separate worker process, from server-built paths only:
+  [reading scenes safely](../imagery/archive-explore.md#reading-scenes-safely)), and later KML;
 - secrets leaking into git, logs or the browser bundle;
 - compromised dependencies;
 - one client making the server do too much work, or abuse an upstream API.

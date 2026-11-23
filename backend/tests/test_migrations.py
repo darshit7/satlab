@@ -30,6 +30,9 @@ def test_upgrade_downgrade_roundtrip(app_env: Path) -> None:
         "packet_template",
         "command",
         "telemetry_frame",
+        "alarm",
+        "sar_scene",
+        "sar_comparison",
     } <= _tables()
 
     command.downgrade(cfg, "base")

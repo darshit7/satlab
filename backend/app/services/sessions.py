@@ -5,7 +5,7 @@ import hashlib
 import hmac
 import logging
 import secrets
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -119,6 +119,7 @@ class SessionManager:
         self._sink = sink
         self._runtime_config = RuntimeConfig.from_settings(settings)
         self._runtimes: dict[int, SessionRuntime] = {}
+        self._end_listeners: list[Callable[[int], Awaitable[None]]] = []
         self._idle_timers: dict[int, asyncio.Task[None]] = {}
         self._command_budgets: dict[int, TokenBucket] = {}
         self._lock = asyncio.Lock()
@@ -350,6 +351,19 @@ class SessionManager:
                     db.commit()
 
         await asyncio.to_thread(mark_ended)
+        for listener in self._end_listeners:
+            try:
+                await listener(session_id)
+            except Exception:
+                log.exception("session %d: end listener failed", session_id)
+
+    def add_end_listener(self, listener: Callable[[int], Awaitable[None]]) -> None:
+        """Call ``listener(session_id)`` after a session ends (SAR cancels its jobs this way)."""
+        self._end_listeners.append(listener)
+
+    def is_live(self, session_id: int) -> bool:
+        """Whether the session's runtime is running (a client is attached, or just left)."""
+        return session_id in self._runtimes
 
     async def shutdown(self) -> None:
         """Stop loops without ending sessions, so clients can resume after a restart."""

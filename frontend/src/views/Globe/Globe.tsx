@@ -59,6 +59,8 @@ import { estimateSimMs } from '../../lib/time'
 import { token } from '../../lib/tokens'
 import { useMission } from '../../store/mission'
 import { useUi } from '../../store/ui'
+import { useSar } from '../../store/sar'
+import { aoiRing } from '../../lib/sar'
 import type { GroundTrackMessage, PacketMessage, Rag, SatelliteState, Snapshot } from '../../types/ws'
 import { coneShapes, coneSurface, insideCone, type ConeShape } from './cone'
 import { haloImage, stationIcon } from './markers'
@@ -96,6 +98,9 @@ function palette(theme: ResolvedTheme) {
     space: css(token(light ? 'gray-50' : 'dark')),
     ground: css(sky.ground),
     ink: css(sky.ink),
+    /** SAR change, the functional pair (700 on light, 400 on dark). */
+    sarIncrease: css(token(light ? 'fuchsia-700' : 'fuchsia-400')),
+    sarDecrease: css(token(light ? 'cyan-700' : 'cyan-400')),
     label: css(sky.label),
     noRf: css(sky.sat),
     track: css(token(light ? 'gray-500' : 'gray-400')),
@@ -251,6 +256,7 @@ export function Globe({ onError }: { onError: (error?: unknown) => void }) {
     const billboards = scene.primitives.add(new BillboardCollection()) as BillboardCollection
     const points = scene.primitives.add(new PointPrimitiveCollection({ blendOption: BlendOption.TRANSLUCENT })) as PointPrimitiveCollection
     const labels = scene.primitives.add(new LabelCollection()) as LabelCollection
+    const sarLines = scene.primitives.add(new PolylineCollection()) as PolylineCollection
     const satPoints = new Map<number, PointPrimitive>()
     const satLabels = new Map<number, Label>()
     let crossingMarks: PointPrimitive[] = []
@@ -410,6 +416,49 @@ export function Globe({ onError }: { onError: (error?: unknown) => void }) {
           })
         : null
       scene.requestRender()
+    }
+
+    /** SAR imagery: the area while the Imagery panel is open or a comparison is shown, its regions. */
+    const renderSar = () => {
+      sarLines.removeAll()
+      const { aoi, search, comparisons, shownId, selectedRegion } = useSar.getState()
+      const { panel, compareId } = useUi.getState()
+      const shown = comparisons.find((x) => x.id === (compareId ?? shownId)) ?? null
+      const showArea = panel === 'imagery' || shown !== null
+      const ring = (points: LonLat[]) => Cartesian3.fromDegreesArrayHeights(points.flatMap(([lon, lat]) => [lon, lat, 30]))
+      let area: { ring: LonLat[]; draft: boolean } | null = null
+      if (showArea && shown) area = { ring: shown.aoi.polygon, draft: false }
+      else if (showArea && aoi) {
+        const searched = search.data && search.data.aoi.lat_deg === aoi.lat_deg && search.data.aoi.lon_deg === aoi.lon_deg && search.data.aoi.size_km === aoi.size_km
+        area = aoiRing(aoi, searched ? search.data!.aoi.polygon : null)
+      }
+      if (area) {
+        sarLines.add({
+          positions: ring(area.ring),
+          width: 2,
+          material: area.draft ? Material.fromType('PolylineDash', { color: c.ink, dashLength: 10 }) : flat(c.ink),
+        })
+      }
+      if (shown?.status === 'ready') {
+        for (const r of shown.regions ?? []) {
+          const colour = r.id === selectedRegion ? c.ink : r.sign === 'increase' ? c.sarIncrease : c.sarDecrease
+          sarLines.add({
+            positions: ring(r.polygon),
+            width: r.id === selectedRegion ? 3 : 2,
+            material: r.sign === 'decrease' && r.id !== selectedRegion ? Material.fromType('PolylineDash', { color: colour, dashLength: 8 }) : flat(colour),
+          })
+        }
+      }
+      scene.requestRender()
+    }
+    let sarFocusSeq = 0
+    const focusSar = () => {
+      const focus = useSar.getState().focus
+      if (!focus || focus.seq === sarFocusSeq) return
+      sarFocusSeq = focus.seq
+      const [w, south, e, n] = focus.bounds
+      const sizeM = Math.max(e - w, n - south) * 111_000
+      scene.camera.flyTo({ destination: Cartesian3.fromDegrees((w + e) / 2, (south + n) / 2, Math.max(sizeM * 4, 4_000)), duration: 1.2 })
     }
 
     const removeCone = () => {
@@ -706,6 +755,7 @@ export function Globe({ onError }: { onError: (error?: unknown) => void }) {
       renderStation()
       renderDraft()
       renderTracks()
+      renderSar()
       renderedSnapshot = null // recolour everything on the next frame
     }
 
@@ -727,7 +777,13 @@ export function Globe({ onError }: { onError: (error?: unknown) => void }) {
         }
       }),
       onThemeChange(switchTheme),
+      useSar.subscribe(() => {
+        renderSar()
+        focusSar()
+      }),
+      useUi.subscribe((s, prev) => (s.panel !== prev.panel || s.compareId !== prev.compareId) && renderSar()),
     )
+    renderSar()
 
     const pickedId = (position: Cartesian2): number | null => {
       const picked = scene.pick(position) as { id?: unknown } | undefined
@@ -741,9 +797,13 @@ export function Globe({ onError }: { onError: (error?: unknown) => void }) {
         select(hit)
         return
       }
-      // empty ground places the station, only while its panel is open
-      const ground = useUi.getState().panel === 'station' ? scene.camera.pickEllipsoid(e.position, globe.ellipsoid) : undefined
-      if (ground) {
+      // empty ground places the station (or the SAR area), only while that panel is open
+      const panel = useUi.getState().panel
+      const ground = panel === 'station' || panel === 'imagery' ? scene.camera.pickEllipsoid(e.position, globe.ellipsoid) : undefined
+      if (ground && panel === 'imagery') {
+        const where = Cartographic.fromCartesian(ground)
+        useSar.getState().setAoiCentre((where.latitude * 180) / Math.PI, wrapLon((where.longitude * 180) / Math.PI))
+      } else if (ground) {
         const where = Cartographic.fromCartesian(ground)
         setDraft({
           lat_deg: (where.latitude * 180) / Math.PI,
@@ -759,7 +819,8 @@ export function Globe({ onError }: { onError: (error?: unknown) => void }) {
       lastHoverAt = now
       const id = pickedId(e.endPosition)
       setHover(id)
-      widget.canvas.style.cursor = id !== null ? 'pointer' : useUi.getState().panel === 'station' ? 'crosshair' : ''
+      const panel = useUi.getState().panel
+      widget.canvas.style.cursor = id !== null ? 'pointer' : panel === 'station' || panel === 'imagery' ? 'crosshair' : ''
     }, ScreenSpaceEventType.MOUSE_MOVE)
 
     return () => {

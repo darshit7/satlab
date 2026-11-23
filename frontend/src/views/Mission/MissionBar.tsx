@@ -1,19 +1,23 @@
-import { CalendarClock, MapPin, OctagonAlert, Search, SlidersHorizontal } from 'lucide-react'
+import { CalendarClock, Images, MapPin, OctagonAlert, Search, SlidersHorizontal } from 'lucide-react'
 import { useCallback, useEffect, type ReactNode } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Panel } from '../../components/ui/Panel'
 import { Pill } from '../../components/ui/Pill'
 import { trackOnce } from '../../lib/analytics'
 import { filterSummary } from '../../lib/filters'
+import { isRunning } from '../../lib/sar'
 import { scheduledCommands, unacknowledgedCount } from '../../lib/schedule'
 import { useMission } from '../../store/mission'
+import { useSar } from '../../store/sar'
 import { dialogOpen, useUi, type PanelId } from '../../store/ui'
 import { CATALOG_SEARCH_ID, CatalogSearch } from '../Catalog/CatalogSearch'
 import { LocationPanel } from '../Location/LocationPanel'
+import { ImageryPanel } from '../SAR/ImageryPanel'
 import { SchedulerPanel } from '../Scheduler/SchedulerPanel'
 import { VisibleList } from '../Visible/VisibleList'
 
 const TITLES: Record<PanelId, string> = {
+  imagery: 'Radar imagery',
   station: 'Ground station',
   catalog: 'Satellite catalog',
   overhead: 'Overhead',
@@ -24,6 +28,7 @@ const PANELS: Record<PanelId, () => ReactNode> = {
   catalog: () => <CatalogSearch />,
   overhead: () => <VisibleList />,
   schedule: () => <SchedulerPanel />,
+  imagery: () => <ImageryPanel />,
 }
 const panelId = (id: PanelId) => `panel-${id}`
 
@@ -181,7 +186,25 @@ export function MissionBar() {
       <BarButton id="schedule" title="Commands booked for a pass, and alarms">
         <ScheduleSummary />
       </BarButton>
+      <BarButton id="imagery" title="Compare real Sentinel-1 radar images of an area">
+        <Images size={16} strokeWidth={1.5} className="shrink-0" aria-hidden />
+        Imagery
+        <ImageryCount />
+      </BarButton>
     </nav>
+  )
+}
+
+/** How many of this visit's comparisons are still running (none: nothing shown). */
+function ImageryCount() {
+  const running = useSar((s) => s.comparisons.filter(isRunning).length)
+  if (running === 0) return null
+  return (
+    <span className="font-mono text-xs font-normal text-gray-500 tabular-nums dark:text-gray-400">
+      <span className="sr-only">, </span>
+      {running}
+      <span className="sr-only"> in progress</span>
+    </span>
   )
 }
 
