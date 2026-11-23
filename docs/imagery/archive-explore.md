@@ -2,7 +2,7 @@
 
 ## What it is
 
-The **Imagery** panel compares two real Sentinel-1 radar images of one area:
+The **SAR Imagery** panel compares two real Sentinel-1 radar images of one area:
 
 1. Pick the area: a 5, 10 or 20 km square around the ground station, a map click or typed
    coordinates.

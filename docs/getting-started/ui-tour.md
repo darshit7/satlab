@@ -44,7 +44,7 @@ Schedule
 : Commands waiting for a future pass, their outcomes, and alarms (acknowledge them here). The
   button shows how many commands are waiting and how many alarms are unacknowledged.
 
-Imagery
+SAR Imagery
 : Real Sentinel-1 radar images of an area ([archive explore](../imagery/archive-explore.md)). Set
   the area (it starts at the station; click the map or the globe to move it; 5, 10 or 20 km) and two
   dates, and **Find scenes** lists the passes by orbit track, with the pair closest to your dates
