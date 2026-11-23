@@ -188,7 +188,7 @@ export function MissionBar() {
       </BarButton>
       <BarButton id="imagery" title="Compare real Sentinel-1 radar images of an area">
         <Images size={16} strokeWidth={1.5} className="shrink-0" aria-hidden />
-        Imagery
+        SAR Imagery
         <ImageryCount />
       </BarButton>
     </nav>
