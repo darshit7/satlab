@@ -162,9 +162,13 @@ export function SwipeViewer({ images, mode, heatmap, opacity, regions, selected,
     ;(canvasRef.current as (HTMLCanvasElement & { __redraw?: () => void }) | null)?.__redraw?.()
   }
 
-  const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+  // The handlers sit on the container, so a press on the divider's handle (a div over the canvas)
+  // reaches them too; positions are measured on the canvas, which fills the container.
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const st = state.current
-    const rect = e.currentTarget.getBoundingClientRect()
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const rect = canvas.getBoundingClientRect()
     const nearDivider = mode === 'swipe' && Math.abs(e.clientX - rect.left - (split / 100) * rect.width) < 12
     if (nearDivider) st.drag = 'split'
     else if (st.view && st.view.scale > st.minScale * 1.001) st.drag = { x: e.clientX, y: e.clientY, view: st.view }
@@ -181,9 +185,11 @@ export function SwipeViewer({ images, mode, heatmap, opacity, regions, selected,
     }
     e.currentTarget.setPointerCapture(e.pointerId)
   }
-  const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const st = state.current
-    const rect = e.currentTarget.getBoundingClientRect()
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const rect = canvas.getBoundingClientRect()
     if (st.drag === 'split') setSplit(splitFromPointer(e.clientX, rect.left, rect.width))
     else if (st.drag && typeof st.drag === 'object') {
       const d = st.drag
@@ -191,7 +197,7 @@ export function SwipeViewer({ images, mode, heatmap, opacity, regions, selected,
       ;(canvasRef.current as (HTMLCanvasElement & { __redraw?: () => void }) | null)?.__redraw?.()
     } else {
       const near = mode === 'swipe' && Math.abs(e.clientX - rect.left - (split / 100) * rect.width) < 12
-      e.currentTarget.style.cursor = near ? 'ew-resize' : st.view && st.view.scale > st.minScale * 1.001 ? 'grab' : 'default'
+      canvas.style.cursor = near ? 'ew-resize' : st.view && st.view.scale > st.minScale * 1.001 ? 'grab' : 'default'
     }
   }
   const onPointerUp = () => {
@@ -200,7 +206,8 @@ export function SwipeViewer({ images, mode, heatmap, opacity, regions, selected,
 
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas) return
+    const container = containerRef.current
+    if (!canvas || !container) return
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
       const st = state.current
@@ -209,23 +216,21 @@ export function SwipeViewer({ images, mode, heatmap, opacity, regions, selected,
       st.view = zoomAt(st.view, e.deltaY < 0 ? 1.2 : 1 / 1.2, e.clientX - rect.left, e.clientY - rect.top, st.minScale)
       ;(canvas as HTMLCanvasElement & { __redraw?: () => void }).__redraw?.()
     }
-    canvas.addEventListener('wheel', onWheel, { passive: false })
-    return () => canvas.removeEventListener('wheel', onWheel)
+    container.addEventListener('wheel', onWheel, { passive: false })
+    return () => container.removeEventListener('wheel', onWheel)
   }, [])
 
   return (
     <div className="relative">
-      <div ref={containerRef} className="relative h-[min(60vh,40rem)] min-h-64 overflow-hidden rounded-lg bg-gray-900">
-        <canvas
-          ref={canvasRef}
-          role="img"
-          aria-label={label}
-          className="absolute inset-0 touch-none"
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerCancel={onPointerUp}
-        />
+      <div
+        ref={containerRef}
+        className="relative h-[min(60vh,40rem)] min-h-64 touch-none overflow-hidden rounded-lg bg-gray-900"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+      >
+        <canvas ref={canvasRef} role="img" aria-label={label} className="absolute inset-0" />
         {mode === 'swipe' && (
           <div
             role="slider"
